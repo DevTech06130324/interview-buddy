@@ -2,6 +2,12 @@ const { app, BrowserWindow, BrowserView, ipcMain, shell, globalShortcut, screen 
 const fs = require('fs');
 const path = require('path');
 
+const APP_PROCESS_NAME = 'Notepadd++';
+const WINDOW_TITLE = 'Interview assistant';
+
+app.setName(APP_PROCESS_NAME);
+process.title = APP_PROCESS_NAME;
+
 // LiveCaptions integration
 let captionSync = null;
 if (process.platform === 'win32') {
@@ -20,9 +26,11 @@ const translationManager = require('./src/translationManager');
 // Constants
 const BORDER_WIDTH = 3;
 const PADDING_WIDTH = 10;
+const APP_HEADBAR_HEIGHT = 38;
 const TAB_BAR_HEIGHT = 40;
 const URL_BAR_HEIGHT = 50;
 const PANEL_DIVIDER_WIDTH = 10;
+const TRANSCRIPT_PANEL_COLLAPSED_HEIGHT = 55;
 const MODE_PANEL_HEIGHT = 224;
 const MODE_PANEL_COLLAPSED_HEIGHT = 54;
 const MOVE_DISTANCE = 100;
@@ -30,9 +38,9 @@ const OPACITY_STEP = 0.1;
 const MIN_OPACITY = 0.1;
 const MAX_OPACITY = 1.0;
 const DEFAULT_OPACITY = 1.0;
-const DEFAULT_LEFT_PANEL_RATIO = 0.4;
-const MIN_LEFT_PANEL_WIDTH = 220;
-const MIN_RIGHT_PANEL_WIDTH = 320;
+const DEFAULT_TRANSCRIPT_PANEL_RATIO = 0.2;
+const MIN_TRANSCRIPT_PANEL_HEIGHT = TRANSCRIPT_PANEL_COLLAPSED_HEIGHT;
+const MIN_BROWSER_PANEL_HEIGHT = 190;
 const SCREEN_SELECTION_MIN_SIZE = 8;
 const LEGACY_DEFAULT_PROMPT_MODE_SUFFIX = 'Interviewer said like this, what should i say right now. the answer must be in easy and friendly and funny way but looks professional and polite and not too long';
 const DEFAULT_PROMPT_MODE_SUFFIX = 'What should i say right now? The answer must be easy, friendly, a little funny, professional, polite, and not too long.';
@@ -58,7 +66,8 @@ let tabIdCounter = 0;
 let currentOpacity = DEFAULT_OPACITY;
 let isWindowVisible = true;
 let isMuted = false;
-let leftPanelRatio = DEFAULT_LEFT_PANEL_RATIO;
+let transcriptPanelRatio = DEFAULT_TRANSCRIPT_PANEL_RATIO;
+let isTranscriptPanelCollapsed = true;
 let isModePanelCollapsed = true;
 let captureOverlayState = null;
 const shortcutCooldowns = new Map();
@@ -446,8 +455,9 @@ function setPromptModeHotkey(modeId, hotkey) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 600,
+    height: 800,
+    title: WINDOW_TITLE,
     minWidth: 400,
     minHeight: 300,
     resizable: true,
@@ -499,44 +509,59 @@ function getLayoutDimensions() {
   const bounds = mainWindow.getBounds();
   const totalOffset = (BORDER_WIDTH + PADDING_WIDTH) * 2;
   const totalContentWidth = Math.max(0, bounds.width - totalOffset);
-  const adjustableWidth = Math.max(0, totalContentWidth - PANEL_DIVIDER_WIDTH);
-  const topOffset = TAB_BAR_HEIGHT + URL_BAR_HEIGHT + BORDER_WIDTH + PADDING_WIDTH;
+  const totalContentHeight = Math.max(0, bounds.height - totalOffset);
   const modePanelHeight = isModePanelCollapsed ? MODE_PANEL_COLLAPSED_HEIGHT : MODE_PANEL_HEIGHT;
-  const availableHeight = bounds.height - topOffset - BORDER_WIDTH - PADDING_WIDTH - modePanelHeight;
+  const browserContainerHeight = Math.max(0, totalContentHeight - APP_HEADBAR_HEIGHT - modePanelHeight);
+  const adjustableHeight = Math.max(0, browserContainerHeight - PANEL_DIVIDER_WIDTH);
+  const contentX = BORDER_WIDTH + PADDING_WIDTH;
+  const contentY = BORDER_WIDTH + PADDING_WIDTH + APP_HEADBAR_HEIGHT;
 
-  if (adjustableWidth <= 0) {
+  if (adjustableHeight <= 0) {
     return {
-      leftPanelWidth: 0,
-      rightPanelWidth: 0,
-      rightPanelX: BORDER_WIDTH + PADDING_WIDTH + PANEL_DIVIDER_WIDTH,
-      topOffset,
-      availableHeight
+      transcriptPanelHeight: 0,
+      browserPanelHeight: 0,
+      browserViewX: contentX,
+      browserViewY: contentY + PANEL_DIVIDER_WIDTH + TAB_BAR_HEIGHT + URL_BAR_HEIGHT,
+      browserViewWidth: totalContentWidth,
+      browserViewHeight: 0
     };
   }
 
-  let minLeftWidth = MIN_LEFT_PANEL_WIDTH;
-  let minRightWidth = MIN_RIGHT_PANEL_WIDTH;
+  let transcriptPanelHeight = Math.min(TRANSCRIPT_PANEL_COLLAPSED_HEIGHT, adjustableHeight);
 
-  if (adjustableWidth < (minLeftWidth + minRightWidth)) {
-    const fallbackWidth = Math.floor(adjustableWidth / 2);
-    minLeftWidth = Math.min(minLeftWidth, fallbackWidth);
-    minRightWidth = Math.min(minRightWidth, Math.max(0, adjustableWidth - minLeftWidth));
+  if (!isTranscriptPanelCollapsed) {
+    let minTranscriptHeight = MIN_TRANSCRIPT_PANEL_HEIGHT;
+    let minBrowserPanelHeight = MIN_BROWSER_PANEL_HEIGHT;
+
+    if (adjustableHeight < (minTranscriptHeight + minBrowserPanelHeight)) {
+      const fallbackHeight = Math.floor(adjustableHeight / 2);
+      minTranscriptHeight = Math.min(minTranscriptHeight, fallbackHeight);
+      minBrowserPanelHeight = Math.min(minBrowserPanelHeight, Math.max(0, adjustableHeight - minTranscriptHeight));
+    }
+
+    const maxTranscriptHeight = Math.max(minTranscriptHeight, adjustableHeight - minBrowserPanelHeight);
+    const normalizedRatio = Number.isFinite(transcriptPanelRatio)
+      ? transcriptPanelRatio
+      : DEFAULT_TRANSCRIPT_PANEL_RATIO;
+    const desiredTranscriptHeight = adjustableHeight * normalizedRatio;
+    transcriptPanelHeight = Math.round(Math.min(
+      maxTranscriptHeight,
+      Math.max(minTranscriptHeight, desiredTranscriptHeight)
+    ));
+    transcriptPanelRatio = transcriptPanelHeight / adjustableHeight;
   }
 
-  const maxLeftWidth = Math.max(minLeftWidth, adjustableWidth - minRightWidth);
-  const normalizedRatio = Number.isFinite(leftPanelRatio) ? leftPanelRatio : DEFAULT_LEFT_PANEL_RATIO;
-  const desiredLeftWidth = adjustableWidth * normalizedRatio;
-  const leftPanelWidth = Math.round(Math.min(maxLeftWidth, Math.max(minLeftWidth, desiredLeftWidth)));
-  leftPanelRatio = leftPanelWidth / adjustableWidth;
-  const rightPanelWidth = Math.max(0, totalContentWidth - leftPanelWidth - PANEL_DIVIDER_WIDTH);
-  const rightPanelX = leftPanelWidth + PANEL_DIVIDER_WIDTH + BORDER_WIDTH + PADDING_WIDTH;
-  
+  const browserPanelHeight = Math.max(0, adjustableHeight - transcriptPanelHeight);
+  const browserViewY = contentY + transcriptPanelHeight + PANEL_DIVIDER_WIDTH + TAB_BAR_HEIGHT + URL_BAR_HEIGHT;
+  const browserViewHeight = Math.max(0, browserPanelHeight - TAB_BAR_HEIGHT - URL_BAR_HEIGHT);
+
   return {
-    leftPanelWidth,
-    rightPanelWidth,
-    rightPanelX,
-    topOffset,
-    availableHeight
+    transcriptPanelHeight,
+    browserPanelHeight,
+    browserViewX: contentX,
+    browserViewY,
+    browserViewWidth: totalContentWidth,
+    browserViewHeight
   };
 }
 
@@ -609,10 +634,10 @@ function createNewTab(url = 'about:blank', options = {}) {
     mainWindow.setBrowserView(tabView);
 
     tabView.setBounds({
-      x: layout.rightPanelX,
-      y: layout.topOffset,
-      width: layout.rightPanelWidth,
-      height: layout.availableHeight
+      x: layout.browserViewX,
+      y: layout.browserViewY,
+      width: layout.browserViewWidth,
+      height: layout.browserViewHeight
     });
   } else {
     tabView.setBounds({ x: -9999, y: -9999, width: 0, height: 0 });
@@ -814,10 +839,10 @@ function switchTab(tabId) {
     
     mainWindow.setBrowserView(tab.view);
     tab.view.setBounds({
-      x: layout.rightPanelX,
-      y: layout.topOffset,
-      width: layout.rightPanelWidth,
-      height: layout.availableHeight
+      x: layout.browserViewX,
+      y: layout.browserViewY,
+      width: layout.browserViewWidth,
+      height: layout.browserViewHeight
     });
 
     if (tab.pendingUrl) {
@@ -866,10 +891,10 @@ function resizeTabs() {
   const activeTab = tabs.get(activeTabId);
   if (activeTab) {
     activeTab.view.setBounds({
-      x: layout.rightPanelX,
-      y: layout.topOffset,
-      width: layout.rightPanelWidth,
-      height: layout.availableHeight
+      x: layout.browserViewX,
+      y: layout.browserViewY,
+      width: layout.browserViewWidth,
+      height: layout.browserViewHeight
     });
   }
 }
@@ -2719,6 +2744,11 @@ ipcMain.handle('close-tab', (event, tabId) => {
   closeTab(tabId);
 });
 
+ipcMain.handle('close-app', () => {
+  app.quit();
+  return true;
+});
+
 ipcMain.handle('switch-tab', (event, tabId) => {
   switchTab(tabId);
 });
@@ -2761,11 +2791,17 @@ ipcMain.handle('reload', () => {
 
 ipcMain.handle('set-panel-split-ratio', (event, ratio) => {
   if (Number.isFinite(ratio)) {
-    leftPanelRatio = ratio;
+    transcriptPanelRatio = ratio;
     resizeTabs();
   }
 
-  return leftPanelRatio;
+  return transcriptPanelRatio;
+});
+
+ipcMain.handle('set-transcript-panel-collapsed', (event, collapsed) => {
+  isTranscriptPanelCollapsed = Boolean(collapsed);
+  resizeTabs();
+  return isTranscriptPanelCollapsed;
 });
 
 ipcMain.handle('set-mode-panel-collapsed', (event, collapsed) => {
@@ -2874,7 +2910,8 @@ ipcMain.handle('get-active-tab', () => {
 ipcMain.handle('get-tabs', () => {
   return {
     activeTabId,
-    panelSplitRatio: leftPanelRatio,
+    panelSplitRatio: transcriptPanelRatio,
+    transcriptPanelCollapsed: isTranscriptPanelCollapsed,
     modePanelCollapsed: isModePanelCollapsed,
     ...getPromptModeStateSnapshot(),
     tabs: Array.from(tabs.values()).map((tab) => ({

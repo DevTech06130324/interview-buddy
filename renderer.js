@@ -8,6 +8,8 @@ const loadingIndicator = document.getElementById('loadingIndicator');
 const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
 const clearTranscriptBtn = document.getElementById('clearTranscriptBtn');
+const closeAppBtn = document.getElementById('closeAppBtn');
+const toggleTranscriptPanelBtn = document.getElementById('toggleTranscriptPanelBtn');
 const toggleLiveCaptionsBtn = document.getElementById('toggleLiveCaptionsBtn');
 const toggleTranslationBtn = document.getElementById('toggleTranslationBtn');
 const browserContainer = document.querySelector('.browser-container');
@@ -34,8 +36,9 @@ let transcriptEntriesSignature = '';
 let isUserScrolling = false;
 let scrollTimeout = null;
 let liveCaptionsWindowVisible = true;
-let translationsVisible = true;
-let currentPanelSplitRatio = 0.4;
+let translationsVisible = false;
+let isTranscriptPanelCollapsed = true;
+let currentPanelSplitRatio = 0.2;
 let isModePanelCollapsed = true;
 let promptModes = [];
 let selectedPromptModeId = null;
@@ -54,8 +57,8 @@ let panelRatioSyncFrame = null;
 let pendingPanelRatioToSync = null;
 
 const PANEL_DIVIDER_WIDTH = 10;
-const MIN_LEFT_PANEL_WIDTH = 220;
-const MIN_RIGHT_PANEL_WIDTH = 320;
+const MIN_TRANSCRIPT_PANEL_HEIGHT = 55;
+const MIN_BROWSER_PANEL_HEIGHT = 190;
 const MODE_SELECTION_DELAY_MS = 320;
 const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
@@ -167,6 +170,7 @@ function syncFromSnapshot(snapshot) {
     applyPanelSplitRatio(snapshot.panelSplitRatio);
   }
 
+  updateTranscriptPanelCollapsed(Boolean(snapshot.transcriptPanelCollapsed));
   updateModePanelCollapsed(Boolean(snapshot.modePanelCollapsed));
   updatePromptModeState(snapshot);
 
@@ -349,31 +353,31 @@ function getPanelMetrics() {
     return null;
   }
 
-  const adjustableWidth = Math.max(0, browserContainer.clientWidth - PANEL_DIVIDER_WIDTH);
+  const adjustableHeight = Math.max(0, browserContainer.clientHeight - PANEL_DIVIDER_WIDTH);
 
-  if (adjustableWidth <= 0) {
+  if (adjustableHeight <= 0) {
     return {
-      adjustableWidth: 0,
-      minLeftWidth: 0,
-      maxLeftWidth: 0
+      adjustableHeight: 0,
+      minTranscriptHeight: 0,
+      maxTranscriptHeight: 0
     };
   }
 
-  let minLeftWidth = MIN_LEFT_PANEL_WIDTH;
-  let minRightWidth = MIN_RIGHT_PANEL_WIDTH;
+  let minTranscriptHeight = MIN_TRANSCRIPT_PANEL_HEIGHT;
+  let minBrowserPanelHeight = MIN_BROWSER_PANEL_HEIGHT;
 
-  if (adjustableWidth < (minLeftWidth + minRightWidth)) {
-    const fallbackWidth = Math.floor(adjustableWidth / 2);
-    minLeftWidth = Math.min(minLeftWidth, fallbackWidth);
-    minRightWidth = Math.min(minRightWidth, Math.max(0, adjustableWidth - minLeftWidth));
+  if (adjustableHeight < (minTranscriptHeight + minBrowserPanelHeight)) {
+    const fallbackHeight = Math.floor(adjustableHeight / 2);
+    minTranscriptHeight = Math.min(minTranscriptHeight, fallbackHeight);
+    minBrowserPanelHeight = Math.min(minBrowserPanelHeight, Math.max(0, adjustableHeight - minTranscriptHeight));
   }
 
-  const maxLeftWidth = Math.max(minLeftWidth, adjustableWidth - minRightWidth);
+  const maxTranscriptHeight = Math.max(minTranscriptHeight, adjustableHeight - minBrowserPanelHeight);
 
   return {
-    adjustableWidth,
-    minLeftWidth,
-    maxLeftWidth
+    adjustableHeight,
+    minTranscriptHeight,
+    maxTranscriptHeight
   };
 }
 
@@ -381,17 +385,17 @@ function clampPanelSplitRatio(ratio) {
   const metrics = getPanelMetrics();
   const nextRatio = Number.isFinite(ratio) ? ratio : currentPanelSplitRatio;
 
-  if (!metrics || metrics.adjustableWidth <= 0) {
+  if (!metrics || metrics.adjustableHeight <= 0) {
     return nextRatio;
   }
 
-  const desiredLeftWidth = metrics.adjustableWidth * nextRatio;
-  const clampedLeftWidth = Math.min(
-    metrics.maxLeftWidth,
-    Math.max(metrics.minLeftWidth, desiredLeftWidth)
+  const desiredTranscriptHeight = metrics.adjustableHeight * nextRatio;
+  const clampedTranscriptHeight = Math.min(
+    metrics.maxTranscriptHeight,
+    Math.max(metrics.minTranscriptHeight, desiredTranscriptHeight)
   );
 
-  return clampedLeftWidth / metrics.adjustableWidth;
+  return clampedTranscriptHeight / metrics.adjustableHeight;
 }
 
 function applyPanelSplitRatio(ratio) {
@@ -402,12 +406,12 @@ function applyPanelSplitRatio(ratio) {
   currentPanelSplitRatio = clampPanelSplitRatio(ratio);
 
   const metrics = getPanelMetrics();
-  if (!metrics || metrics.adjustableWidth <= 0) {
+  if (!metrics || metrics.adjustableHeight <= 0) {
     return;
   }
 
-  const leftWidth = Math.round(metrics.adjustableWidth * currentPanelSplitRatio);
-  leftPanel.style.width = `${leftWidth}px`;
+  const transcriptHeight = Math.round(metrics.adjustableHeight * currentPanelSplitRatio);
+  leftPanel.style.height = `${transcriptHeight}px`;
 }
 
 function queuePanelSplitRatioSync(ratio) {
@@ -428,19 +432,19 @@ function queuePanelSplitRatioSync(ratio) {
   });
 }
 
-function updatePanelSplitFromPointer(clientX) {
+function updatePanelSplitFromPointer(clientY) {
   if (!panelResizeState || !browserContainer) {
     return;
   }
 
   const rect = browserContainer.getBoundingClientRect();
   const metrics = getPanelMetrics();
-  if (!metrics || metrics.adjustableWidth <= 0) {
+  if (!metrics || metrics.adjustableHeight <= 0) {
     return;
   }
 
-  const rawLeftWidth = clientX - rect.left - panelResizeState.pointerOffset;
-  const ratio = rawLeftWidth / metrics.adjustableWidth;
+  const rawTranscriptHeight = clientY - rect.top - panelResizeState.pointerOffset;
+  const ratio = rawTranscriptHeight / metrics.adjustableHeight;
   applyPanelSplitRatio(ratio);
   queuePanelSplitRatioSync(currentPanelSplitRatio);
 }
@@ -474,7 +478,7 @@ function handlePanelDividerPointerMove(event) {
   }
 
   event.preventDefault();
-  updatePanelSplitFromPointer(event.clientX);
+  updatePanelSplitFromPointer(event.clientY);
 }
 
 function handlePanelDividerPointerUp(event) {
@@ -489,6 +493,27 @@ function setButtonBusy(button, isBusy) {
 
   button.disabled = isBusy;
   button.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+}
+
+function updateTranscriptPanelCollapsed(isCollapsed) {
+  if (!leftPanel || !toggleTranscriptPanelBtn) {
+    return;
+  }
+
+  isTranscriptPanelCollapsed = Boolean(isCollapsed);
+  leftPanel.classList.toggle('is-collapsed', isTranscriptPanelCollapsed);
+
+  const actionLabel = isTranscriptPanelCollapsed
+    ? 'Expand transcript panel'
+    : 'Collapse transcript panel';
+
+  toggleTranscriptPanelBtn.title = actionLabel;
+  toggleTranscriptPanelBtn.setAttribute('aria-label', actionLabel);
+  toggleTranscriptPanelBtn.setAttribute('aria-expanded', String(!isTranscriptPanelCollapsed));
+
+  if (!isTranscriptPanelCollapsed) {
+    applyPanelSplitRatio(currentPanelSplitRatio);
+  }
 }
 
 function updateModePanelCollapsed(isCollapsed) {
@@ -1211,6 +1236,14 @@ async function refreshLiveCaptionsToggleButton() {
   return false;
 }
 
+if (closeAppBtn) {
+  closeAppBtn.onclick = () => {
+    window.electronAPI.closeApp().catch((error) => {
+      console.error('[ERROR] Failed to close app:', error);
+    });
+  };
+}
+
 newTabBtn.onclick = () => {
   window.electronAPI.createTab('about:blank');
 };
@@ -1290,6 +1323,23 @@ if (toggleTranslationBtn) {
   setTranslationVisibility(translationsVisible);
 }
 
+if (toggleTranscriptPanelBtn) {
+  updateTranscriptPanelCollapsed(isTranscriptPanelCollapsed);
+
+  toggleTranscriptPanelBtn.onclick = async () => {
+    const nextCollapsed = !isTranscriptPanelCollapsed;
+    updateTranscriptPanelCollapsed(nextCollapsed);
+
+    try {
+      const collapsed = await window.electronAPI.setTranscriptPanelCollapsed(nextCollapsed);
+      updateTranscriptPanelCollapsed(collapsed);
+    } catch (error) {
+      updateTranscriptPanelCollapsed(!nextCollapsed);
+      console.error('[ERROR] Failed to toggle transcript panel collapse state:', error);
+    }
+  };
+}
+
 if (panelDivider && browserContainer) {
   panelDivider.onpointerdown = (event) => {
     if (event.button !== 0) {
@@ -1298,9 +1348,16 @@ if (panelDivider && browserContainer) {
 
     event.preventDefault();
 
+    if (isTranscriptPanelCollapsed) {
+      updateTranscriptPanelCollapsed(false);
+      window.electronAPI.setTranscriptPanelCollapsed(false).catch((error) => {
+        console.error('[ERROR] Failed to expand transcript panel before resizing:', error);
+      });
+    }
+
     const dividerRect = panelDivider.getBoundingClientRect();
     panelResizeState = {
-      pointerOffset: event.clientX - dividerRect.left
+      pointerOffset: event.clientY - dividerRect.top
     };
 
     browserContainer.classList.add('is-resizing');
@@ -1314,7 +1371,7 @@ if (panelDivider && browserContainer) {
     document.addEventListener('pointerup', handlePanelDividerPointerUp);
     document.addEventListener('pointercancel', handlePanelDividerPointerUp);
 
-    updatePanelSplitFromPointer(event.clientX);
+    updatePanelSplitFromPointer(event.clientY);
   };
 }
 

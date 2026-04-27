@@ -3,14 +3,29 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Notepad++</title>
+  <title>Interview assistant</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="window-wrapper">
     <div class="app-layout">
+      <div class="app-headbar">
+        <div class="app-title">Interview assistant</div>
+        <button
+          class="app-close-btn"
+          id="closeAppBtn"
+          type="button"
+          title="Close"
+          aria-label="Close app"
+        >
+          <svg class="app-close-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </div>
       <div class="browser-container">
-        <div class="left-panel">
+        <div class="left-panel is-collapsed">
           <div class="transcript-panel">
             <div class="transcript-header">
               <span>Transcript</span>
@@ -34,11 +49,12 @@
                   </svg>
                 </button>
                 <button
-                  class="transcript-action-btn transcript-icon-btn"
+                  class="transcript-action-btn transcript-icon-btn is-hidden-state"
                   id="toggleTranslationBtn"
                   type="button"
-                  title="Hide translations"
-                  aria-label="Hide translations"
+                  title="Show translations"
+                  aria-label="Show translations"
+                  aria-pressed="true"
                 >
                   <svg class="transcript-icon transcript-icon-visible" viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="4" y="5" width="16" height="14" rx="1.5"></rect>
@@ -66,14 +82,26 @@
                     <path d="M17 20v-4h-4"></path>
                   </svg>
                 </button>
+                <button
+                  class="transcript-action-btn transcript-icon-btn"
+                  id="toggleTranscriptPanelBtn"
+                  type="button"
+                  title="Expand transcript panel"
+                  aria-label="Expand transcript panel"
+                  aria-expanded="false"
+                >
+                  <svg class="transcript-icon transcript-collapse-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 15l6-6 6 6"></path>
+                  </svg>
+                </button>
               </div>
             </div>
-            <div class="transcript-content" id="transcript">
+            <div class="transcript-content is-translation-hidden" id="transcript">
               <div class="transcript-rows" id="transcriptRows"></div>
             </div>
           </div>
         </div>
-        <div class="panel-divider" id="panelDivider" role="separator" aria-orientation="vertical" aria-label="Resize panels"></div>
+        <div class="panel-divider" id="panelDivider" role="separator" aria-orientation="horizontal" aria-label="Resize panels"></div>
       
         <div class="right-panel">
         <div class="tab-bar" id="tabBar">

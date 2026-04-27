@@ -10,6 +10,7 @@ function subscribe(channel, callback) {
 
 contextBridge.exposeInMainWorld('electronAPI', {
   createTab: (url) => ipcRenderer.invoke('create-tab', url),
+  closeApp: () => ipcRenderer.invoke('close-app'),
   closeTab: (tabId) => ipcRenderer.invoke('close-tab', tabId),
   switchTab: (tabId) => ipcRenderer.invoke('switch-tab', tabId),
   navigate: (url) => ipcRenderer.invoke('navigate', url),
@@ -20,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleLiveCaptionsWindow: () => ipcRenderer.invoke('toggle-live-captions-window'),
   getLiveCaptionsWindowVisibility: () => ipcRenderer.invoke('get-live-captions-window-visibility'),
   setPanelSplitRatio: (ratio) => ipcRenderer.invoke('set-panel-split-ratio', ratio),
+  setTranscriptPanelCollapsed: (collapsed) => ipcRenderer.invoke('set-transcript-panel-collapsed', collapsed),
   setModePanelCollapsed: (collapsed) => ipcRenderer.invoke('set-mode-panel-collapsed', collapsed),
   addPromptMode: () => ipcRenderer.invoke('add-prompt-mode'),
   selectPromptMode: (modeId) => ipcRenderer.invoke('select-prompt-mode', modeId),
