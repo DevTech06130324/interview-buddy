@@ -15,6 +15,7 @@ if (process.platform === 'win32') {
 
 // Screen capture integration
 const screenCapture = require('./src/screenCapture');
+const translationManager = require('./src/translationManager');
 
 // Constants
 const BORDER_WIDTH = 3;
@@ -1106,6 +1107,12 @@ function getTranscriptPromptText() {
   }
 
   return sections.join('\n');
+}
+
+function sendCaptionUpdate(payload = translationManager.getPayload()) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('caption-update', payload);
+  }
 }
 
 function isSupportedAssistantUrl(url) {
@@ -2622,6 +2629,7 @@ app.on('will-quit', () => {
     defaultTabWarmupTimer = null;
   }
   flushPromptModeStatePersistSync();
+  translationManager.reset('');
   globalShortcut.unregisterAll();
 });
 
@@ -2732,6 +2740,7 @@ ipcMain.handle('set-prompt-mode-hotkey', (event, payload) => {
 
 ipcMain.handle('clear-transcript', async () => {
   latestTranscriptText = '';
+  sendCaptionUpdate(translationManager.reset(''));
 
   if (captionSync && typeof captionSync.clearTranscript === 'function') {
     try {
@@ -2750,9 +2759,7 @@ ipcMain.handle('clear-transcript', async () => {
   }
 
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('caption-update', {
-      fullText: ''
-    });
+    sendCaptionUpdate(translationManager.reset(''));
   }
 
   return {
@@ -2821,18 +2828,21 @@ ipcMain.handle('get-tabs', () => {
 });
 
 // LiveCaptions IPC handlers
+translationManager.on('updated', (payload) => {
+  sendCaptionUpdate(payload);
+});
+
 if (captionSync) {
   // Handle caption updates from caption sync service
   captionSync.on('captionUpdate', (data) => {
     latestTranscriptText = typeof data?.fullText === 'string' ? data.fullText : '';
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('caption-update', data);
-    }
+    sendCaptionUpdate(translationManager.update(latestTranscriptText));
   });
 
   captionSync.on('error', (error) => {
     console.error('[ERROR] Caption sync error:', error);
     latestTranscriptText = '';
+    translationManager.reset('');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('caption-error', error.message || String(error));
     }

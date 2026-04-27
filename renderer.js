@@ -6,6 +6,7 @@ const forwardBtn = document.getElementById('forwardBtn');
 const reloadBtn = document.getElementById('reloadBtn');
 const loadingIndicator = document.getElementById('loadingIndicator');
 const transcriptEl = document.getElementById('transcript');
+const transcriptRowsEl = document.getElementById('transcriptRows');
 const clearTranscriptBtn = document.getElementById('clearTranscriptBtn');
 const toggleLiveCaptionsBtn = document.getElementById('toggleLiveCaptionsBtn');
 const browserContainer = document.querySelector('.browser-container');
@@ -28,6 +29,7 @@ const modeSuffixInput = document.getElementById('modeSuffixInput');
 const tabs = new Map();
 let activeTabId = null;
 let transcriptHistory = '';
+let transcriptEntriesSignature = '';
 let isUserScrolling = false;
 let scrollTimeout = null;
 let liveCaptionsWindowVisible = true;
@@ -208,6 +210,118 @@ function checkIfAtBottom() {
   const threshold = 50;
   const { scrollTop, scrollHeight, clientHeight } = transcriptEl;
   return (scrollHeight - scrollTop - clientHeight) <= threshold;
+}
+
+function normalizeTranscriptEntries(data) {
+  if (Array.isArray(data?.entries)) {
+    return data.entries
+      .filter((entry) => entry && typeof entry.sourceText === 'string' && entry.sourceText.trim())
+      .map((entry, index) => {
+        const status = ['pending', 'translated', 'error'].includes(entry.status)
+          ? entry.status
+          : 'pending';
+
+        return {
+          id: typeof entry.id === 'string' && entry.id ? entry.id : `caption-${index}`,
+          sourceText: entry.sourceText,
+          translatedText: typeof entry.translatedText === 'string' ? entry.translatedText : '',
+          status,
+          isFinal: Boolean(entry.isFinal)
+        };
+      });
+  }
+
+  const fallbackText = typeof data?.fullText === 'string' ? data.fullText.trim() : '';
+  if (!fallbackText) {
+    return [];
+  }
+
+  return [{
+    id: 'caption-fallback',
+    sourceText: fallbackText,
+    translatedText: '',
+    status: 'pending',
+    isFinal: false
+  }];
+}
+
+function getTranscriptEntriesSignature(entries) {
+  return JSON.stringify(entries.map((entry) => ({
+    id: entry.id,
+    sourceText: entry.sourceText,
+    translatedText: entry.translatedText,
+    status: entry.status,
+    isFinal: entry.isFinal
+  })));
+}
+
+function renderTranscriptEntries(entries) {
+  if (!transcriptEl) {
+    return;
+  }
+
+  transcriptEl.classList.remove('has-error');
+
+  if (!transcriptRowsEl) {
+    transcriptEl.textContent = entries.map((entry) => entry.sourceText).join('\n');
+    return;
+  }
+
+  transcriptRowsEl.textContent = '';
+
+  for (const entry of entries) {
+    const row = document.createElement('div');
+    row.className = `transcript-row transcript-row-${entry.status}`;
+    row.dataset.captionId = entry.id;
+    row.classList.toggle('is-partial', !entry.isFinal);
+
+    const sourceCell = document.createElement('div');
+    sourceCell.className = 'transcript-cell transcript-cell-source';
+    sourceCell.textContent = entry.sourceText;
+
+    const translatedCell = document.createElement('div');
+    translatedCell.className = 'transcript-cell transcript-cell-translation';
+
+    if (entry.status === 'pending' && !entry.translatedText) {
+      translatedCell.classList.add('is-placeholder');
+      translatedCell.textContent = 'Translating...';
+    } else {
+      translatedCell.textContent = entry.translatedText;
+    }
+
+    if (entry.status === 'pending' && entry.translatedText) {
+      translatedCell.classList.add('is-refreshing');
+    }
+
+    row.appendChild(sourceCell);
+    row.appendChild(translatedCell);
+    transcriptRowsEl.appendChild(row);
+  }
+}
+
+function renderTranscriptError(errorMessage) {
+  if (!transcriptEl) {
+    return;
+  }
+
+  transcriptEl.classList.add('has-error');
+
+  if (!transcriptRowsEl) {
+    transcriptEl.textContent = errorMessage;
+    return;
+  }
+
+  transcriptRowsEl.textContent = '';
+
+  const errorRow = document.createElement('div');
+  errorRow.className = 'transcript-row transcript-error-row';
+
+  const errorCell = document.createElement('div');
+  errorCell.className = 'transcript-cell transcript-error-cell';
+  errorCell.textContent = errorMessage;
+
+  errorRow.appendChild(errorCell);
+  transcriptRowsEl.appendChild(errorRow);
 }
 
 function getPanelMetrics() {
@@ -1466,16 +1580,18 @@ window.electronAPI.onCaptionUpdate((data) => {
   }
 
   const nextTranscript = data.fullText;
-  if (nextTranscript === transcriptHistory && transcriptEl.textContent === nextTranscript) {
+  const nextEntries = normalizeTranscriptEntries(data);
+  const nextEntriesSignature = getTranscriptEntriesSignature(nextEntries);
+  if (nextTranscript === transcriptHistory && transcriptEntriesSignature === nextEntriesSignature) {
     return;
   }
 
   const wasAtBottom = checkIfAtBottom();
   const previousScrollTop = transcriptEl.scrollTop;
 
-  transcriptEl.style.color = '';
   transcriptHistory = nextTranscript;
-  transcriptEl.textContent = nextTranscript;
+  transcriptEntriesSignature = nextEntriesSignature;
+  renderTranscriptEntries(nextEntries);
 
   setTimeout(() => {
     if (wasAtBottom && !isUserScrolling) {
@@ -1492,14 +1608,16 @@ window.electronAPI.onCaptionError((error) => {
   }
 
   transcriptHistory = '';
+  transcriptEntriesSignature = '';
   const errorText = String(error || '');
   const isMissingNativeAddon =
     errorText.includes('Live Captions native addon was not found')
     || errorText.includes('livecaptions_native.node')
     || errorText.includes('Cannot find module');
 
-  transcriptEl.textContent = isMissingNativeAddon
+  const displayText = isMissingNativeAddon
     ? `[ERROR] ${errorText}\n\nThis build is missing the Live Captions native addon.\nRun "npm run build-native" and package the app again.`
     : `[ERROR] ${errorText}\n\nPlease ensure Windows LiveCaptions is running.\nYou can start it by pressing Win + Ctrl + L`;
-  transcriptEl.style.color = '#ff6b6b';
+
+  renderTranscriptError(displayText);
 });
