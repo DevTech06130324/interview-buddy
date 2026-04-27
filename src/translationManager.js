@@ -82,6 +82,32 @@ function isLikelyRevision(previousText, nextText) {
   return next.length > previous.length && next.startsWith(previous);
 }
 
+function isLikelySplitRevision(previousText, nextText, hasFollowingSegment) {
+  if (!hasFollowingSegment) {
+    return false;
+  }
+
+  const previous = getRevisionComparableText(previousText);
+  const next = getRevisionComparableText(nextText);
+
+  if (!previous || !next || previous === next) {
+    return false;
+  }
+
+  return previous.length > next.length + 8 && previous.startsWith(next);
+}
+
+function isLikelySuffixDuplicate(previousText, nextText) {
+  const previous = getRevisionComparableText(previousText);
+  const next = getRevisionComparableText(nextText);
+
+  if (!previous || !next || previous === next || next.length < 12) {
+    return false;
+  }
+
+  return previous.endsWith(next);
+}
+
 function extractGoogleTranslation(responseBody) {
   const parsed = JSON.parse(responseBody);
 
@@ -194,7 +220,7 @@ class TranslationManager extends EventEmitter {
     return Math.max(0, this.entries.length - lookback);
   }
 
-  findMatchingEntry(segment, startIndex) {
+  findMatchingEntry(segment, startIndex, hasFollowingSegment) {
     for (let index = startIndex; index < this.entries.length; index += 1) {
       const entry = this.entries[index];
       if (!entry) {
@@ -213,7 +239,15 @@ class TranslationManager extends EventEmitter {
         return {
           entry,
           index,
-          isRevision: true
+          updateSourceText: true
+        };
+      }
+
+      if (isLikelySplitRevision(entry.sourceText, segment.sourceText, hasFollowingSegment)) {
+        return {
+          entry,
+          index,
+          updateSourceText: true
         };
       }
     }
@@ -221,11 +255,18 @@ class TranslationManager extends EventEmitter {
     return null;
   }
 
-  reconcileSegment(segment, startIndex) {
-    const match = this.findMatchingEntry(segment, startIndex);
+  reconcileSegment(segment, startIndex, hasFollowingSegment, previousSegmentEntry = null) {
+    if (previousSegmentEntry && isLikelySuffixDuplicate(previousSegmentEntry.sourceText, segment.sourceText)) {
+      return {
+        entry: previousSegmentEntry,
+        nextStartIndex: startIndex
+      };
+    }
+
+    const match = this.findMatchingEntry(segment, startIndex, hasFollowingSegment);
 
     if (match) {
-      if (match.isRevision) {
+      if (match.updateSourceText) {
         this.updateEntryFromSegment(match.entry, segment);
       } else if (match.entry.isFinal !== segment.isFinal) {
         match.entry.isFinal = segment.isFinal;
@@ -237,11 +278,12 @@ class TranslationManager extends EventEmitter {
       };
     }
 
+    const insertIndex = Math.min(startIndex, this.entries.length);
     const entry = this.createEntry(segment);
-    this.entries.push(entry);
+    this.entries.splice(insertIndex, 0, entry);
     return {
       entry,
-      nextStartIndex: this.entries.length
+      nextStartIndex: insertIndex + 1
     };
   }
 
@@ -251,11 +293,18 @@ class TranslationManager extends EventEmitter {
       : null;
     const touchedEntries = new Set();
     let nextStartIndex = this.getReconcileSearchStart(segments.length);
+    let previousSegmentEntry = null;
 
-    for (const segment of segments) {
-      const result = this.reconcileSegment(segment, nextStartIndex);
+    for (let index = 0; index < segments.length; index += 1) {
+      const result = this.reconcileSegment(
+        segments[index],
+        nextStartIndex,
+        index < segments.length - 1,
+        previousSegmentEntry
+      );
       touchedEntries.add(result.entry);
       nextStartIndex = result.nextStartIndex;
+      previousSegmentEntry = result.entry;
     }
 
     if (
