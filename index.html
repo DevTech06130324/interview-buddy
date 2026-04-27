@@ -35,6 +35,25 @@
                 </button>
                 <button
                   class="transcript-action-btn transcript-icon-btn"
+                  id="toggleTranslationBtn"
+                  type="button"
+                  title="Hide translations"
+                  aria-label="Hide translations"
+                >
+                  <svg class="transcript-icon transcript-icon-visible" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="4" y="5" width="16" height="14" rx="1.5"></rect>
+                    <path d="M12 5v14"></path>
+                    <path d="M15 9h2"></path>
+                    <path d="M15 13h2"></path>
+                  </svg>
+                  <svg class="transcript-icon transcript-icon-hidden" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="4" y="5" width="16" height="14" rx="1.5"></rect>
+                    <path d="M12 5v14"></path>
+                    <path d="M3 3l18 18"></path>
+                  </svg>
+                </button>
+                <button
+                  class="transcript-action-btn transcript-icon-btn"
                   id="clearTranscriptBtn"
                   type="button"
                   title="Clear transcript and restart Live Captions"

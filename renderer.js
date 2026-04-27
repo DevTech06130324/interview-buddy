@@ -9,6 +9,7 @@ const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
 const clearTranscriptBtn = document.getElementById('clearTranscriptBtn');
 const toggleLiveCaptionsBtn = document.getElementById('toggleLiveCaptionsBtn');
+const toggleTranslationBtn = document.getElementById('toggleTranslationBtn');
 const browserContainer = document.querySelector('.browser-container');
 const leftPanel = document.querySelector('.left-panel');
 const panelDivider = document.getElementById('panelDivider');
@@ -33,6 +34,7 @@ let transcriptEntriesSignature = '';
 let isUserScrolling = false;
 let scrollTimeout = null;
 let liveCaptionsWindowVisible = true;
+let translationsVisible = true;
 let currentPanelSplitRatio = 0.4;
 let isModePanelCollapsed = true;
 let promptModes = [];
@@ -296,6 +298,24 @@ function renderTranscriptEntries(entries) {
     row.appendChild(sourceCell);
     row.appendChild(translatedCell);
     transcriptRowsEl.appendChild(row);
+  }
+}
+
+function setTranslationVisibility(isVisible) {
+  translationsVisible = Boolean(isVisible);
+
+  if (transcriptEl) {
+    transcriptEl.classList.toggle('is-translation-hidden', !translationsVisible);
+  }
+
+  if (toggleTranslationBtn) {
+    toggleTranslationBtn.classList.toggle('is-hidden-state', !translationsVisible);
+    toggleTranslationBtn.title = translationsVisible ? 'Hide translations' : 'Show translations';
+    toggleTranslationBtn.setAttribute(
+      'aria-label',
+      translationsVisible ? 'Hide translations' : 'Show translations'
+    );
+    toggleTranslationBtn.setAttribute('aria-pressed', String(!translationsVisible));
   }
 }
 
@@ -1258,6 +1278,16 @@ if (toggleLiveCaptionsBtn) {
       setButtonBusy(toggleLiveCaptionsBtn, false);
     }
   };
+}
+
+if (toggleTranslationBtn) {
+  setTranslationVisibility(translationsVisible);
+
+  toggleTranslationBtn.onclick = () => {
+    setTranslationVisibility(!translationsVisible);
+  };
+} else {
+  setTranslationVisibility(translationsVisible);
 }
 
 if (panelDivider && browserContainer) {

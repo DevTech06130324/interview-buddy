@@ -26,6 +26,11 @@ function getByteLength(text) {
   return Buffer.byteLength(String(text || ''), 'utf8');
 }
 
+function getUsableTranslationText(text) {
+  const value = typeof text === 'string' ? text.trim() : '';
+  return value || null;
+}
+
 function parseCaptionSegments(fullText) {
   const text = sanitizeCaptionText(fullText)
     .replace(/\r\n?/g, '\n')
@@ -116,10 +121,23 @@ function isLikelySuffixDuplicate(previousText, nextText) {
 
 function extractGoogleTranslation(responseBody) {
   const parsed = JSON.parse(responseBody);
+  const candidates = [];
 
   if (Array.isArray(parsed)) {
+    if (typeof parsed[0] === 'string') {
+      candidates.push(parsed[0]);
+    }
+
     if (Array.isArray(parsed[0]) && typeof parsed[0][0] === 'string') {
-      return parsed[0][0];
+      candidates.push(parsed[0][0]);
+    }
+
+    if (Array.isArray(parsed[0])) {
+      const joinedTranslation = parsed[0]
+        .filter((value) => Array.isArray(value) && typeof value[0] === 'string')
+        .map((value) => value[0])
+        .join('');
+      candidates.push(joinedTranslation);
     }
 
     if (
@@ -127,25 +145,18 @@ function extractGoogleTranslation(responseBody) {
       && Array.isArray(parsed[0][0])
       && typeof parsed[0][0][0] === 'string'
     ) {
-      return parsed[0][0][0];
+      candidates.push(parsed[0][0][0]);
     }
   }
 
-  const stack = [parsed];
-  while (stack.length > 0) {
-    const value = stack.shift();
-    if (typeof value === 'string' && value.trim()) {
-      return value;
-    }
-
-    if (Array.isArray(value)) {
-      stack.unshift(...value);
-    } else if (value && typeof value === 'object') {
-      stack.unshift(...Object.values(value));
+  for (const candidate of candidates) {
+    const translation = getUsableTranslationText(candidate);
+    if (translation) {
+      return translation;
     }
   }
 
-  throw new Error('Unexpected Google Translate response format.');
+  throw new Error('Google Translate returned an empty translation.');
 }
 
 function getEntrySnapshot(entry, index = null) {
@@ -621,10 +632,22 @@ class TranslationManager extends EventEmitter {
   }
 
   queueEntryTranslation(entry) {
-    if (!entry || !entry.sourceText || entry.lastQueuedText === entry.sourceText) {
+    const hasActiveRequest = Boolean(entry?.controller && !entry.controller.signal.aborted);
+    const hasUsableTranslation = Boolean(getUsableTranslationText(entry?.translatedText));
+    const isSameQueuedText = Boolean(entry && entry.lastQueuedText === entry.sourceText);
+    const shouldSkipSameQueuedText = isSameQueuedText
+      && (
+        hasActiveRequest
+        || hasUsableTranslation
+        || entry.status === 'error'
+      );
+
+    if (!entry || !entry.sourceText || shouldSkipSameQueuedText) {
       logTranscriptEvent('translation-queue-skipped', {
         sessionGeneration: this.sessionGeneration,
         reason: !entry ? 'missing-entry' : (!entry.sourceText ? 'empty-source-text' : 'same-as-last-queued'),
+        hasActiveRequest,
+        hasUsableTranslation,
         entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
       });
       return;
@@ -746,9 +769,32 @@ class TranslationManager extends EventEmitter {
   }
 
   async translateWithGoogle(text, signal) {
+    const errors = [];
+    for (const sourceLanguage of ['auto', 'en']) {
+      try {
+        return await this.fetchGoogleTranslation(text, sourceLanguage, signal);
+      } catch (error) {
+        if (signal?.aborted) {
+          throw error;
+        }
+
+        errors.push(`${sourceLanguage}: ${error?.message || String(error)}`);
+        logTranscriptEvent('translation-provider-attempt-failed', {
+          sessionGeneration: this.sessionGeneration,
+          sourceLanguage,
+          text,
+          error
+        });
+      }
+    }
+
+    throw new Error(`Google Translate returned no usable translation. ${errors.join(' | ')}`);
+  }
+
+  async fetchGoogleTranslation(text, sourceLanguage, signal) {
     const url = new URL(GOOGLE_TRANSLATE_URL);
     url.searchParams.set('client', 'dict-chrome-ex');
-    url.searchParams.set('sl', 'auto');
+    url.searchParams.set('sl', sourceLanguage);
     url.searchParams.set('tl', TARGET_LANGUAGE);
     url.searchParams.set('q', text);
 

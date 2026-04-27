@@ -187,8 +187,20 @@ body {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
+.transcript-content.is-translation-hidden .transcript-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .transcript-cell-source {
   border-right: 1px solid #333333;
+}
+
+.transcript-content.is-translation-hidden .transcript-cell-source {
+  border-right: none;
+}
+
+.transcript-content.is-translation-hidden .transcript-cell-translation {
+  display: none;
 }
 
 .transcript-rows {
