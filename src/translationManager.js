@@ -81,6 +81,25 @@ function getMaxSegmentOverlap(committedSegments, currentSegments) {
   return 0;
 }
 
+function getRevisionComparableText(text) {
+  return normalizeSegmentText(text)
+    .replace(/[.!?\u3002\uff1f\uff01]+$/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function isLikelyRevision(previousText, nextText) {
+  const previous = getRevisionComparableText(previousText);
+  const next = getRevisionComparableText(nextText);
+
+  if (!previous || !next || previous === next) {
+    return false;
+  }
+
+  return next.length > previous.length && next.startsWith(previous);
+}
+
 function extractGoogleTranslation(responseBody) {
   const parsed = JSON.parse(responseBody);
 
@@ -178,6 +197,31 @@ class TranslationManager extends EventEmitter {
     };
   }
 
+  updateEntryFromSegment(entry, segment) {
+    this.abortEntryTranslation(entry);
+    entry.sourceText = segment.sourceText;
+    entry.isFinal = segment.isFinal;
+    entry.status = 'pending';
+    entry.version += 1;
+    entry.lastQueuedText = '';
+    entry.changeCount = 0;
+  }
+
+  appendOrReviseFinalSegment(segment) {
+    const latestEntry = this.entries[this.entries.length - 1];
+
+    if (latestEntry && latestEntry.isFinal && latestEntry.sourceText === segment.sourceText) {
+      return;
+    }
+
+    if (latestEntry && latestEntry.isFinal && isLikelyRevision(latestEntry.sourceText, segment.sourceText)) {
+      this.updateEntryFromSegment(latestEntry, segment);
+      return;
+    }
+
+    this.entries.push(this.createEntry(segment));
+  }
+
   reconcileEntries(segments) {
     const previousPartial = this.entries.length > 0 && !this.entries[this.entries.length - 1].isFinal
       ? this.entries.pop()
@@ -192,7 +236,7 @@ class TranslationManager extends EventEmitter {
     const overlapSize = getMaxSegmentOverlap(committedFinalTexts, currentFinalTexts);
 
     for (const segment of finalSegments.slice(overlapSize)) {
-      this.entries.push(this.createEntry(segment));
+      this.appendOrReviseFinalSegment(segment);
     }
 
     if (!currentPartial) {
