@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Global Hotkeys</title>
+  <link rel="stylesheet" href="hotkey-settings.css">
+</head>
+<body>
+  <section
+    class="hotkey-dialog"
+    role="dialog"
+    aria-modal="false"
+    aria-labelledby="hotkeyDialogTitle"
+  >
+    <div class="hotkey-dialog-header">
+      <div>
+        <div class="hotkey-dialog-title" id="hotkeyDialogTitle">Global Hotkeys</div>
+        <div class="hotkey-dialog-subtitle">Click a field, then press a shortcut. Backspace clears it.</div>
+      </div>
+      <button
+        class="hotkey-dialog-close"
+        id="closeHotkeyDialogBtn"
+        type="button"
+        title="Close hotkey settings"
+        aria-label="Close hotkey settings"
+      >
+        <svg class="hotkey-dialog-close-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6l12 12"></path>
+          <path d="M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="hotkey-list" id="hotkeyList"></div>
+  </section>
+
+  <script src="hotkey-settings.js"></script>
+</body>
+</html>

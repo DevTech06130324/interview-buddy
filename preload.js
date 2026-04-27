@@ -11,6 +11,7 @@ function subscribe(channel, callback) {
 contextBridge.exposeInMainWorld('electronAPI', {
   createTab: (url) => ipcRenderer.invoke('create-tab', url),
   closeApp: () => ipcRenderer.invoke('close-app'),
+  openHotkeySettings: () => ipcRenderer.invoke('open-hotkey-settings'),
   closeTab: (tabId) => ipcRenderer.invoke('close-tab', tabId),
   switchTab: (tabId) => ipcRenderer.invoke('switch-tab', tabId),
   navigate: (url) => ipcRenderer.invoke('navigate', url),
@@ -29,6 +30,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renamePromptMode: (payload) => ipcRenderer.invoke('rename-prompt-mode', payload),
   savePromptMode: (payload) => ipcRenderer.invoke('save-prompt-mode', payload),
   setPromptModeHotkey: (payload) => ipcRenderer.invoke('set-prompt-mode-hotkey', payload),
+  getGlobalHotkeys: () => ipcRenderer.invoke('get-global-hotkeys'),
+  setGlobalHotkey: (payload) => ipcRenderer.invoke('set-global-hotkey', payload),
   getActiveTab: () => ipcRenderer.invoke('get-active-tab'),
   getTabs: () => ipcRenderer.invoke('get-tabs'),
 

@@ -11,18 +11,33 @@
     <div class="app-layout">
       <div class="app-headbar">
         <div class="app-title">Interview assistant</div>
-        <button
-          class="app-close-btn"
-          id="closeAppBtn"
-          type="button"
-          title="Close"
-          aria-label="Close app"
-        >
-          <svg class="app-close-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M6 6l12 12"></path>
-            <path d="M18 6L6 18"></path>
-          </svg>
-        </button>
+        <div class="app-headbar-actions">
+          <button
+            class="app-settings-btn"
+            id="openHotkeySettingsBtn"
+            type="button"
+            title="Hotkey settings"
+            aria-label="Hotkey settings"
+            aria-expanded="false"
+          >
+            <svg class="app-headbar-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"></path>
+              <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2.2 2.2 0 0 1-3.11 3.11l-.05-.05a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.08 1.65V21.5a2.2 2.2 0 0 1-4.4 0v-.12a1.8 1.8 0 0 0-1.08-1.65 1.8 1.8 0 0 0-1.98.36l-.05.05a2.2 2.2 0 0 1-3.11-3.11l.05-.05A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.08H2.83a2.2 2.2 0 0 1 0-4.4h.12A1.8 1.8 0 0 0 4.6 8.44a1.8 1.8 0 0 0-.36-1.98l-.05-.05A2.2 2.2 0 0 1 7.3 3.3l.05.05a1.8 1.8 0 0 0 1.98.36 1.8 1.8 0 0 0 1.08-1.65V1.94a2.2 2.2 0 0 1 4.4 0v.12a1.8 1.8 0 0 0 1.08 1.65 1.8 1.8 0 0 0 1.98-.36l.05-.05a2.2 2.2 0 0 1 3.11 3.11l-.05.05a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.08h.12a2.2 2.2 0 0 1 0 4.4h-.12A1.8 1.8 0 0 0 19.4 15Z"></path>
+            </svg>
+          </button>
+          <button
+            class="app-close-btn"
+            id="closeAppBtn"
+            type="button"
+            title="Close"
+            aria-label="Close app"
+          >
+            <svg class="app-headbar-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6l12 12"></path>
+              <path d="M18 6L6 18"></path>
+            </svg>
+          </button>
+        </div>
       </div>
       <div class="browser-container">
         <div class="left-panel is-collapsed">

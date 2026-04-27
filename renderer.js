@@ -9,6 +9,7 @@ const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
 const clearTranscriptBtn = document.getElementById('clearTranscriptBtn');
 const closeAppBtn = document.getElementById('closeAppBtn');
+const openHotkeySettingsBtn = document.getElementById('openHotkeySettingsBtn');
 const toggleTranscriptPanelBtn = document.getElementById('toggleTranscriptPanelBtn');
 const toggleLiveCaptionsBtn = document.getElementById('toggleLiveCaptionsBtn');
 const toggleTranslationBtn = document.getElementById('toggleTranslationBtn');
@@ -667,6 +668,10 @@ function getHotkeyKeyFromEvent(event) {
     return `num${code.slice(6)}`;
   }
 
+  if (code === 'Backquote' || key === '`') {
+    return '`';
+  }
+
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(upperKey)) {
     return upperKey;
   }
@@ -1241,6 +1246,16 @@ if (closeAppBtn) {
     window.electronAPI.closeApp().catch((error) => {
       console.error('[ERROR] Failed to close app:', error);
     });
+  };
+}
+
+if (openHotkeySettingsBtn) {
+  openHotkeySettingsBtn.onclick = async () => {
+    try {
+      await window.electronAPI.openHotkeySettings();
+    } catch (error) {
+      console.error('[ERROR] Failed to open hotkey settings:', error);
+    }
   };
 }
 

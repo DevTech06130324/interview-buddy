@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, ipcMain, shell, globalShortcut, screen } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, shell, globalShortcut, screen, clipboard } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -45,6 +45,7 @@ const SCREEN_SELECTION_MIN_SIZE = 8;
 const LEGACY_DEFAULT_PROMPT_MODE_SUFFIX = 'Interviewer said like this, what should i say right now. the answer must be in easy and friendly and funny way but looks professional and polite and not too long';
 const DEFAULT_PROMPT_MODE_SUFFIX = 'What should i say right now? The answer must be easy, friendly, a little funny, professional, polite, and not too long.';
 const PROMPT_MODE_STORE_FILE = 'prompt-modes.json';
+const GLOBAL_HOTKEY_STORE_FILE = 'global-hotkeys.json';
 const DEFAULT_PROMPT_MODE_NAME = 'Default';
 const DEFAULT_TAB_URLS = [
   'https://chatgpt.com/',
@@ -57,9 +58,84 @@ const SUPPORTED_ASSISTANT_HOSTS = new Set([
   'deepseek.com',
   'www.deepseek.com'
 ]);
+const GLOBAL_HOTKEY_DEFINITIONS = [
+  {
+    id: 'opacityUp',
+    label: 'Increase opacity',
+    description: 'Make the app window less transparent.',
+    defaultAccelerator: 'CommandOrControl+Shift+Alt+Up'
+  },
+  {
+    id: 'opacityDown',
+    label: 'Decrease opacity',
+    description: 'Make the app window more transparent.',
+    defaultAccelerator: 'CommandOrControl+Shift+Alt+Down'
+  },
+  {
+    id: 'moveUp',
+    label: 'Move up',
+    description: 'Move the app window upward.',
+    defaultAccelerator: 'CommandOrControl+Shift+Up'
+  },
+  {
+    id: 'moveDown',
+    label: 'Move down',
+    description: 'Move the app window downward.',
+    defaultAccelerator: 'CommandOrControl+Shift+Down'
+  },
+  {
+    id: 'moveLeft',
+    label: 'Move left',
+    description: 'Move the app window left.',
+    defaultAccelerator: 'CommandOrControl+Shift+Left'
+  },
+  {
+    id: 'moveRight',
+    label: 'Move right',
+    description: 'Move the app window right.',
+    defaultAccelerator: 'CommandOrControl+Shift+Right'
+  },
+  {
+    id: 'toggleWindow',
+    label: 'Show or hide app',
+    description: 'Toggle the app window visibility.',
+    defaultAccelerator: 'CommandOrControl+Shift+`'
+  },
+  {
+    id: 'captureArea',
+    label: 'Capture selected area',
+    description: 'Pick a screen area for image capture.',
+    defaultAccelerator: 'Alt+Z'
+  },
+  {
+    id: 'sendTranscript',
+    label: 'Send transcript',
+    description: 'Paste the next transcript prompt into the assistant and send it.',
+    defaultAccelerator: 'CommandOrControl+Enter'
+  },
+  {
+    id: 'copyTranscript',
+    label: 'Copy transcript',
+    description: 'Copy the next transcript prompt to the clipboard.',
+    defaultAccelerator: 'Alt+Enter'
+  },
+  {
+    id: 'captureScreenToAssistant',
+    label: 'Paste screen capture',
+    description: 'Capture the screen and paste it into the assistant.',
+    defaultAccelerator: 'CommandOrControl+Shift+Enter'
+  },
+  {
+    id: 'toggleMute',
+    label: 'Mute tabs',
+    description: 'Mute or unmute all browser tabs.',
+    defaultAccelerator: 'Alt+M'
+  }
+];
 
 // State
 let mainWindow;
+let hotkeySettingsWindow = null;
 const tabs = new Map();
 let activeTabId = null;
 let tabIdCounter = 0;
@@ -71,9 +147,11 @@ let isTranscriptPanelCollapsed = true;
 let isModePanelCollapsed = true;
 let captureOverlayState = null;
 const shortcutCooldowns = new Map();
+const registeredGlobalHotkeys = new Map();
 const registeredModeHotkeys = new Map();
 let latestTranscriptText = '';
 let promptModes = createDefaultPromptModes();
+let globalHotkeys = createDefaultGlobalHotkeys();
 let selectedPromptModeId = promptModes[0].id;
 let captionSyncStartTimer = null;
 let promptModePersistTimer = null;
@@ -81,6 +159,7 @@ let pendingPromptModePersistPayload = null;
 let promptModePersistInFlight = false;
 let defaultTabWarmupTimer = null;
 let lastSubmittedTranscriptText = '';
+let lastClipboardTranscriptText = '';
 
 function createDefaultPromptModes() {
   return [
@@ -92,8 +171,19 @@ function createDefaultPromptModes() {
   ];
 }
 
+function createDefaultGlobalHotkeys() {
+  return GLOBAL_HOTKEY_DEFINITIONS.reduce((state, definition) => {
+    state[definition.id] = definition.defaultAccelerator;
+    return state;
+  }, {});
+}
+
 function getPromptModeStorePath() {
   return path.join(app.getPath('userData'), PROMPT_MODE_STORE_FILE);
+}
+
+function getGlobalHotkeyStorePath() {
+  return path.join(app.getPath('userData'), GLOBAL_HOTKEY_STORE_FILE);
 }
 
 function serializePromptModeStateSnapshot() {
@@ -181,6 +271,346 @@ function broadcastPromptModeState() {
   }
 }
 
+function ensureGlobalHotkeyState() {
+  const defaults = createDefaultGlobalHotkeys();
+  const nextHotkeys = {};
+
+  for (const definition of GLOBAL_HOTKEY_DEFINITIONS) {
+    const configuredHotkey = typeof globalHotkeys?.[definition.id] === 'string'
+      ? globalHotkeys[definition.id].trim()
+      : defaults[definition.id];
+
+    nextHotkeys[definition.id] = configuredHotkey;
+  }
+
+  globalHotkeys = nextHotkeys;
+}
+
+function getGlobalHotkeyDefinition(id) {
+  return GLOBAL_HOTKEY_DEFINITIONS.find((definition) => definition.id === id) || null;
+}
+
+function getGlobalHotkeyStateSnapshot() {
+  ensureGlobalHotkeyState();
+
+  return {
+    hotkeys: GLOBAL_HOTKEY_DEFINITIONS.map((definition) => ({
+      id: definition.id,
+      label: definition.label,
+      description: definition.description,
+      defaultAccelerator: definition.defaultAccelerator,
+      accelerator: globalHotkeys[definition.id] || ''
+    }))
+  };
+}
+
+function persistGlobalHotkeyStateSync() {
+  ensureGlobalHotkeyState();
+
+  try {
+    fs.writeFileSync(
+      getGlobalHotkeyStorePath(),
+      JSON.stringify({ hotkeys: globalHotkeys }, null, 2)
+    );
+  } catch (error) {
+    console.error('[ERROR] Failed to persist global hotkey state:', error);
+  }
+}
+
+function loadGlobalHotkeyState() {
+  try {
+    const rawData = fs.readFileSync(getGlobalHotkeyStorePath(), 'utf8');
+    const parsed = JSON.parse(rawData);
+    globalHotkeys = {
+      ...createDefaultGlobalHotkeys(),
+      ...(parsed && typeof parsed.hotkeys === 'object' && parsed.hotkeys ? parsed.hotkeys : {})
+    };
+  } catch (error) {
+    globalHotkeys = createDefaultGlobalHotkeys();
+  }
+
+  ensureGlobalHotkeyState();
+}
+
+function runGlobalHotkeyAction(id) {
+  if (isHotkeySettingsWindowFocused()) {
+    return;
+  }
+
+  switch (id) {
+    case 'opacityUp':
+      if (currentOpacity < MAX_OPACITY && mainWindow) {
+        currentOpacity = Math.min(MAX_OPACITY, currentOpacity + OPACITY_STEP);
+        mainWindow.setOpacity(currentOpacity);
+      }
+      return;
+    case 'opacityDown':
+      if (currentOpacity > MIN_OPACITY && mainWindow) {
+        currentOpacity = Math.max(MIN_OPACITY, currentOpacity - OPACITY_STEP);
+        mainWindow.setOpacity(currentOpacity);
+      }
+      return;
+    case 'moveUp':
+      moveWindow(0, -MOVE_DISTANCE);
+      return;
+    case 'moveDown':
+      moveWindow(0, MOVE_DISTANCE);
+      return;
+    case 'moveLeft':
+      moveWindow(-MOVE_DISTANCE, 0);
+      return;
+    case 'moveRight':
+      moveWindow(MOVE_DISTANCE, 0);
+      return;
+    case 'toggleWindow':
+      if (!mainWindow) {
+        return;
+      }
+
+      if (isWindowVisible) {
+        mainWindow.hide();
+        isWindowVisible = false;
+      } else {
+        mainWindow.showInactive();
+        isWindowVisible = true;
+      }
+      return;
+    case 'captureArea':
+      runShortcutAction('captureSelectedArea', () => captureSelectedArea(getCurrentDisplayId()));
+      return;
+    case 'sendTranscript':
+      runShortcutAction('submitTranscriptToAssistant', () => submitTranscriptToAssistant());
+      return;
+    case 'copyTranscript':
+      runShortcutAction('copyTranscriptPromptToClipboard', () => copyTranscriptPromptToClipboard());
+      return;
+    case 'captureScreenToAssistant':
+      runShortcutAction('pasteFullScreenIntoAssistant', () => pasteFullScreenIntoAssistant());
+      return;
+    case 'toggleMute':
+      toggleMuteAllTabs();
+      return;
+    default:
+      console.error(`[ERROR] Unknown global hotkey action: ${id}`);
+  }
+}
+
+function unregisterGlobalHotkey(id) {
+  const registeredHotkey = registeredGlobalHotkeys.get(id);
+  if (!registeredHotkey) {
+    return;
+  }
+
+  globalShortcut.unregister(registeredHotkey);
+  registeredGlobalHotkeys.delete(id);
+}
+
+function registerGlobalHotkey(id, accelerator) {
+  const definition = getGlobalHotkeyDefinition(id);
+  const nextAccelerator = typeof accelerator === 'string' ? accelerator.trim() : '';
+
+  if (!definition) {
+    return false;
+  }
+
+  if (!nextAccelerator) {
+    unregisterGlobalHotkey(id);
+    return true;
+  }
+
+  const registered = globalShortcut.register(nextAccelerator, () => {
+    runGlobalHotkeyAction(id);
+  });
+
+  if (registered) {
+    registeredGlobalHotkeys.set(id, nextAccelerator);
+  }
+
+  return registered;
+}
+
+function registerAllGlobalHotkeys() {
+  for (const id of registeredGlobalHotkeys.keys()) {
+    unregisterGlobalHotkey(id);
+  }
+
+  ensureGlobalHotkeyState();
+
+  for (const definition of GLOBAL_HOTKEY_DEFINITIONS) {
+    const accelerator = globalHotkeys[definition.id];
+    if (!accelerator) {
+      continue;
+    }
+
+    const registered = registerGlobalHotkey(definition.id, accelerator);
+    if (!registered) {
+      console.error(`[ERROR] Failed to register global hotkey "${accelerator}" for "${definition.label}"`);
+    }
+  }
+}
+
+function setGlobalHotkey(id, accelerator) {
+  const definition = getGlobalHotkeyDefinition(id);
+  if (!definition) {
+    return {
+      success: false,
+      globalHotkeyState: getGlobalHotkeyStateSnapshot()
+    };
+  }
+
+  ensureGlobalHotkeyState();
+
+  const previousAccelerator = globalHotkeys[id] || '';
+  const previousRegisteredAccelerator = registeredGlobalHotkeys.get(id) || '';
+  const nextAccelerator = typeof accelerator === 'string' ? accelerator.trim() : '';
+  const previousSignature = getAcceleratorSignature(previousAccelerator);
+  const nextSignature = getAcceleratorSignature(nextAccelerator);
+
+  const matchesConfiguredAccelerator = nextAccelerator === previousAccelerator || nextSignature === previousSignature;
+
+  if (matchesConfiguredAccelerator && (!nextAccelerator || previousRegisteredAccelerator)) {
+    globalHotkeys[id] = nextAccelerator;
+    persistGlobalHotkeyStateSync();
+    return {
+      success: true,
+      globalHotkeyState: getGlobalHotkeyStateSnapshot()
+    };
+  }
+
+  if (nextAccelerator && getAcceleratorSignature(nextAccelerator) !== getAcceleratorSignature(previousRegisteredAccelerator)) {
+    let registered = false;
+    try {
+      registered = globalShortcut.register(nextAccelerator, () => {
+        runGlobalHotkeyAction(id);
+      });
+    } catch (error) {
+      console.error('[ERROR] Failed to register global hotkey:', error);
+      registered = false;
+    }
+
+    if (!registered) {
+      return {
+        success: false,
+        globalHotkeyState: getGlobalHotkeyStateSnapshot()
+      };
+    }
+
+    if (previousRegisteredAccelerator) {
+      globalShortcut.unregister(previousRegisteredAccelerator);
+    }
+    registeredGlobalHotkeys.set(id, nextAccelerator);
+  } else if (!nextAccelerator) {
+    unregisterGlobalHotkey(id);
+  }
+
+  globalHotkeys[id] = nextAccelerator;
+  persistGlobalHotkeyStateSync();
+
+  return {
+    success: true,
+    globalHotkeyState: getGlobalHotkeyStateSnapshot()
+  };
+}
+
+function getHotkeyKeyFromInput(input) {
+  const key = typeof input?.key === 'string' ? input.key : '';
+
+  switch (key) {
+    case 'ArrowUp':
+    case 'Up':
+      return 'Up';
+    case 'ArrowDown':
+    case 'Down':
+      return 'Down';
+    case 'ArrowLeft':
+    case 'Left':
+      return 'Left';
+    case 'ArrowRight':
+    case 'Right':
+      return 'Right';
+    case ' ':
+    case 'Spacebar':
+      return 'Space';
+    case 'Esc':
+      return 'Escape';
+    case 'Del':
+      return 'Delete';
+    default:
+      if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(key)) {
+        return key.toUpperCase();
+      }
+
+      if (key.length === 1) {
+        return key.toUpperCase();
+      }
+
+      return key;
+  }
+}
+
+function getAcceleratorSignature(accelerator) {
+  const parts = typeof accelerator === 'string'
+    ? accelerator.split('+').map((part) => part.trim()).filter(Boolean)
+    : [];
+
+  if (parts.length === 0) {
+    return '';
+  }
+
+  const keyPart = parts[parts.length - 1];
+  const modifierOrder = ['CommandOrControl', 'Alt', 'Shift', 'Super'];
+  const modifiers = new Set(parts.slice(0, -1));
+  const normalizedModifiers = modifierOrder.filter((modifier) => modifiers.has(modifier));
+
+  return [...normalizedModifiers, keyPart].join('+');
+}
+
+function acceleratorMatchesInput(accelerator, input) {
+  const parts = typeof accelerator === 'string'
+    ? accelerator.split('+').map((part) => part.trim()).filter(Boolean)
+    : [];
+
+  if (parts.length === 0) {
+    return false;
+  }
+
+  const modifierParts = new Set(parts.slice(0, -1));
+  const keyPart = parts[parts.length - 1];
+  const inputKey = getHotkeyKeyFromInput(input);
+  const wantsPrimary = modifierParts.has('CommandOrControl');
+  const wantsAlt = modifierParts.has('Alt');
+  const wantsShift = modifierParts.has('Shift');
+  const wantsSuper = modifierParts.has('Super');
+  const hasPrimary = Boolean(input.control || input.meta);
+
+  if (keyPart !== inputKey) {
+    return false;
+  }
+
+  if (wantsPrimary ? !hasPrimary : Boolean(input.control)) {
+    return false;
+  }
+
+  if (wantsSuper ? !input.meta : Boolean(input.meta && !wantsPrimary)) {
+    return false;
+  }
+
+  return Boolean(input.alt) === wantsAlt && Boolean(input.shift) === wantsShift;
+}
+
+function getGlobalHotkeyIdFromInput(input) {
+  ensureGlobalHotkeyState();
+
+  for (const definition of GLOBAL_HOTKEY_DEFINITIONS) {
+    const accelerator = globalHotkeys[definition.id];
+    if (acceleratorMatchesInput(accelerator, input)) {
+      return definition.id;
+    }
+  }
+
+  return null;
+}
+
 function unregisterModeHotkey(modeId) {
   const registeredHotkey = registeredModeHotkeys.get(modeId);
   if (!registeredHotkey) {
@@ -199,6 +629,10 @@ function registerModeHotkey(modeId, hotkey) {
   }
 
   const registered = globalShortcut.register(accelerator, () => {
+    if (isHotkeySettingsWindowFocused()) {
+      return;
+    }
+
     selectPromptMode(modeId);
   });
 
@@ -487,6 +921,90 @@ function createWindow() {
   setupGlobalShortcuts();
 }
 
+function getCenteredHotkeySettingsBounds(width, height) {
+  const targetBounds = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow.getBounds()
+    : screen.getPrimaryDisplay().workArea;
+
+  return {
+    x: Math.round(targetBounds.x + (targetBounds.width - width) / 2),
+    y: Math.round(targetBounds.y + (targetBounds.height - height) / 2),
+    width,
+    height
+  };
+}
+
+function openHotkeySettingsWindow() {
+  const width = 430;
+  const height = 540;
+
+  if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
+    const bounds = getCenteredHotkeySettingsBounds(width, height);
+    hotkeySettingsWindow.setBounds(bounds);
+    hotkeySettingsWindow.show();
+    hotkeySettingsWindow.focus();
+    return true;
+  }
+
+  const bounds = getCenteredHotkeySettingsBounds(width, height);
+  hotkeySettingsWindow = new BrowserWindow({
+    ...bounds,
+    width,
+    height,
+    minWidth: 380,
+    minHeight: 420,
+    frame: false,
+    resizable: true,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    backgroundColor: '#181818',
+    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    modal: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  });
+
+  hotkeySettingsWindow.setAlwaysOnTop(true, 'screen-saver');
+  hotkeySettingsWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  hotkeySettingsWindow.setMenuBarVisibility(false);
+  if (typeof hotkeySettingsWindow.removeMenu === 'function') {
+    hotkeySettingsWindow.removeMenu();
+  }
+
+  hotkeySettingsWindow.once('ready-to-show', () => {
+    if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
+      hotkeySettingsWindow.show();
+      hotkeySettingsWindow.focus();
+    }
+  });
+
+  hotkeySettingsWindow.on('closed', () => {
+    hotkeySettingsWindow = null;
+  });
+
+  hotkeySettingsWindow.loadFile('hotkey-settings.html').catch((error) => {
+    console.error('[ERROR] Failed to load hotkey settings window:', error);
+  });
+
+  return true;
+}
+
+function isHotkeySettingsWindowFocused() {
+  return Boolean(
+    hotkeySettingsWindow
+    && !hotkeySettingsWindow.isDestroyed()
+    && hotkeySettingsWindow.isFocused()
+  );
+}
+
 function scheduleCaptionSyncStart(delayMs = 250) {
   if (!captionSync || process.platform !== 'win32') {
     return;
@@ -752,9 +1270,15 @@ function setupTabListeners(tabId, tabView) {
     const key = typeof input.key === 'string' ? input.key : '';
     const lowerKey = key.toLowerCase();
     const hasPrimaryModifier = Boolean(input.control || input.meta);
-    const isEnter = key === 'Enter';
     const isAltNavigationLeft = Boolean(input.alt) && (key === 'ArrowLeft' || key === 'Left');
     const isAltNavigationRight = Boolean(input.alt) && (key === 'ArrowRight' || key === 'Right');
+    const globalHotkeyId = getGlobalHotkeyIdFromInput(input);
+
+    if (globalHotkeyId) {
+      event.preventDefault();
+      runGlobalHotkeyAction(globalHotkeyId);
+      return;
+    }
 
     if (hasPrimaryModifier && lowerKey === 't') {
       event.preventDefault();
@@ -797,19 +1321,6 @@ function setupTabListeners(tabId, tabView) {
       }
       return;
     }
-
-    if (!hasPrimaryModifier || !isEnter) {
-      return;
-    }
-
-    event.preventDefault();
-
-    if (input.shift) {
-      runShortcutAction('pasteFullScreenIntoAssistant', () => pasteFullScreenIntoAssistant());
-      return;
-    }
-
-    runShortcutAction('submitTranscriptToAssistant', () => submitTranscriptToAssistant());
   });
   
   // Handle new-window event (legacy, but still needed for some cases)
@@ -1124,9 +1635,9 @@ function getTranscriptLines(text) {
     .filter(Boolean);
 }
 
-function getPendingTranscriptText(transcriptText = latestTranscriptText) {
+function getPendingTranscriptText(transcriptText = latestTranscriptText, cursorText = lastSubmittedTranscriptText) {
   const currentTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
-  const submittedTranscriptText = normalizeTranscriptTextForPrompt(lastSubmittedTranscriptText);
+  const submittedTranscriptText = normalizeTranscriptTextForPrompt(cursorText);
 
   if (!currentTranscriptText || !submittedTranscriptText) {
     return currentTranscriptText;
@@ -1159,8 +1670,21 @@ function markTranscriptSubmitted(transcriptText = latestTranscriptText) {
   lastSubmittedTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
 }
 
+function markTranscriptCopiedToClipboard(transcriptText = latestTranscriptText) {
+  lastClipboardTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
+}
+
 function resetSubmittedTranscriptCursor() {
   lastSubmittedTranscriptText = '';
+}
+
+function resetClipboardTranscriptCursor() {
+  lastClipboardTranscriptText = '';
+}
+
+function resetTranscriptCursors() {
+  resetSubmittedTranscriptCursor();
+  resetClipboardTranscriptCursor();
 }
 
 function getTranscriptPromptText(transcriptText = latestTranscriptText) {
@@ -2561,6 +3085,28 @@ async function submitTranscriptToAssistant() {
   }
 }
 
+async function copyTranscriptPromptToClipboard() {
+  const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
+  const pendingTranscriptText = getPendingTranscriptText(transcriptSnapshot, lastClipboardTranscriptText);
+  if (transcriptSnapshot && !pendingTranscriptText) {
+    console.error('[ERROR] No new transcript is available for Alt+Enter');
+    return;
+  }
+
+  const clipboardText = getTranscriptPromptText(pendingTranscriptText);
+  if (!clipboardText.trim()) {
+    console.error('[ERROR] No new transcript or prompt text is available for Alt+Enter');
+    return;
+  }
+
+  clipboard.writeText(clipboardText);
+  markTranscriptCopiedToClipboard(transcriptSnapshot);
+  console.log('[INFO] Copied transcript prompt to clipboard for Alt+Enter', {
+    transcriptLength: pendingTranscriptText.length,
+    clipboardLength: clipboardText.length
+  });
+}
+
 async function pasteFullScreenIntoAssistant() {
   const webContents = getActiveTabWebContents();
   if (!webContents) {
@@ -2597,74 +3143,7 @@ function toggleMuteAllTabs() {
 }
 
 function setupGlobalShortcuts() {
-  // Transparency controls
-  // Ctrl+Shift+Alt+Up: Increase transparency (increase opacity by 10%)
-  globalShortcut.register('CommandOrControl+Shift+Alt+Up', () => {
-    if (currentOpacity < MAX_OPACITY && mainWindow) {
-      currentOpacity = Math.min(MAX_OPACITY, currentOpacity + OPACITY_STEP);
-      mainWindow.setOpacity(currentOpacity);
-    }
-  });
-
-  // Ctrl+Shift+Alt+Down: Decrease transparency (decrease opacity by 10%)
-  globalShortcut.register('CommandOrControl+Shift+Alt+Down', () => {
-    if (currentOpacity > MIN_OPACITY && mainWindow) {
-      currentOpacity = Math.max(MIN_OPACITY, currentOpacity - OPACITY_STEP);
-      mainWindow.setOpacity(currentOpacity);
-    }
-  });
-
-  // Window movement controls
-  globalShortcut.register('CommandOrControl+Shift+Up', () => {
-    moveWindow(0, -MOVE_DISTANCE);
-  });
-
-  globalShortcut.register('CommandOrControl+Shift+Down', () => {
-    moveWindow(0, MOVE_DISTANCE);
-  });
-
-  globalShortcut.register('CommandOrControl+Shift+Left', () => {
-    moveWindow(-MOVE_DISTANCE, 0);
-  });
-
-  globalShortcut.register('CommandOrControl+Shift+Right', () => {
-    moveWindow(MOVE_DISTANCE, 0);
-  });
-
-  // Hide/show window
-  globalShortcut.register('CommandOrControl+Shift+`', () => {
-    if (!mainWindow) return;
-    
-    if (isWindowVisible) {
-      mainWindow.hide();
-      isWindowVisible = false;
-    } else {
-      mainWindow.showInactive();
-      isWindowVisible = true;
-    }
-  });
-
-  // Screen capture shortcuts
-  // Alt+Z: Capture a user-selected area on the current display
-  globalShortcut.register('Alt+Z', () => {
-    runShortcutAction('captureSelectedArea', () => captureSelectedArea(getCurrentDisplayId()));
-  });
-
-  // Ctrl+Enter: Paste transcript into the active supported assistant and submit it
-  globalShortcut.register('CommandOrControl+Enter', () => {
-    runShortcutAction('submitTranscriptToAssistant', () => submitTranscriptToAssistant());
-  });
-
-  // Ctrl+Shift+Enter: Capture screen, switch to the active supported assistant, and paste it
-  globalShortcut.register('CommandOrControl+Shift+Enter', () => {
-    runShortcutAction('pasteFullScreenIntoAssistant', () => pasteFullScreenIntoAssistant());
-  });
-
-  // Alt+M: Toggle mute/unmute all tabs
-  globalShortcut.register('Alt+M', () => {
-    toggleMuteAllTabs();
-  });
-
+  registerAllGlobalHotkeys();
   registerAllModeHotkeys();
 }
 
@@ -2694,6 +3173,7 @@ ipcMain.on('screen-capture-overlay-cancel', (event) => {
 
 app.whenReady().then(() => {
   loadPromptModeState();
+  loadGlobalHotkeyState();
   createWindow();
   
   mainWindow.once('ready-to-show', () => {
@@ -2712,6 +3192,9 @@ app.on('will-quit', () => {
   if (defaultTabWarmupTimer) {
     clearTimeout(defaultTabWarmupTimer);
     defaultTabWarmupTimer = null;
+  }
+  if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
+    hotkeySettingsWindow.close();
   }
   flushPromptModeStatePersistSync();
   translationManager.reset('');
@@ -2747,6 +3230,10 @@ ipcMain.handle('close-tab', (event, tabId) => {
 ipcMain.handle('close-app', () => {
   app.quit();
   return true;
+});
+
+ipcMain.handle('open-hotkey-settings', () => {
+  return openHotkeySettingsWindow();
 });
 
 ipcMain.handle('switch-tab', (event, tabId) => {
@@ -2834,9 +3321,17 @@ ipcMain.handle('set-prompt-mode-hotkey', (event, payload) => {
   return setPromptModeHotkey(payload?.modeId, payload?.hotkey);
 });
 
+ipcMain.handle('get-global-hotkeys', () => {
+  return getGlobalHotkeyStateSnapshot();
+});
+
+ipcMain.handle('set-global-hotkey', (event, payload) => {
+  return setGlobalHotkey(payload?.id, payload?.accelerator);
+});
+
 ipcMain.handle('clear-transcript', async () => {
   latestTranscriptText = '';
-  resetSubmittedTranscriptCursor();
+  resetTranscriptCursors();
   sendCaptionUpdate(translationManager.reset(''));
 
   if (captionSync && typeof captionSync.clearTranscript === 'function') {
@@ -2942,7 +3437,7 @@ if (captionSync) {
   captionSync.on('error', (error) => {
     console.error('[ERROR] Caption sync error:', error);
     latestTranscriptText = '';
-    resetSubmittedTranscriptCursor();
+    resetTranscriptCursors();
     translationManager.reset('');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('caption-error', error.message || String(error));
