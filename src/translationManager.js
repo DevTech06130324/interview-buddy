@@ -7,6 +7,8 @@ const TRANSLATION_TIMEOUT_MS = 8000;
 const PARTIAL_MIN_LENGTH = 10;
 const PARTIAL_CHANGE_THRESHOLD = 3;
 const PARTIAL_IDLE_MS = 700;
+const RECONCILE_MIN_LOOKBACK = 12;
+const RECONCILE_EXTRA_LOOKBACK = 4;
 
 function normalizeSegmentText(text) {
   return String(text || '')
@@ -57,30 +59,6 @@ function parseCaptionSegments(fullText) {
   return segments;
 }
 
-function getMaxSegmentOverlap(committedSegments, currentSegments) {
-  const maxOverlap = Math.min(committedSegments.length, currentSegments.length);
-
-  for (let overlapSize = maxOverlap; overlapSize > 0; overlapSize -= 1) {
-    let matches = true;
-
-    for (let index = 0; index < overlapSize; index += 1) {
-      const committedText = committedSegments[committedSegments.length - overlapSize + index];
-      const currentText = currentSegments[index];
-
-      if (committedText !== currentText) {
-        matches = false;
-        break;
-      }
-    }
-
-    if (matches) {
-      return overlapSize;
-    }
-  }
-
-  return 0;
-}
-
 function getRevisionComparableText(text) {
   return normalizeSegmentText(text)
     .replace(/[.!?\u3002\uff1f\uff01]+$/g, '')
@@ -93,8 +71,12 @@ function isLikelyRevision(previousText, nextText) {
   const previous = getRevisionComparableText(previousText);
   const next = getRevisionComparableText(nextText);
 
-  if (!previous || !next || previous === next) {
+  if (!previous || !next) {
     return false;
+  }
+
+  if (previous === next) {
+    return normalizeSegmentText(previousText) !== normalizeSegmentText(nextText);
   }
 
   return next.length > previous.length && next.startsWith(previous);
@@ -207,51 +189,84 @@ class TranslationManager extends EventEmitter {
     entry.changeCount = 0;
   }
 
-  appendOrReviseFinalSegment(segment) {
-    const latestEntry = this.entries[this.entries.length - 1];
+  getReconcileSearchStart(segmentCount) {
+    const lookback = Math.max(RECONCILE_MIN_LOOKBACK, segmentCount + RECONCILE_EXTRA_LOOKBACK);
+    return Math.max(0, this.entries.length - lookback);
+  }
 
-    if (latestEntry && latestEntry.isFinal && latestEntry.sourceText === segment.sourceText) {
-      return;
+  findMatchingEntry(segment, startIndex) {
+    for (let index = startIndex; index < this.entries.length; index += 1) {
+      const entry = this.entries[index];
+      if (!entry) {
+        continue;
+      }
+
+      if (entry.sourceText === segment.sourceText) {
+        return {
+          entry,
+          index,
+          isRevision: false
+        };
+      }
+
+      if (isLikelyRevision(entry.sourceText, segment.sourceText)) {
+        return {
+          entry,
+          index,
+          isRevision: true
+        };
+      }
     }
 
-    if (latestEntry && latestEntry.isFinal && isLikelyRevision(latestEntry.sourceText, segment.sourceText)) {
-      this.updateEntryFromSegment(latestEntry, segment);
-      return;
+    return null;
+  }
+
+  reconcileSegment(segment, startIndex) {
+    const match = this.findMatchingEntry(segment, startIndex);
+
+    if (match) {
+      if (match.isRevision) {
+        this.updateEntryFromSegment(match.entry, segment);
+      } else if (match.entry.isFinal !== segment.isFinal) {
+        match.entry.isFinal = segment.isFinal;
+      }
+
+      return {
+        entry: match.entry,
+        nextStartIndex: match.index + 1
+      };
     }
 
-    this.entries.push(this.createEntry(segment));
+    const entry = this.createEntry(segment);
+    this.entries.push(entry);
+    return {
+      entry,
+      nextStartIndex: this.entries.length
+    };
   }
 
   reconcileEntries(segments) {
     const previousPartial = this.entries.length > 0 && !this.entries[this.entries.length - 1].isFinal
-      ? this.entries.pop()
+      ? this.entries[this.entries.length - 1]
       : null;
+    const touchedEntries = new Set();
+    let nextStartIndex = this.getReconcileSearchStart(segments.length);
 
-    const finalSegments = segments.filter((segment) => segment.isFinal);
-    const currentPartial = segments.length > 0 && !segments[segments.length - 1].isFinal
-      ? segments[segments.length - 1]
-      : null;
-    const committedFinalTexts = this.entries.map((entry) => entry.sourceText);
-    const currentFinalTexts = finalSegments.map((segment) => segment.sourceText);
-    const overlapSize = getMaxSegmentOverlap(committedFinalTexts, currentFinalTexts);
-
-    for (const segment of finalSegments.slice(overlapSize)) {
-      this.appendOrReviseFinalSegment(segment);
+    for (const segment of segments) {
+      const result = this.reconcileSegment(segment, nextStartIndex);
+      touchedEntries.add(result.entry);
+      nextStartIndex = result.nextStartIndex;
     }
 
-    if (!currentPartial) {
+    if (
+      previousPartial
+      && !touchedEntries.has(previousPartial)
+      && this.entries.includes(previousPartial)
+      && !previousPartial.isFinal
+    ) {
       this.abortEntryTranslation(previousPartial);
-      return;
+      this.entries = this.entries.filter((entry) => entry !== previousPartial);
     }
-
-    if (previousPartial && previousPartial.sourceText === currentPartial.sourceText) {
-      previousPartial.isFinal = false;
-      this.entries.push(previousPartial);
-      return;
-    }
-
-    this.abortEntryTranslation(previousPartial);
-    this.entries.push(this.createEntry(currentPartial, previousPartial));
   }
 
   queueTranslations() {
