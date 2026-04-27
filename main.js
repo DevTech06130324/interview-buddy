@@ -71,6 +71,7 @@ let promptModePersistTimer = null;
 let pendingPromptModePersistPayload = null;
 let promptModePersistInFlight = false;
 let defaultTabWarmupTimer = null;
+let lastSubmittedTranscriptText = '';
 
 function createDefaultPromptModes() {
   return [
@@ -1087,18 +1088,68 @@ function getActiveTabWebContents() {
   return activeTab.view.webContents;
 }
 
-function getTranscriptPromptText() {
-  const transcriptText = (latestTranscriptText || '').trim();
+function normalizeTranscriptTextForPrompt(text) {
+  return String(text || '').trim();
+}
+
+function getTranscriptLines(text) {
+  return normalizeTranscriptTextForPrompt(text)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function getPendingTranscriptText(transcriptText = latestTranscriptText) {
+  const currentTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
+  const submittedTranscriptText = normalizeTranscriptTextForPrompt(lastSubmittedTranscriptText);
+
+  if (!currentTranscriptText || !submittedTranscriptText) {
+    return currentTranscriptText;
+  }
+
+  if (currentTranscriptText === submittedTranscriptText) {
+    return '';
+  }
+
+  if (currentTranscriptText.startsWith(submittedTranscriptText)) {
+    return currentTranscriptText.slice(submittedTranscriptText.length).replace(/^\s*\n?/, '').trim();
+  }
+
+  const currentLines = getTranscriptLines(currentTranscriptText);
+  const submittedLines = getTranscriptLines(submittedTranscriptText);
+  let firstUnsubmittedLineIndex = 0;
+
+  while (
+    firstUnsubmittedLineIndex < currentLines.length
+    && firstUnsubmittedLineIndex < submittedLines.length
+    && currentLines[firstUnsubmittedLineIndex] === submittedLines[firstUnsubmittedLineIndex]
+  ) {
+    firstUnsubmittedLineIndex += 1;
+  }
+
+  return currentLines.slice(firstUnsubmittedLineIndex).join('\n').trim();
+}
+
+function markTranscriptSubmitted(transcriptText = latestTranscriptText) {
+  lastSubmittedTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
+}
+
+function resetSubmittedTranscriptCursor() {
+  lastSubmittedTranscriptText = '';
+}
+
+function getTranscriptPromptText(transcriptText = latestTranscriptText) {
+  const normalizedTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
   const promptText = String(getSelectedPromptMode()?.suffix || '').trim();
 
-  if (!transcriptText) {
+  if (!normalizedTranscriptText) {
     return promptText;
   }
 
   const sections = [
     'Interviewer said like this',
     '"""',
-    transcriptText,
+    normalizedTranscriptText,
     '"""'
   ];
 
@@ -2420,9 +2471,16 @@ async function submitCurrentComposer(webContents, expectedText) {
 }
 
 async function submitTranscriptToAssistant() {
-  const composerText = getTranscriptPromptText();
+  const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
+  const pendingTranscriptText = getPendingTranscriptText(transcriptSnapshot);
+  if (transcriptSnapshot && !pendingTranscriptText) {
+    console.error('[ERROR] No new transcript is available for Ctrl+Enter');
+    return;
+  }
+
+  const composerText = getTranscriptPromptText(pendingTranscriptText);
   if (!composerText.trim()) {
-    console.error('[ERROR] No transcript or prompt text is available for Ctrl+Enter');
+    console.error('[ERROR] No new transcript or prompt text is available for Ctrl+Enter');
     return;
   }
 
@@ -2464,7 +2522,9 @@ async function submitTranscriptToAssistant() {
 
     await sleep(50);
     const submitted = await submitCurrentComposer(webContents, composerText);
-    if (!submitted) {
+    if (submitted) {
+      markTranscriptSubmitted(transcriptSnapshot);
+    } else {
       const sendButtonReady = await waitForSendButtonReady(webContents, 6, 75);
       console.error('[ERROR] Ctrl+Enter could not submit the current assistant composer without focusing it');
       if (!sendButtonReady) {
@@ -2547,7 +2607,7 @@ function setupGlobalShortcuts() {
   });
 
   // Hide/show window
-  globalShortcut.register('`', () => {
+  globalShortcut.register('CommandOrControl+Shift+`', () => {
     if (!mainWindow) return;
     
     if (isWindowVisible) {
@@ -2740,6 +2800,7 @@ ipcMain.handle('set-prompt-mode-hotkey', (event, payload) => {
 
 ipcMain.handle('clear-transcript', async () => {
   latestTranscriptText = '';
+  resetSubmittedTranscriptCursor();
   sendCaptionUpdate(translationManager.reset(''));
 
   if (captionSync && typeof captionSync.clearTranscript === 'function') {
@@ -2844,6 +2905,7 @@ if (captionSync) {
   captionSync.on('error', (error) => {
     console.error('[ERROR] Caption sync error:', error);
     latestTranscriptText = '';
+    resetSubmittedTranscriptCursor();
     translationManager.reset('');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('caption-error', error.message || String(error));
