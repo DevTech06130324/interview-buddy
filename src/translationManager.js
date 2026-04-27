@@ -1,4 +1,5 @@
 const EventEmitter = require('events');
+const { logTranscriptEvent } = require('./transcriptLogger');
 
 const EOS_CHARS = new Set(['.', '?', '!', '\u3002', '\uff1f', '\uff01']);
 const GOOGLE_TRANSLATE_URL = 'https://clients5.google.com/translate_a/t';
@@ -142,6 +143,44 @@ function extractGoogleTranslation(responseBody) {
   throw new Error('Unexpected Google Translate response format.');
 }
 
+function getEntrySnapshot(entry, index = null) {
+  if (!entry) {
+    return null;
+  }
+
+  return {
+    index,
+    id: entry.id,
+    sourceText: entry.sourceText,
+    translatedText: entry.translatedText,
+    status: entry.status,
+    isFinal: entry.isFinal,
+    version: entry.version,
+    lastQueuedText: entry.lastQueuedText,
+    changeCount: entry.changeCount
+  };
+}
+
+function getEntrySnapshots(entries) {
+  return entries.map((entry, index) => getEntrySnapshot(entry, index));
+}
+
+function getSegmentSnapshot(segment, index = null) {
+  if (!segment) {
+    return null;
+  }
+
+  return {
+    index,
+    sourceText: segment.sourceText,
+    isFinal: segment.isFinal
+  };
+}
+
+function getSegmentSnapshots(segments) {
+  return segments.map((segment, index) => getSegmentSnapshot(segment, index));
+}
+
 class TranslationManager extends EventEmitter {
   constructor() {
     super();
@@ -166,24 +205,47 @@ class TranslationManager extends EventEmitter {
   }
 
   reset(fullText = '') {
+    const entriesBefore = getEntrySnapshots(this.entries);
     this.sessionGeneration += 1;
     this.liveCaptionText = String(fullText || '');
     this.entryCounter = 0;
     this.clearPartialIdleTimer();
+
+    logTranscriptEvent('translation-manager-reset-started', {
+      sessionGeneration: this.sessionGeneration,
+      requestedFullText: this.liveCaptionText,
+      entriesBefore
+    });
 
     for (const entry of this.entries) {
       this.abortEntryTranslation(entry);
     }
 
     this.entries = [];
+    logTranscriptEvent('translation-manager-reset-completed', {
+      sessionGeneration: this.sessionGeneration,
+      payload: this.getPayload()
+    });
     return this.getPayload();
   }
 
   update(fullText) {
     this.liveCaptionText = String(fullText || '');
     const segments = parseCaptionSegments(this.liveCaptionText);
+    logTranscriptEvent('translation-manager-update-started', {
+      sessionGeneration: this.sessionGeneration,
+      liveCaptionText: this.liveCaptionText,
+      parsedSegments: getSegmentSnapshots(segments),
+      entriesBefore: getEntrySnapshots(this.entries),
+      panelFullTextBefore: this.getSessionTranscriptText()
+    });
     this.reconcileEntries(segments);
     this.queueTranslations();
+    logTranscriptEvent('translation-manager-update-completed', {
+      sessionGeneration: this.sessionGeneration,
+      entriesAfter: getEntrySnapshots(this.entries),
+      panelFullTextAfter: this.getSessionTranscriptText()
+    });
     return this.getPayload();
   }
 
@@ -231,7 +293,7 @@ class TranslationManager extends EventEmitter {
         return {
           entry,
           index,
-          isRevision: false
+          matchType: 'exact'
         };
       }
 
@@ -239,6 +301,7 @@ class TranslationManager extends EventEmitter {
         return {
           entry,
           index,
+          matchType: 'growing-revision',
           updateSourceText: true
         };
       }
@@ -247,6 +310,7 @@ class TranslationManager extends EventEmitter {
         return {
           entry,
           index,
+          matchType: 'split-revision',
           updateSourceText: true
         };
       }
@@ -257,6 +321,13 @@ class TranslationManager extends EventEmitter {
 
   reconcileSegment(segment, startIndex, hasFollowingSegment, previousSegmentEntry = null) {
     if (previousSegmentEntry && isLikelySuffixDuplicate(previousSegmentEntry.sourceText, segment.sourceText)) {
+      logTranscriptEvent('translation-reconcile-decision', {
+        sessionGeneration: this.sessionGeneration,
+        action: 'skip-suffix-duplicate',
+        segment: getSegmentSnapshot(segment),
+        previousSegmentEntry: getEntrySnapshot(previousSegmentEntry),
+        startIndex
+      });
       return {
         entry: previousSegmentEntry,
         nextStartIndex: startIndex
@@ -266,11 +337,24 @@ class TranslationManager extends EventEmitter {
     const match = this.findMatchingEntry(segment, startIndex, hasFollowingSegment);
 
     if (match) {
+      const entryBefore = getEntrySnapshot(match.entry, match.index);
       if (match.updateSourceText) {
         this.updateEntryFromSegment(match.entry, segment);
       } else if (match.entry.isFinal !== segment.isFinal) {
         match.entry.isFinal = segment.isFinal;
       }
+
+      logTranscriptEvent('translation-reconcile-decision', {
+        sessionGeneration: this.sessionGeneration,
+        action: match.updateSourceText ? 'update-existing' : 'match-existing',
+        matchType: match.matchType,
+        startIndex,
+        matchIndex: match.index,
+        hasFollowingSegment,
+        segment: getSegmentSnapshot(segment),
+        entryBefore,
+        entryAfter: getEntrySnapshot(match.entry, match.index)
+      });
 
       return {
         entry: match.entry,
@@ -281,6 +365,15 @@ class TranslationManager extends EventEmitter {
     const insertIndex = Math.min(startIndex, this.entries.length);
     const entry = this.createEntry(segment);
     this.entries.splice(insertIndex, 0, entry);
+    logTranscriptEvent('translation-reconcile-decision', {
+      sessionGeneration: this.sessionGeneration,
+      action: 'insert-new',
+      startIndex,
+      insertIndex,
+      hasFollowingSegment,
+      segment: getSegmentSnapshot(segment),
+      entryAfter: getEntrySnapshot(entry, insertIndex)
+    });
     return {
       entry,
       nextStartIndex: insertIndex + 1
@@ -294,6 +387,14 @@ class TranslationManager extends EventEmitter {
     const touchedEntries = new Set();
     let nextStartIndex = this.getReconcileSearchStart(segments.length);
     let previousSegmentEntry = null;
+
+    logTranscriptEvent('translation-reconcile-started', {
+      sessionGeneration: this.sessionGeneration,
+      searchStartIndex: nextStartIndex,
+      previousPartial: getEntrySnapshot(previousPartial),
+      segments: getSegmentSnapshots(segments),
+      entriesBefore: getEntrySnapshots(this.entries)
+    });
 
     for (let index = 0; index < segments.length; index += 1) {
       const result = this.reconcileSegment(
@@ -315,7 +416,17 @@ class TranslationManager extends EventEmitter {
     ) {
       this.abortEntryTranslation(previousPartial);
       this.entries = this.entries.filter((entry) => entry !== previousPartial);
+      logTranscriptEvent('translation-reconcile-decision', {
+        sessionGeneration: this.sessionGeneration,
+        action: 'remove-untouched-partial',
+        previousPartial: getEntrySnapshot(previousPartial)
+      });
     }
+
+    logTranscriptEvent('translation-reconcile-completed', {
+      sessionGeneration: this.sessionGeneration,
+      entriesAfter: getEntrySnapshots(this.entries)
+    });
   }
 
   queueTranslations() {
@@ -334,9 +445,20 @@ class TranslationManager extends EventEmitter {
 
     if (partialEntry.changeCount >= PARTIAL_CHANGE_THRESHOLD) {
       partialEntry.changeCount = 0;
+      logTranscriptEvent('translation-partial-queued-by-change-count', {
+        sessionGeneration: this.sessionGeneration,
+        entry: getEntrySnapshot(partialEntry, this.entries.length - 1),
+        partialChangeThreshold: PARTIAL_CHANGE_THRESHOLD
+      });
       this.queueEntryTranslation(partialEntry);
       return;
     }
+
+    logTranscriptEvent('translation-partial-idle-timer-scheduled', {
+      sessionGeneration: this.sessionGeneration,
+      entry: getEntrySnapshot(partialEntry, this.entries.length - 1),
+      partialIdleMs: PARTIAL_IDLE_MS
+    });
 
     this.partialIdleTimer = setTimeout(() => {
       this.partialIdleTimer = null;
@@ -346,6 +468,10 @@ class TranslationManager extends EventEmitter {
         && !latestPartialEntry.isFinal
         && getByteLength(latestPartialEntry.sourceText) >= PARTIAL_MIN_LENGTH
       ) {
+        logTranscriptEvent('translation-partial-queued-by-idle', {
+          sessionGeneration: this.sessionGeneration,
+          entry: getEntrySnapshot(latestPartialEntry, this.entries.length - 1)
+        });
         this.queueEntryTranslation(latestPartialEntry);
       }
     }, PARTIAL_IDLE_MS);
@@ -353,6 +479,11 @@ class TranslationManager extends EventEmitter {
 
   queueEntryTranslation(entry) {
     if (!entry || !entry.sourceText || entry.lastQueuedText === entry.sourceText) {
+      logTranscriptEvent('translation-queue-skipped', {
+        sessionGeneration: this.sessionGeneration,
+        reason: !entry ? 'missing-entry' : (!entry.sourceText ? 'empty-source-text' : 'same-as-last-queued'),
+        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
+      });
       return;
     }
 
@@ -373,23 +504,55 @@ class TranslationManager extends EventEmitter {
 
     entry.controller = controller;
 
+    logTranscriptEvent('translation-queued', {
+      sessionGeneration,
+      entryVersion,
+      entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
+      timeoutMs: TRANSLATION_TIMEOUT_MS
+    });
+
     this.translateWithGoogle(entry.sourceText, controller.signal)
       .then((translatedText) => {
         if (!this.isCurrentTranslation(entry, entryVersion, sessionGeneration)) {
+          logTranscriptEvent('translation-result-ignored-stale', {
+            sessionGeneration,
+            entryVersion,
+            translatedText,
+            entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
+            currentSessionGeneration: this.sessionGeneration
+          });
           return;
         }
 
         entry.translatedText = translatedText;
         entry.status = 'translated';
         entry.controller = null;
+        logTranscriptEvent('translation-succeeded', {
+          sessionGeneration,
+          entryVersion,
+          translatedText,
+          entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
+        });
         this.emit('updated', this.getPayload());
       })
       .catch((error) => {
         if (!this.isCurrentTranslation(entry, entryVersion, sessionGeneration)) {
+          logTranscriptEvent('translation-error-ignored-stale', {
+            sessionGeneration,
+            entryVersion,
+            error,
+            entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
+            currentSessionGeneration: this.sessionGeneration
+          });
           return;
         }
 
         if (error?.name === 'AbortError' && !timedOut) {
+          logTranscriptEvent('translation-aborted', {
+            sessionGeneration,
+            entryVersion,
+            entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
+          });
           return;
         }
 
@@ -398,6 +561,13 @@ class TranslationManager extends EventEmitter {
           : `[ERROR] Translation Failed: ${error?.message || String(error)}`;
         entry.status = 'error';
         entry.controller = null;
+        logTranscriptEvent('translation-failed', {
+          sessionGeneration,
+          entryVersion,
+          timedOut,
+          error,
+          entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
+        });
         this.emit('updated', this.getPayload());
       })
       .finally(() => {
@@ -413,6 +583,10 @@ class TranslationManager extends EventEmitter {
 
   abortEntryTranslation(entry) {
     if (entry?.controller && !entry.controller.signal.aborted) {
+      logTranscriptEvent('translation-abort-requested', {
+        sessionGeneration: this.sessionGeneration,
+        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
+      });
       entry.controller.abort();
     }
 

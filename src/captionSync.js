@@ -1,5 +1,6 @@
 const liveCaptionsHandler = require('./livecaptions');
 const EventEmitter = require('events');
+const { logTranscriptEvent } = require('./transcriptLogger');
 
 class CaptionSyncService extends EventEmitter {
     constructor() {
@@ -11,7 +12,9 @@ class CaptionSyncService extends EventEmitter {
         this.currentPollInterval = this.activePollInterval;
         this.unchangedPollCount = 0;
         this.lastEmittedText = '';
+        this.lastRawPolledText = '';
         this.loopGeneration = 0;
+        this.pollSequence = 0;
     }
 
     async start() {
@@ -26,6 +29,7 @@ class CaptionSyncService extends EventEmitter {
             await this.sleep(1000);
 
             this.lastEmittedText = '';
+            this.lastRawPolledText = '';
             this.currentPollInterval = this.activePollInterval;
             this.unchangedPollCount = 0;
             this.startSyncLoop();
@@ -40,9 +44,13 @@ class CaptionSyncService extends EventEmitter {
     stop() {
         this.isRunning = false;
         this.lastEmittedText = '';
+        this.lastRawPolledText = '';
         this.currentPollInterval = this.activePollInterval;
         this.unchangedPollCount = 0;
         this.loopGeneration += 1;
+        logTranscriptEvent('caption-sync-stop', {
+            loopGeneration: this.loopGeneration
+        });
         liveCaptionsHandler.cleanup();
     }
 
@@ -50,7 +58,13 @@ class CaptionSyncService extends EventEmitter {
         const wasRunning = this.isRunning;
         this.isRunning = false;
         this.lastEmittedText = '';
+        this.lastRawPolledText = '';
         this.loopGeneration += 1;
+
+        logTranscriptEvent('caption-sync-clear-requested', {
+            loopGeneration: this.loopGeneration,
+            wasRunning
+        });
 
         this.emit('captionUpdate', {
             fullText: ''
@@ -63,19 +77,31 @@ class CaptionSyncService extends EventEmitter {
             await this.sleep(1000);
 
             this.lastEmittedText = '';
+            this.lastRawPolledText = '';
             this.currentPollInterval = this.activePollInterval;
             this.unchangedPollCount = 0;
             if (wasRunning) {
                 this.startSyncLoop();
             }
 
+            const liveCaptionsVisible = await this.getLiveCaptionsVisibility();
+            logTranscriptEvent('caption-sync-clear-succeeded', {
+                loopGeneration: this.loopGeneration,
+                liveCaptionsVisible
+            });
+
             return {
                 success: true,
-                liveCaptionsVisible: await this.getLiveCaptionsVisibility()
+                liveCaptionsVisible
             };
         } catch (error) {
             console.error('[ERROR] Failed to restart Live Captions after clearing transcript:', error);
             this.lastEmittedText = '';
+            this.lastRawPolledText = '';
+            logTranscriptEvent('caption-sync-clear-failed', {
+                loopGeneration: this.loopGeneration,
+                error
+            });
             this.emit('error', error);
             return {
                 success: false,
@@ -97,6 +123,11 @@ class CaptionSyncService extends EventEmitter {
         this.isRunning = true;
         this.currentPollInterval = this.activePollInterval;
         this.unchangedPollCount = 0;
+        logTranscriptEvent('caption-sync-loop-started', {
+            loopGeneration: this.loopGeneration,
+            activePollInterval: this.activePollInterval,
+            idlePollInterval: this.idlePollInterval
+        });
         void this.syncLoop(this.loopGeneration);
     }
 
@@ -109,8 +140,25 @@ class CaptionSyncService extends EventEmitter {
                 // Preprocess text to clean it up (fix acronyms, punctuation, etc.)
                 const processedText = this.preprocessText(fullText);
                 const normalizedText = processedText.trim() === '' ? '' : processedText;
+                const shouldEmit = normalizedText !== this.lastEmittedText;
 
-                if (normalizedText !== this.lastEmittedText) {
+                if (fullText !== this.lastRawPolledText || shouldEmit) {
+                    this.pollSequence += 1;
+                    logTranscriptEvent('caption-sync-polled', {
+                        loopGeneration,
+                        pollSequence: this.pollSequence,
+                        rawText: fullText,
+                        processedText,
+                        normalizedText,
+                        previousEmittedText: this.lastEmittedText,
+                        emitted: shouldEmit,
+                        unchangedPollCount: this.unchangedPollCount,
+                        currentPollInterval: this.currentPollInterval
+                    });
+                    this.lastRawPolledText = fullText;
+                }
+
+                if (shouldEmit) {
                     this.lastEmittedText = normalizedText;
                     this.currentPollInterval = this.activePollInterval;
                     this.unchangedPollCount = 0;
@@ -127,6 +175,10 @@ class CaptionSyncService extends EventEmitter {
                 }
             } catch (error) {
                 console.error('[ERROR] Sync loop error:', error);
+                logTranscriptEvent('caption-sync-loop-error', {
+                    loopGeneration,
+                    error
+                });
                 this.emit('error', error);
             }
 

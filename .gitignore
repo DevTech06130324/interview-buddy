@@ -1,5 +1,6 @@
 node_modules/
 *.log
+logs.txt
 .DS_Store
 dist/
 build/
