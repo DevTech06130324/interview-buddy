@@ -4,6 +4,41 @@
   box-sizing: border-box;
 }
 
+:root,
+:root[data-theme="dark"] {
+  --dialog-bg: #181818;
+  --dialog-header-bg: #202020;
+  --border: #3f3f3f;
+  --border-soft: #303030;
+  --border-strong: #444444;
+  --control-bg: #121212;
+  --control-hover: #343434;
+  --text: #ffffff;
+  --text-muted: #a9a9a9;
+  --text-soft: #a8a8a8;
+  --accent: #4a9eff;
+  --success: #42c46f;
+  --error: #ff6262;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --dialog-bg: #ffffff;
+  --dialog-header-bg: #edf0f4;
+  --border: #cfd6df;
+  --border-soft: #dfe4ea;
+  --border-strong: #b8c2cf;
+  --control-bg: #f7f8fa;
+  --control-hover: #e8ebf0;
+  --text: #17191c;
+  --text-muted: #606873;
+  --text-soft: #4a535f;
+  --accent: #246bce;
+  --success: #128a43;
+  --error: #d83c3c;
+  color-scheme: light;
+}
+
 body {
   width: 100vw;
   height: 100vh;
@@ -12,7 +47,7 @@ body {
   align-items: center;
   justify-content: center;
   background: #00000000;
-  color: #ffffff;
+  color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   user-select: none;
 }
@@ -23,9 +58,9 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid #3f3f3f;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #181818;
+  background: var(--dialog-bg);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
 }
 
@@ -36,13 +71,13 @@ body {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 12px 10px 14px;
-  border-bottom: 1px solid #303030;
-  background: #202020;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--dialog-header-bg);
   -webkit-app-region: drag;
 }
 
 .hotkey-dialog-title {
-  color: #ffffff;
+  color: var(--text);
   font-size: 13px;
   font-weight: 700;
   line-height: 1.2;
@@ -50,7 +85,7 @@ body {
 
 .hotkey-dialog-subtitle {
   margin-top: 4px;
-  color: #a9a9a9;
+  color: var(--text-muted);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -62,7 +97,7 @@ body {
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: #ffffff;
+  color: var(--text);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -72,8 +107,8 @@ body {
 }
 
 .hotkey-dialog-close:hover {
-  background: #343434;
-  border-color: #555555;
+  background: var(--control-hover);
+  border-color: var(--border-strong);
 }
 
 .hotkey-dialog-close-icon {
@@ -92,7 +127,7 @@ body {
   overflow-y: auto;
   padding: 8px;
   scrollbar-width: thin;
-  scrollbar-color: #515151 #181818;
+  scrollbar-color: var(--border-strong) var(--dialog-bg);
 }
 
 .hotkey-list::-webkit-scrollbar {
@@ -100,11 +135,11 @@ body {
 }
 
 .hotkey-list::-webkit-scrollbar-track {
-  background: #181818;
+  background: var(--dialog-bg);
 }
 
 .hotkey-list::-webkit-scrollbar-thumb {
-  background: #4a4a4a;
+  background: var(--border-strong);
   border-radius: 999px;
 }
 
@@ -114,7 +149,7 @@ body {
   gap: 10px;
   align-items: center;
   padding: 9px 8px;
-  border-bottom: 1px solid #282828;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .hotkey-row:last-child {
@@ -122,7 +157,7 @@ body {
 }
 
 .hotkey-name {
-  color: #f4f4f4;
+  color: var(--text);
   font-size: 12px;
   font-weight: 700;
   line-height: 1.25;
@@ -130,7 +165,7 @@ body {
 
 .hotkey-description {
   margin-top: 3px;
-  color: #a8a8a8;
+  color: var(--text-soft);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -138,10 +173,10 @@ body {
 .hotkey-input {
   width: 100%;
   height: 32px;
-  border: 1px solid #444444;
+  border: 1px solid var(--border-strong);
   border-radius: 7px;
-  background: #121212;
-  color: #ffffff;
+  background: var(--control-bg);
+  color: var(--text);
   padding: 0 9px;
   font-size: 12px;
   line-height: 32px;
@@ -152,22 +187,22 @@ body {
 }
 
 .hotkey-input:focus {
-  border-color: #4a9eff;
+  border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.16);
 }
 
 .hotkey-input.is-success {
-  border-color: #42c46f;
+  border-color: var(--success);
   box-shadow: 0 0 0 2px rgba(66, 196, 111, 0.18);
 }
 
 .hotkey-input.is-error {
-  border-color: #ff6262;
+  border-color: var(--error);
   box-shadow: 0 0 0 2px rgba(255, 98, 98, 0.18);
 }
 
 .hotkey-dialog-close:focus-visible,
 .hotkey-input:focus-visible {
-  outline: 2px solid #4a9eff;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

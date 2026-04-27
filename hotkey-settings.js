@@ -4,6 +4,10 @@ const hotkeyList = document.getElementById('hotkeyList');
 let globalHotkeys = [];
 const globalHotkeyFeedbackTimers = new Map();
 
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+}
+
 function formatHotkeyPartForDisplay(part) {
   switch (part) {
     case 'CommandOrControl':
@@ -304,5 +308,15 @@ if (closeHotkeyDialogBtn) {
     window.close();
   };
 }
+
+window.electronAPI.getAppPreferences().then((preferences) => {
+  applyTheme(preferences?.theme);
+}).catch((error) => {
+  console.error('[ERROR] Failed to load app preferences:', error);
+});
+
+window.electronAPI.onAppPreferencesUpdated((preferences) => {
+  applyTheme(preferences?.theme);
+});
 
 void refreshGlobalHotkeySettings();

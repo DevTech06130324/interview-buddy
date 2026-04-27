@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, ipcMain, shell, globalShortcut, screen, clipboard } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, shell, globalShortcut, screen, clipboard, nativeTheme } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -38,15 +38,23 @@ const OPACITY_STEP = 0.1;
 const MIN_OPACITY = 0.1;
 const MAX_OPACITY = 1.0;
 const DEFAULT_OPACITY = 1.0;
-const DEFAULT_TRANSCRIPT_PANEL_RATIO = 0.2;
 const MIN_TRANSCRIPT_PANEL_HEIGHT = TRANSCRIPT_PANEL_COLLAPSED_HEIGHT;
 const MIN_BROWSER_PANEL_HEIGHT = 190;
+const MIN_TRANSCRIPT_PANEL_WIDTH = TRANSCRIPT_PANEL_COLLAPSED_HEIGHT;
+const MIN_BROWSER_PANEL_WIDTH = 220;
 const SCREEN_SELECTION_MIN_SIZE = 8;
 const LEGACY_DEFAULT_PROMPT_MODE_SUFFIX = 'Interviewer said like this, what should i say right now. the answer must be in easy and friendly and funny way but looks professional and polite and not too long';
 const DEFAULT_PROMPT_MODE_SUFFIX = 'What should i say right now? The answer must be easy, friendly, a little funny, professional, polite, and not too long.';
 const PROMPT_MODE_STORE_FILE = 'prompt-modes.json';
 const GLOBAL_HOTKEY_STORE_FILE = 'global-hotkeys.json';
+const APP_PREFERENCES_STORE_FILE = 'app-preferences.json';
 const DEFAULT_PROMPT_MODE_NAME = 'Default';
+const DEFAULT_THEME = 'dark';
+const DEFAULT_LAYOUT_MODE = 'vertical';
+const DEFAULT_SWITCH_ACTIVE_VIEW = 'transcript';
+const DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO = 0.2;
+const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0.3;
+const SWITCH_VIEW_TABS_HEIGHT = 38;
 const DEFAULT_TAB_URLS = [
   'https://chatgpt.com/',
   'https://chat.deepseek.com/'
@@ -130,6 +138,12 @@ const GLOBAL_HOTKEY_DEFINITIONS = [
     label: 'Mute tabs',
     description: 'Mute or unmute all browser tabs.',
     defaultAccelerator: 'Alt+M'
+  },
+  {
+    id: 'toggleSwitchView',
+    label: 'Switch transcript/webview',
+    description: 'Toggle the visible view in switching layout mode.',
+    defaultAccelerator: 'F12'
   }
 ];
 
@@ -142,7 +156,11 @@ let tabIdCounter = 0;
 let currentOpacity = DEFAULT_OPACITY;
 let isWindowVisible = true;
 let isMuted = false;
-let transcriptPanelRatio = DEFAULT_TRANSCRIPT_PANEL_RATIO;
+let currentTheme = DEFAULT_THEME;
+let layoutMode = DEFAULT_LAYOUT_MODE;
+let switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
+let verticalTranscriptPanelRatio = DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO;
+let horizontalTranscriptPanelRatio = DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
 let isTranscriptPanelCollapsed = true;
 let isModePanelCollapsed = true;
 let captureOverlayState = null;
@@ -184,6 +202,10 @@ function getPromptModeStorePath() {
 
 function getGlobalHotkeyStorePath() {
   return path.join(app.getPath('userData'), GLOBAL_HOTKEY_STORE_FILE);
+}
+
+function getAppPreferencesStorePath() {
+  return path.join(app.getPath('userData'), APP_PREFERENCES_STORE_FILE);
 }
 
 function serializePromptModeStateSnapshot() {
@@ -269,6 +291,147 @@ function broadcastPromptModeState() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('prompt-mode-state', getPromptModeStateSnapshot());
   }
+}
+
+function normalizeTheme(value) {
+  return value === 'light' ? 'light' : 'dark';
+}
+
+function normalizeLayoutMode(value) {
+  return ['horizontal', 'vertical', 'switch'].includes(value) ? value : DEFAULT_LAYOUT_MODE;
+}
+
+function normalizeSwitchActiveView(value) {
+  return value === 'webview' ? 'webview' : 'transcript';
+}
+
+function normalizeSplitRatio(value, fallback) {
+  const ratio = Number(value);
+  return Number.isFinite(ratio) ? Math.min(0.9, Math.max(0.1, ratio)) : fallback;
+}
+
+function getAppPreferenceStateSnapshot() {
+  return {
+    theme: currentTheme,
+    layoutMode,
+    switchActiveView,
+    verticalTranscriptPanelRatio,
+    horizontalTranscriptPanelRatio
+  };
+}
+
+function persistAppPreferencesSync() {
+  try {
+    fs.writeFileSync(
+      getAppPreferencesStorePath(),
+      JSON.stringify(getAppPreferenceStateSnapshot(), null, 2)
+    );
+  } catch (error) {
+    console.error('[ERROR] Failed to persist app preferences:', error);
+  }
+}
+
+function loadAppPreferences() {
+  try {
+    const rawData = fs.readFileSync(getAppPreferencesStorePath(), 'utf8');
+    const parsed = JSON.parse(rawData);
+
+    currentTheme = normalizeTheme(parsed?.theme);
+    layoutMode = normalizeLayoutMode(parsed?.layoutMode);
+    switchActiveView = normalizeSwitchActiveView(parsed?.switchActiveView);
+    verticalTranscriptPanelRatio = normalizeSplitRatio(
+      parsed?.verticalTranscriptPanelRatio,
+      DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO
+    );
+    horizontalTranscriptPanelRatio = normalizeSplitRatio(
+      parsed?.horizontalTranscriptPanelRatio,
+      DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO
+    );
+  } catch (error) {
+    currentTheme = DEFAULT_THEME;
+    layoutMode = DEFAULT_LAYOUT_MODE;
+    switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
+    verticalTranscriptPanelRatio = DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO;
+    horizontalTranscriptPanelRatio = DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
+  }
+}
+
+function broadcastAppPreferences() {
+  const snapshot = getAppPreferenceStateSnapshot();
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app-preferences-updated', snapshot);
+  }
+
+  if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
+    hotkeySettingsWindow.webContents.send('app-preferences-updated', snapshot);
+  }
+}
+
+function applyNativeTheme() {
+  nativeTheme.themeSource = currentTheme;
+}
+
+function getThemeWindowBackground() {
+  return currentTheme === 'light' ? '#ffffff' : '#181818';
+}
+
+function applyThemeWindowBackgrounds() {
+  if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
+    hotkeySettingsWindow.setBackgroundColor(getThemeWindowBackground());
+  }
+}
+
+function setAppTheme(theme) {
+  currentTheme = normalizeTheme(theme);
+  applyNativeTheme();
+  applyThemeWindowBackgrounds();
+  persistAppPreferencesSync();
+  broadcastAppPreferences();
+  applyWebThemeToAllTabs();
+  return getAppPreferenceStateSnapshot();
+}
+
+function toggleAppTheme() {
+  return setAppTheme(currentTheme === 'dark' ? 'light' : 'dark');
+}
+
+function setLayoutMode(nextLayoutMode) {
+  const previousLayoutMode = layoutMode;
+  layoutMode = normalizeLayoutMode(nextLayoutMode);
+
+  if (layoutMode === 'switch' && previousLayoutMode !== 'switch') {
+    switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
+  } else {
+    switchActiveView = normalizeSwitchActiveView(switchActiveView);
+  }
+
+  persistAppPreferencesSync();
+  broadcastAppPreferences();
+  resizeTabs();
+  return getAppPreferenceStateSnapshot();
+}
+
+function cycleLayoutMode() {
+  const order = ['vertical', 'horizontal', 'switch'];
+  const currentIndex = Math.max(0, order.indexOf(layoutMode));
+  return setLayoutMode(order[(currentIndex + 1) % order.length]);
+}
+
+function setSwitchActiveView(nextView) {
+  switchActiveView = normalizeSwitchActiveView(nextView);
+  persistAppPreferencesSync();
+  broadcastAppPreferences();
+  resizeTabs();
+  return getAppPreferenceStateSnapshot();
+}
+
+function toggleSwitchActiveView() {
+  if (layoutMode !== 'switch') {
+    return getAppPreferenceStateSnapshot();
+  }
+
+  return setSwitchActiveView(switchActiveView === 'transcript' ? 'webview' : 'transcript');
 }
 
 function ensureGlobalHotkeyState() {
@@ -389,6 +552,9 @@ function runGlobalHotkeyAction(id) {
       return;
     case 'toggleMute':
       toggleMuteAllTabs();
+      return;
+    case 'toggleSwitchView':
+      toggleSwitchActiveView();
       return;
     default:
       console.error(`[ERROR] Unknown global hotkey action: ${id}`);
@@ -889,8 +1055,8 @@ function setPromptModeHotkey(modeId, hotkey) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 600,
-    height: 800,
+    width: 430,
+    height: 700,
     title: WINDOW_TITLE,
     minWidth: 400,
     minHeight: 300,
@@ -941,6 +1107,7 @@ function openHotkeySettingsWindow() {
   if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
     const bounds = getCenteredHotkeySettingsBounds(width, height);
     hotkeySettingsWindow.setBounds(bounds);
+    hotkeySettingsWindow.setBackgroundColor(getThemeWindowBackground());
     hotkeySettingsWindow.show();
     hotkeySettingsWindow.focus();
     return true;
@@ -962,7 +1129,7 @@ function openHotkeySettingsWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
-    backgroundColor: '#181818',
+    backgroundColor: getThemeWindowBackground(),
     parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
     modal: false,
     webPreferences: {
@@ -1023,23 +1190,162 @@ function scheduleCaptionSyncStart(delayMs = 250) {
   }, delayMs);
 }
 
+function getWebThemeCss() {
+  if (currentTheme === 'light') {
+    return `
+      :root { color-scheme: light !important; }
+      html[data-interview-buddy-theme="light"] body {
+        background-color: #ffffff !important;
+        color: #171717 !important;
+      }
+    `;
+  }
+
+  return `
+    :root { color-scheme: dark !important; }
+    html[data-interview-buddy-theme="dark"] body {
+      background-color: #0f0f0f !important;
+      color: #f4f4f4 !important;
+    }
+  `;
+}
+
+function applyWebThemeToTab(tabId) {
+  const tab = tabs.get(tabId);
+  if (!tab || !tab.view || !tab.view.webContents || tab.view.webContents.isDestroyed()) {
+    return;
+  }
+
+  const theme = currentTheme;
+  const css = getWebThemeCss();
+  const script = `
+    (() => {
+      const id = 'interview-buddy-theme-style';
+      let style = document.getElementById(id);
+      if (!style) {
+        style = document.createElement('style');
+        style.id = id;
+        document.documentElement.appendChild(style);
+      }
+      style.textContent = ${JSON.stringify(css)};
+      document.documentElement.dataset.interviewBuddyTheme = ${JSON.stringify(theme)};
+      document.documentElement.style.colorScheme = ${JSON.stringify(theme)};
+    })();
+  `;
+
+  tab.view.webContents.executeJavaScript(script, true).catch((error) => {
+    console.error('[WARNING] Failed to apply web theme:', error.message || error);
+  });
+}
+
+function applyWebThemeToAllTabs() {
+  for (const tabId of tabs.keys()) {
+    applyWebThemeToTab(tabId);
+  }
+}
+
 function getLayoutDimensions() {
   const bounds = mainWindow.getBounds();
   const totalOffset = (BORDER_WIDTH + PADDING_WIDTH) * 2;
   const totalContentWidth = Math.max(0, bounds.width - totalOffset);
   const totalContentHeight = Math.max(0, bounds.height - totalOffset);
   const modePanelHeight = isModePanelCollapsed ? MODE_PANEL_COLLAPSED_HEIGHT : MODE_PANEL_HEIGHT;
-  const browserContainerHeight = Math.max(0, totalContentHeight - APP_HEADBAR_HEIGHT - modePanelHeight);
-  const adjustableHeight = Math.max(0, browserContainerHeight - PANEL_DIVIDER_WIDTH);
+  const switchTabsHeight = layoutMode === 'switch' ? SWITCH_VIEW_TABS_HEIGHT : 0;
+  const browserContainerHeight = Math.max(0, totalContentHeight - APP_HEADBAR_HEIGHT - switchTabsHeight - modePanelHeight);
   const contentX = BORDER_WIDTH + PADDING_WIDTH;
-  const contentY = BORDER_WIDTH + PADDING_WIDTH + APP_HEADBAR_HEIGHT;
+  const contentY = BORDER_WIDTH + PADDING_WIDTH + APP_HEADBAR_HEIGHT + switchTabsHeight;
 
+  if (browserContainerHeight <= 0 || totalContentWidth <= 0) {
+    return {
+      transcriptPanelHeight: 0,
+      transcriptPanelWidth: 0,
+      browserPanelHeight: 0,
+      browserPanelWidth: 0,
+      browserViewX: -9999,
+      browserViewY: -9999,
+      browserViewWidth: totalContentWidth,
+      browserViewHeight: 0
+    };
+  }
+
+  if (layoutMode === 'switch') {
+    const browserViewHeight = Math.max(0, browserContainerHeight - TAB_BAR_HEIGHT - URL_BAR_HEIGHT);
+
+    return {
+      transcriptPanelHeight: browserContainerHeight,
+      transcriptPanelWidth: totalContentWidth,
+      browserPanelHeight: browserContainerHeight,
+      browserPanelWidth: totalContentWidth,
+      browserViewX: switchActiveView === 'webview' ? contentX : -9999,
+      browserViewY: switchActiveView === 'webview' ? contentY + TAB_BAR_HEIGHT + URL_BAR_HEIGHT : -9999,
+      browserViewWidth: switchActiveView === 'webview' ? totalContentWidth : 0,
+      browserViewHeight: switchActiveView === 'webview' ? browserViewHeight : 0
+    };
+  }
+
+  if (layoutMode === 'horizontal') {
+    const adjustableWidth = Math.max(0, totalContentWidth - PANEL_DIVIDER_WIDTH);
+    if (adjustableWidth <= 0) {
+      return {
+        transcriptPanelHeight: browserContainerHeight,
+        transcriptPanelWidth: 0,
+        browserPanelHeight: browserContainerHeight,
+        browserPanelWidth: 0,
+        browserViewX: -9999,
+        browserViewY: -9999,
+        browserViewWidth: 0,
+        browserViewHeight: 0
+      };
+    }
+
+    let transcriptPanelWidth = Math.min(TRANSCRIPT_PANEL_COLLAPSED_HEIGHT, adjustableWidth);
+
+    if (!isTranscriptPanelCollapsed) {
+      let minTranscriptWidth = MIN_TRANSCRIPT_PANEL_WIDTH;
+      let minBrowserPanelWidth = MIN_BROWSER_PANEL_WIDTH;
+
+      if (adjustableWidth < (minTranscriptWidth + minBrowserPanelWidth)) {
+        const fallbackWidth = Math.floor(adjustableWidth / 2);
+        minTranscriptWidth = Math.min(minTranscriptWidth, fallbackWidth);
+        minBrowserPanelWidth = Math.min(minBrowserPanelWidth, Math.max(0, adjustableWidth - minTranscriptWidth));
+      }
+
+      const maxTranscriptWidth = Math.max(minTranscriptWidth, adjustableWidth - minBrowserPanelWidth);
+      const normalizedRatio = Number.isFinite(horizontalTranscriptPanelRatio)
+        ? horizontalTranscriptPanelRatio
+        : DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
+      const desiredTranscriptWidth = adjustableWidth * normalizedRatio;
+      transcriptPanelWidth = Math.round(Math.min(
+        maxTranscriptWidth,
+        Math.max(minTranscriptWidth, desiredTranscriptWidth)
+      ));
+      horizontalTranscriptPanelRatio = transcriptPanelWidth / adjustableWidth;
+    }
+
+    const browserPanelWidth = Math.max(0, adjustableWidth - transcriptPanelWidth);
+    const browserViewHeight = Math.max(0, browserContainerHeight - TAB_BAR_HEIGHT - URL_BAR_HEIGHT);
+
+    return {
+      transcriptPanelHeight: browserContainerHeight,
+      transcriptPanelWidth,
+      browserPanelHeight: browserContainerHeight,
+      browserPanelWidth,
+      browserViewX: contentX + transcriptPanelWidth + PANEL_DIVIDER_WIDTH,
+      browserViewY: contentY + TAB_BAR_HEIGHT + URL_BAR_HEIGHT,
+      browserViewWidth: browserPanelWidth,
+      browserViewHeight
+    };
+  }
+
+  const adjustableHeight = Math.max(0, browserContainerHeight - PANEL_DIVIDER_WIDTH);
   if (adjustableHeight <= 0) {
     return {
       transcriptPanelHeight: 0,
+      transcriptPanelWidth: totalContentWidth,
       browserPanelHeight: 0,
-      browserViewX: contentX,
-      browserViewY: contentY + PANEL_DIVIDER_WIDTH + TAB_BAR_HEIGHT + URL_BAR_HEIGHT,
+      browserPanelWidth: totalContentWidth,
+      browserViewX: -9999,
+      browserViewY: -9999,
       browserViewWidth: totalContentWidth,
       browserViewHeight: 0
     };
@@ -1058,15 +1364,15 @@ function getLayoutDimensions() {
     }
 
     const maxTranscriptHeight = Math.max(minTranscriptHeight, adjustableHeight - minBrowserPanelHeight);
-    const normalizedRatio = Number.isFinite(transcriptPanelRatio)
-      ? transcriptPanelRatio
-      : DEFAULT_TRANSCRIPT_PANEL_RATIO;
+    const normalizedRatio = Number.isFinite(verticalTranscriptPanelRatio)
+      ? verticalTranscriptPanelRatio
+      : DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO;
     const desiredTranscriptHeight = adjustableHeight * normalizedRatio;
     transcriptPanelHeight = Math.round(Math.min(
       maxTranscriptHeight,
       Math.max(minTranscriptHeight, desiredTranscriptHeight)
     ));
-    transcriptPanelRatio = transcriptPanelHeight / adjustableHeight;
+    verticalTranscriptPanelRatio = transcriptPanelHeight / adjustableHeight;
   }
 
   const browserPanelHeight = Math.max(0, adjustableHeight - transcriptPanelHeight);
@@ -1075,7 +1381,9 @@ function getLayoutDimensions() {
 
   return {
     transcriptPanelHeight,
+    transcriptPanelWidth: totalContentWidth,
     browserPanelHeight,
+    browserPanelWidth: totalContentWidth,
     browserViewX: contentX,
     browserViewY,
     browserViewWidth: totalContentWidth,
@@ -1189,7 +1497,8 @@ function createNewTab(url = 'about:blank', options = {}) {
   if (!shouldDeferLoad) {
     tabView.webContents.loadURL(requestedUrl);
   }
-  
+  applyWebThemeToTab(tabId);
+
   setupTabListeners(tabId, tabView);
   
   mainWindow.webContents.send('tab-created', {
@@ -1224,6 +1533,7 @@ function setupTabListeners(tabId, tabView) {
   webContents.on('did-finish-load', () => {
     const tab = tabs.get(tabId);
     if (tab) {
+      applyWebThemeToTab(tabId);
       const url = webContents.getURL();
       const title = webContents.getTitle();
       tab.url = url;
@@ -1321,6 +1631,10 @@ function setupTabListeners(tabId, tabView) {
       }
       return;
     }
+  });
+
+  webContents.on('dom-ready', () => {
+    applyWebThemeToTab(tabId);
   });
   
   // Handle new-window event (legacy, but still needed for some cases)
@@ -3174,6 +3488,8 @@ ipcMain.on('screen-capture-overlay-cancel', (event) => {
 app.whenReady().then(() => {
   loadPromptModeState();
   loadGlobalHotkeyState();
+  loadAppPreferences();
+  applyNativeTheme();
   createWindow();
   
   mainWindow.once('ready-to-show', () => {
@@ -3277,12 +3593,18 @@ ipcMain.handle('reload', () => {
 });
 
 ipcMain.handle('set-panel-split-ratio', (event, ratio) => {
-  if (Number.isFinite(ratio)) {
-    transcriptPanelRatio = ratio;
+  if (layoutMode !== 'switch' && Number.isFinite(ratio)) {
+    if (layoutMode === 'horizontal') {
+      horizontalTranscriptPanelRatio = normalizeSplitRatio(ratio, DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO);
+    } else {
+      verticalTranscriptPanelRatio = normalizeSplitRatio(ratio, DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO);
+    }
+    persistAppPreferencesSync();
+    broadcastAppPreferences();
     resizeTabs();
   }
 
-  return transcriptPanelRatio;
+  return layoutMode === 'horizontal' ? horizontalTranscriptPanelRatio : verticalTranscriptPanelRatio;
 });
 
 ipcMain.handle('set-transcript-panel-collapsed', (event, collapsed) => {
@@ -3295,6 +3617,34 @@ ipcMain.handle('set-mode-panel-collapsed', (event, collapsed) => {
   isModePanelCollapsed = Boolean(collapsed);
   resizeTabs();
   return isModePanelCollapsed;
+});
+
+ipcMain.handle('get-app-preferences', () => {
+  return getAppPreferenceStateSnapshot();
+});
+
+ipcMain.handle('set-app-theme', (event, theme) => {
+  return setAppTheme(theme);
+});
+
+ipcMain.handle('toggle-app-theme', () => {
+  return toggleAppTheme();
+});
+
+ipcMain.handle('set-layout-mode', (event, nextLayoutMode) => {
+  return setLayoutMode(nextLayoutMode);
+});
+
+ipcMain.handle('cycle-layout-mode', () => {
+  return cycleLayoutMode();
+});
+
+ipcMain.handle('set-switch-active-view', (event, nextView) => {
+  return setSwitchActiveView(nextView);
+});
+
+ipcMain.handle('toggle-switch-active-view', () => {
+  return toggleSwitchActiveView();
 });
 
 ipcMain.handle('add-prompt-mode', () => {
@@ -3403,11 +3753,16 @@ ipcMain.handle('get-active-tab', () => {
 });
 
 ipcMain.handle('get-tabs', () => {
+  const currentPanelSplitRatio = layoutMode === 'horizontal'
+    ? horizontalTranscriptPanelRatio
+    : verticalTranscriptPanelRatio;
+
   return {
     activeTabId,
-    panelSplitRatio: transcriptPanelRatio,
+    panelSplitRatio: currentPanelSplitRatio,
     transcriptPanelCollapsed: isTranscriptPanelCollapsed,
     modePanelCollapsed: isModePanelCollapsed,
+    ...getAppPreferenceStateSnapshot(),
     ...getPromptModeStateSnapshot(),
     tabs: Array.from(tabs.values()).map((tab) => ({
       id: tab.id,

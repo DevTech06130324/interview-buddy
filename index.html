@@ -13,6 +13,41 @@
         <div class="app-title">Interview assistant</div>
         <div class="app-headbar-actions">
           <button
+            class="app-theme-btn"
+            id="toggleThemeBtn"
+            type="button"
+            title="Switch to light theme"
+            aria-label="Switch to light theme"
+          >
+            <svg class="app-headbar-icon app-theme-icon-dark" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v2"></path>
+              <path d="M12 19v2"></path>
+              <path d="M4.22 4.22l1.42 1.42"></path>
+              <path d="M18.36 18.36l1.42 1.42"></path>
+              <path d="M3 12h2"></path>
+              <path d="M19 12h2"></path>
+              <path d="M4.22 19.78l1.42-1.42"></path>
+              <path d="M18.36 5.64l1.42-1.42"></path>
+              <circle cx="12" cy="12" r="4"></circle>
+            </svg>
+            <svg class="app-headbar-icon app-theme-icon-light" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8Z"></path>
+            </svg>
+          </button>
+          <button
+            class="app-layout-btn"
+            id="cycleLayoutBtn"
+            type="button"
+            title="Switch layout"
+            aria-label="Switch layout"
+          >
+            <svg class="app-headbar-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="5" width="16" height="14" rx="1.5"></rect>
+              <path d="M4 11h16"></path>
+              <path d="M12 11v8"></path>
+            </svg>
+          </button>
+          <button
             class="app-settings-btn"
             id="openHotkeySettingsBtn"
             type="button"
@@ -38,6 +73,26 @@
             </svg>
           </button>
         </div>
+      </div>
+      <div class="switch-view-tabs" id="switchViewTabs" role="tablist" aria-label="Switch active view">
+        <button
+          class="switch-view-tab is-active"
+          id="switchTranscriptViewBtn"
+          type="button"
+          role="tab"
+          aria-selected="true"
+        >
+          Transcript
+        </button>
+        <button
+          class="switch-view-tab"
+          id="switchWebviewViewBtn"
+          type="button"
+          role="tab"
+          aria-selected="false"
+        >
+          Webview
+        </button>
       </div>
       <div class="browser-container">
         <div class="left-panel is-collapsed">
