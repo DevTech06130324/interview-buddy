@@ -2835,8 +2835,10 @@ translationManager.on('updated', (payload) => {
 if (captionSync) {
   // Handle caption updates from caption sync service
   captionSync.on('captionUpdate', (data) => {
-    latestTranscriptText = typeof data?.fullText === 'string' ? data.fullText : '';
-    sendCaptionUpdate(translationManager.update(latestTranscriptText));
+    const liveCaptionText = typeof data?.fullText === 'string' ? data.fullText : '';
+    const payload = translationManager.update(liveCaptionText);
+    latestTranscriptText = payload.fullText;
+    sendCaptionUpdate(payload);
   });
 
   captionSync.on('error', (error) => {

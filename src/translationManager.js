@@ -18,11 +18,6 @@ function getByteLength(text) {
   return Buffer.byteLength(String(text || ''), 'utf8');
 }
 
-function isFinalSegment(text) {
-  const trimmed = String(text || '').trim();
-  return Boolean(trimmed && EOS_CHARS.has(trimmed[trimmed.length - 1]));
-}
-
 function parseCaptionSegments(fullText) {
   const text = String(fullText || '')
     .replace(/\r\n?/g, '\n')
@@ -60,6 +55,30 @@ function parseCaptionSegments(fullText) {
   }
 
   return segments;
+}
+
+function getMaxSegmentOverlap(committedSegments, currentSegments) {
+  const maxOverlap = Math.min(committedSegments.length, currentSegments.length);
+
+  for (let overlapSize = maxOverlap; overlapSize > 0; overlapSize -= 1) {
+    let matches = true;
+
+    for (let index = 0; index < overlapSize; index += 1) {
+      const committedText = committedSegments[committedSegments.length - overlapSize + index];
+      const currentText = currentSegments[index];
+
+      if (committedText !== currentText) {
+        matches = false;
+        break;
+      }
+    }
+
+    if (matches) {
+      return overlapSize;
+    }
+  }
+
+  return 0;
 }
 
 function extractGoogleTranslation(responseBody) {
@@ -100,14 +119,15 @@ class TranslationManager extends EventEmitter {
   constructor() {
     super();
     this.entries = [];
-    this.fullText = '';
+    this.liveCaptionText = '';
     this.sessionGeneration = 0;
+    this.entryCounter = 0;
     this.partialIdleTimer = null;
   }
 
   getPayload() {
     return {
-      fullText: this.fullText,
+      fullText: this.getSessionTranscriptText(),
       entries: this.entries.map((entry) => ({
         id: entry.id,
         sourceText: entry.sourceText,
@@ -120,7 +140,8 @@ class TranslationManager extends EventEmitter {
 
   reset(fullText = '') {
     this.sessionGeneration += 1;
-    this.fullText = String(fullText || '');
+    this.liveCaptionText = String(fullText || '');
+    this.entryCounter = 0;
     this.clearPartialIdleTimer();
 
     for (const entry of this.entries) {
@@ -132,49 +153,61 @@ class TranslationManager extends EventEmitter {
   }
 
   update(fullText) {
-    this.fullText = String(fullText || '');
-    const segments = parseCaptionSegments(this.fullText);
+    this.liveCaptionText = String(fullText || '');
+    const segments = parseCaptionSegments(this.liveCaptionText);
     this.reconcileEntries(segments);
     this.queueTranslations();
     return this.getPayload();
   }
 
+  getSessionTranscriptText() {
+    return this.entries.map((entry) => entry.sourceText).join('\n');
+  }
+
+  createEntry(segment, previousPartial = null) {
+    return {
+      id: `caption-${this.sessionGeneration}-${this.entryCounter++}`,
+      sourceText: segment.sourceText,
+      translatedText: previousPartial?.translatedText || '',
+      status: 'pending',
+      isFinal: segment.isFinal,
+      version: (previousPartial?.version || 0) + 1,
+      lastQueuedText: '',
+      changeCount: (previousPartial?.changeCount || 0) + 1,
+      controller: null
+    };
+  }
+
   reconcileEntries(segments) {
-    const nextEntries = [];
+    const previousPartial = this.entries.length > 0 && !this.entries[this.entries.length - 1].isFinal
+      ? this.entries.pop()
+      : null;
 
-    for (let index = 0; index < segments.length; index += 1) {
-      const segment = segments[index];
-      const existingEntry = this.entries[index];
-      const id = existingEntry?.id || `caption-${this.sessionGeneration}-${index}`;
+    const finalSegments = segments.filter((segment) => segment.isFinal);
+    const currentPartial = segments.length > 0 && !segments[segments.length - 1].isFinal
+      ? segments[segments.length - 1]
+      : null;
+    const committedFinalTexts = this.entries.map((entry) => entry.sourceText);
+    const currentFinalTexts = finalSegments.map((segment) => segment.sourceText);
+    const overlapSize = getMaxSegmentOverlap(committedFinalTexts, currentFinalTexts);
 
-      if (existingEntry && existingEntry.sourceText === segment.sourceText) {
-        existingEntry.isFinal = segment.isFinal;
-        nextEntries.push(existingEntry);
-        continue;
-      }
-
-      if (existingEntry) {
-        this.abortEntryTranslation(existingEntry);
-      }
-
-      nextEntries.push({
-        id,
-        sourceText: segment.sourceText,
-        translatedText: existingEntry?.translatedText || '',
-        status: 'pending',
-        isFinal: segment.isFinal,
-        version: (existingEntry?.version || 0) + 1,
-        lastQueuedText: '',
-        changeCount: (existingEntry?.changeCount || 0) + 1,
-        controller: null
-      });
+    for (const segment of finalSegments.slice(overlapSize)) {
+      this.entries.push(this.createEntry(segment));
     }
 
-    for (let index = segments.length; index < this.entries.length; index += 1) {
-      this.abortEntryTranslation(this.entries[index]);
+    if (!currentPartial) {
+      this.abortEntryTranslation(previousPartial);
+      return;
     }
 
-    this.entries = nextEntries;
+    if (previousPartial && previousPartial.sourceText === currentPartial.sourceText) {
+      previousPartial.isFinal = false;
+      this.entries.push(previousPartial);
+      return;
+    }
+
+    this.abortEntryTranslation(previousPartial);
+    this.entries.push(this.createEntry(currentPartial, previousPartial));
   }
 
   queueTranslations() {
