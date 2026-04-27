@@ -2,6 +2,8 @@ const liveCaptionsHandler = require('./livecaptions');
 const EventEmitter = require('events');
 const { logTranscriptEvent } = require('./transcriptLogger');
 
+const CONTROL_CHARS_EXCEPT_WHITESPACE_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+
 class CaptionSyncService extends EventEmitter {
     constructor() {
         super();
@@ -188,6 +190,9 @@ class CaptionSyncService extends EventEmitter {
 
     preprocessText(text) {
         return String(text || '')
+            // Native UIA strings may include a C-style NUL terminator; never let
+            // control characters become transcript content.
+            .replace(CONTROL_CHARS_EXCEPT_WHITESPACE_PATTERN, '')
             // Remove acronym formatting (e.g., "A.I." -> "AI")
             .replace(/([A-Z])\.([A-Z])\./g, '$1$2')
             .replace(/([A-Z])\.([A-Z])/g, '$1 $2')

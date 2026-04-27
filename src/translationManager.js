@@ -10,9 +10,14 @@ const PARTIAL_CHANGE_THRESHOLD = 3;
 const PARTIAL_IDLE_MS = 700;
 const RECONCILE_MIN_LOOKBACK = 12;
 const RECONCILE_EXTRA_LOOKBACK = 4;
+const CONTROL_CHARS_EXCEPT_WHITESPACE_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+
+function sanitizeCaptionText(text) {
+  return String(text || '').replace(CONTROL_CHARS_EXCEPT_WHITESPACE_PATTERN, '');
+}
 
 function normalizeSegmentText(text) {
-  return String(text || '')
+  return sanitizeCaptionText(text)
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -22,7 +27,7 @@ function getByteLength(text) {
 }
 
 function parseCaptionSegments(fullText) {
-  const text = String(fullText || '')
+  const text = sanitizeCaptionText(fullText)
     .replace(/\r\n?/g, '\n')
     .trim();
 
@@ -206,14 +211,16 @@ class TranslationManager extends EventEmitter {
 
   reset(fullText = '') {
     const entriesBefore = getEntrySnapshots(this.entries);
+    const requestedFullText = String(fullText || '');
     this.sessionGeneration += 1;
-    this.liveCaptionText = String(fullText || '');
+    this.liveCaptionText = sanitizeCaptionText(requestedFullText);
     this.entryCounter = 0;
     this.clearPartialIdleTimer();
 
     logTranscriptEvent('translation-manager-reset-started', {
       sessionGeneration: this.sessionGeneration,
-      requestedFullText: this.liveCaptionText,
+      requestedFullText,
+      sanitizedFullText: this.liveCaptionText,
       entriesBefore
     });
 
@@ -230,10 +237,12 @@ class TranslationManager extends EventEmitter {
   }
 
   update(fullText) {
-    this.liveCaptionText = String(fullText || '');
+    const rawLiveCaptionText = String(fullText || '');
+    this.liveCaptionText = sanitizeCaptionText(rawLiveCaptionText);
     const segments = parseCaptionSegments(this.liveCaptionText);
     logTranscriptEvent('translation-manager-update-started', {
       sessionGeneration: this.sessionGeneration,
+      rawLiveCaptionText,
       liveCaptionText: this.liveCaptionText,
       parsedSegments: getSegmentSnapshots(segments),
       entriesBefore: getEntrySnapshots(this.entries),
@@ -274,12 +283,124 @@ class TranslationManager extends EventEmitter {
     entry.status = 'pending';
     entry.version += 1;
     entry.lastQueuedText = '';
-    entry.changeCount = 0;
+    entry.changeCount = segment.isFinal ? 0 : (entry.changeCount || 0) + 1;
   }
 
   getReconcileSearchStart(segmentCount) {
     const lookback = Math.max(RECONCILE_MIN_LOOKBACK, segmentCount + RECONCILE_EXTRA_LOOKBACK);
     return Math.max(0, this.entries.length - lookback);
+  }
+
+  getSegmentEntryAlignmentScore(entry, segment, segmentIndex, segmentCount) {
+    if (!entry || !segment) {
+      return 0;
+    }
+
+    if (entry.sourceText === segment.sourceText) {
+      return 8;
+    }
+
+    const entryText = getRevisionComparableText(entry.sourceText);
+    const segmentText = getRevisionComparableText(segment.sourceText);
+    if (entryText && segmentText && entryText === segmentText) {
+      return 6;
+    }
+
+    const isFirstSegment = segmentIndex === 0;
+    const isLastSegment = segmentIndex === segmentCount - 1;
+    if (isFirstSegment && isLikelySplitRevision(entry.sourceText, segment.sourceText, segmentCount > 1)) {
+      return 4;
+    }
+
+    if (isLastSegment && isLikelyRevision(entry.sourceText, segment.sourceText)) {
+      return 3;
+    }
+
+    return 0;
+  }
+
+  findBestReconcileSearchStart(segments) {
+    const fallbackStartIndex = this.getReconcileSearchStart(segments.length);
+    if (segments.length < 2 || this.entries.length === 0) {
+      return fallbackStartIndex;
+    }
+
+    let bestMatch = null;
+
+    for (let entryStartIndex = 0; entryStartIndex < this.entries.length; entryStartIndex += 1) {
+      let score = 0;
+      let matchedCount = 0;
+
+      for (
+        let segmentIndex = 0;
+        segmentIndex < segments.length && entryStartIndex + segmentIndex < this.entries.length;
+        segmentIndex += 1
+      ) {
+        const alignmentScore = this.getSegmentEntryAlignmentScore(
+          this.entries[entryStartIndex + segmentIndex],
+          segments[segmentIndex],
+          segmentIndex,
+          segments.length
+        );
+
+        if (alignmentScore === 0) {
+          break;
+        }
+
+        score += alignmentScore;
+        matchedCount += 1;
+      }
+
+      if (matchedCount === 0) {
+        continue;
+      }
+
+      const candidate = {
+        index: entryStartIndex,
+        score,
+        matchedCount
+      };
+
+      if (
+        !bestMatch
+        || candidate.score > bestMatch.score
+        || (
+          candidate.score === bestMatch.score
+          && candidate.matchedCount > bestMatch.matchedCount
+        )
+        || (
+          candidate.score === bestMatch.score
+          && candidate.matchedCount === bestMatch.matchedCount
+          && candidate.index > bestMatch.index
+        )
+      ) {
+        bestMatch = candidate;
+      }
+    }
+
+    if (!bestMatch || bestMatch.score < 8) {
+      logTranscriptEvent('translation-reconcile-alignment', {
+        sessionGeneration: this.sessionGeneration,
+        selectedStartIndex: fallbackStartIndex,
+        fallbackStartIndex,
+        reason: bestMatch ? 'low-confidence' : 'no-match',
+        bestMatch,
+        segmentCount: segments.length,
+        entryCount: this.entries.length
+      });
+      return fallbackStartIndex;
+    }
+
+    logTranscriptEvent('translation-reconcile-alignment', {
+      sessionGeneration: this.sessionGeneration,
+      selectedStartIndex: bestMatch.index,
+      fallbackStartIndex,
+      reason: 'anchored-window',
+      bestMatch,
+      segmentCount: segments.length,
+      entryCount: this.entries.length
+    });
+    return bestMatch.index;
   }
 
   findMatchingEntry(segment, startIndex, hasFollowingSegment) {
@@ -385,7 +506,8 @@ class TranslationManager extends EventEmitter {
       ? this.entries[this.entries.length - 1]
       : null;
     const touchedEntries = new Set();
-    let nextStartIndex = this.getReconcileSearchStart(segments.length);
+    let nextStartIndex = this.findBestReconcileSearchStart(segments);
+    const windowStartIndex = nextStartIndex;
     let previousSegmentEntry = null;
 
     logTranscriptEvent('translation-reconcile-started', {
@@ -421,6 +543,27 @@ class TranslationManager extends EventEmitter {
         action: 'remove-untouched-partial',
         previousPartial: getEntrySnapshot(previousPartial)
       });
+    }
+
+    if (segments.length > 0) {
+      const removedEntries = [];
+      this.entries = this.entries.filter((entry, index) => {
+        const shouldKeep = index < windowStartIndex || touchedEntries.has(entry);
+        if (!shouldKeep) {
+          this.abortEntryTranslation(entry);
+          removedEntries.push(getEntrySnapshot(entry, index));
+        }
+        return shouldKeep;
+      });
+
+      if (removedEntries.length > 0) {
+        logTranscriptEvent('translation-reconcile-decision', {
+          sessionGeneration: this.sessionGeneration,
+          action: 'remove-stale-window-entries',
+          windowStartIndex,
+          removedEntries
+        });
+      }
     }
 
     logTranscriptEvent('translation-reconcile-completed', {

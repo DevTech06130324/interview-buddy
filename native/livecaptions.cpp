@@ -160,8 +160,15 @@ Napi::Value GetCaptions(const Napi::CallbackInfo& info) {
 
     // Convert wstring to UTF-8 string
     int size_needed = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, NULL, 0, NULL, NULL);
+    if (size_needed <= 0) {
+        return Napi::String::New(env, "");
+    }
+
     std::string utf8_text(size_needed, 0);
     WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, &utf8_text[0], size_needed, NULL, NULL);
+    if (!utf8_text.empty() && utf8_text.back() == '\0') {
+        utf8_text.pop_back();
+    }
 
     return Napi::String::New(env, utf8_text);
 }
