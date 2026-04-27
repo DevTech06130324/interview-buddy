@@ -182,31 +182,11 @@ body {
   cursor: text;
 }
 
-.transcript-grid-header,
 .transcript-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
-.transcript-grid-header {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: #242424;
-  border-bottom: 1px solid #3a3a3a;
-  color: #cfcfcf;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.transcript-grid-header > div {
-  min-width: 0;
-  padding: 8px 12px;
-}
-
-.transcript-grid-header > div:first-child,
 .transcript-cell-source {
   border-right: 1px solid #333333;
 }
