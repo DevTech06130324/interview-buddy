@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Notepad++</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="window-wrapper">
+    <div class="app-layout">
+      <div class="browser-container">
+        <div class="left-panel">
+          <div class="transcript-panel">
+            <div class="transcript-header">
+              <span>Transcript</span>
+              <div class="transcript-actions">
+                <button
+                  class="transcript-action-btn transcript-icon-btn"
+                  id="toggleLiveCaptionsBtn"
+                  type="button"
+                  title="Hide Live Captions window"
+                  aria-label="Hide Live Captions window"
+                >
+                  <svg class="transcript-icon transcript-icon-visible" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M2 12s3.75-6 10-6 10 6 10 6-3.75 6-10 6-10-6-10-6Z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                  <svg class="transcript-icon transcript-icon-hidden" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 3l18 18"></path>
+                    <path d="M10.6 6.1A11.3 11.3 0 0 1 12 6c6.25 0 10 6 10 6a18.4 18.4 0 0 1-4.09 4.53"></path>
+                    <path d="M6.53 6.52A18.16 18.16 0 0 0 2 12s3.75 6 10 6c1.64 0 3.11-.41 4.41-1.02"></path>
+                    <path d="M9.88 9.88A3 3 0 0 0 12 15a2.98 2.98 0 0 0 2.12-.88"></path>
+                  </svg>
+                </button>
+                <button
+                  class="transcript-action-btn transcript-icon-btn"
+                  id="clearTranscriptBtn"
+                  type="button"
+                  title="Clear transcript and restart Live Captions"
+                  aria-label="Clear transcript and restart Live Captions"
+                >
+                  <svg class="transcript-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M19 8a7 7 0 0 0-12-2"></path>
+                    <path d="M7 4v4h4"></path>
+                    <path d="M5 16a7 7 0 0 0 12 2"></path>
+                    <path d="M17 20v-4h-4"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="transcript-content" id="transcript"></div>
+          </div>
+        </div>
+        <div class="panel-divider" id="panelDivider" role="separator" aria-orientation="vertical" aria-label="Resize panels"></div>
+      
+        <div class="right-panel">
+        <div class="tab-bar" id="tabBar">
+          <button class="new-tab-btn" id="newTabBtn" title="New Tab (Ctrl+T)">+</button>
+        </div>
+      
+        <div class="url-bar-container">
+          <div class="nav-buttons">
+            <button class="nav-btn" id="backBtn" title="Back (Alt+Left)" disabled>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M10 12L6 8l4-4v8z"/>
+              </svg>
+            </button>
+            <button class="nav-btn" id="forwardBtn" title="Forward (Alt+Right)" disabled>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M6 12l4-4-4-4v8z"/>
+              </svg>
+            </button>
+            <button class="nav-btn" id="reloadBtn" title="Reload (Ctrl+R)">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M13.65 2.35C12.2 0.9 10.2 0 8 0S3.8 0.9 2.35 2.35C0.9 3.8 0 5.8 0 8s0.9 4.2 2.35 5.65C3.8 15.1 5.8 16 8 16s4.2-0.9 5.65-2.35C15.1 12.2 16 10.2 16 8s-0.9-4.2-2.35-5.65zM8 14c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/>
+                <path d="M8 4v4l3 2"/>
+              </svg>
+            </button>
+          </div>
+        
+          <div class="url-input-wrapper">
+            <input 
+              type="text" 
+              class="url-input" 
+              id="urlInput" 
+              placeholder="Enter URL or search"
+              spellcheck="false"
+            />
+            <div class="loading-indicator" id="loadingIndicator" style="display: none;"></div>
+          </div>
+        </div>
+      
+        <div class="content-area" id="contentArea">
+          <!-- The main process positions the active BrowserView over this area. -->
+        </div>
+        </div>
+      </div>
+      <div class="mode-panel is-collapsed">
+        <div class="mode-header">
+          <div class="mode-header-main">
+            <span class="mode-header-title">Mode</span>
+            <div class="mode-header-summary">
+              <div class="mode-dropdown mode-dropdown-inline" id="collapsedModeDropdown">
+                <button
+                  class="mode-dropdown-toggle mode-dropdown-toggle-inline"
+                  id="collapsedModeDropdownToggle"
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded="false"
+                >
+                  <span id="collapsedModeDropdownLabel">Default</span>
+                  <svg class="mode-dropdown-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6"></path>
+                  </svg>
+                </button>
+                <div class="mode-dropdown-menu" id="collapsedModeDropdownMenu" role="menu" hidden></div>
+              </div>
+              <div class="mode-prompt-preview" id="modePromptPreview" title=""></div>
+            </div>
+          </div>
+          <button
+            class="mode-toggle-btn"
+            id="modeToggleBtn"
+            type="button"
+            title="Expand Mode panel"
+            aria-label="Expand Mode panel"
+            aria-expanded="false"
+          >
+            <svg class="mode-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="mode-content">
+          <div class="mode-layout">
+            <div class="mode-selector-pane">
+              <div class="mode-field-label">Select Mode</div>
+              <div class="mode-dropdown" id="modeDropdown">
+                <button
+                  class="mode-dropdown-toggle"
+                  id="modeDropdownToggle"
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded="false"
+                >
+                  <span id="modeDropdownLabel">Default</span>
+                  <svg class="mode-dropdown-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6"></path>
+                  </svg>
+                </button>
+                <div class="mode-dropdown-menu" id="modeDropdownMenu" role="menu" hidden></div>
+              </div>
+              <label class="mode-field-label mode-hotkey-label" for="modeHotkeyInput">Global Hotkey</label>
+              <input
+                class="mode-hotkey-input"
+                id="modeHotkeyInput"
+                type="text"
+                placeholder="Press shortcut"
+                spellcheck="false"
+                autocomplete="off"
+                readonly
+              />
+            </div>
+            <div class="mode-editor-pane">
+              <label class="mode-field-label" for="modeSuffixInput">Prompt</label>
+              <div class="mode-editor-row">
+                <textarea
+                  class="mode-suffix-input"
+                  id="modeSuffixInput"
+                  placeholder="Enter the prompt that should be appended after the transcript"
+                  spellcheck="false"
+                ></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="renderer.js"></script>
+</body>
+</html>
