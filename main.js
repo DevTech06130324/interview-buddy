@@ -1331,6 +1331,7 @@ function openHotkeySettingsWindow() {
     }
   });
 
+  hotkeySettingsWindow.setContentProtection(true);
   hotkeySettingsWindow.setAlwaysOnTop(true, 'screen-saver');
   hotkeySettingsWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   hotkeySettingsWindow.setMenuBarVisibility(false);
@@ -1504,6 +1505,7 @@ function openModeMenuWindow(anchor) {
     }
   });
 
+  modeMenuWindow.setContentProtection(true);
   modeMenuWindow.setAlwaysOnTop(true, 'screen-saver');
   modeMenuWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   modeMenuWindow.setMenuBarVisibility(false);

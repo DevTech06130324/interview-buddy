@@ -77,6 +77,25 @@ const MODE_SELECTION_DELAY_MS = 320;
 const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 
+function setProtectedTooltip(element, text) {
+  if (!element) {
+    return;
+  }
+
+  if (window.protectedTooltips && typeof window.protectedTooltips.setTooltip === 'function') {
+    window.protectedTooltips.setTooltip(element, text);
+    return;
+  }
+
+  const tooltipText = String(text || '').trim();
+  element.removeAttribute('title');
+  if (tooltipText) {
+    element.setAttribute('data-protected-tooltip', tooltipText);
+  } else {
+    element.removeAttribute('data-protected-tooltip');
+  }
+}
+
 function formatUrl(input) {
   if (!input || input.trim() === '') {
     return 'about:blank';
@@ -330,7 +349,7 @@ function setTranslationVisibility(isVisible) {
 
   if (toggleTranslationBtn) {
     toggleTranslationBtn.classList.toggle('is-hidden-state', !translationsVisible);
-    toggleTranslationBtn.title = translationsVisible ? 'Hide translations' : 'Show translations';
+    setProtectedTooltip(toggleTranslationBtn, translationsVisible ? 'Hide translations' : 'Show translations');
     toggleTranslationBtn.setAttribute(
       'aria-label',
       translationsVisible ? 'Hide translations' : 'Show translations'
@@ -392,7 +411,7 @@ function updateThemeControls() {
     const actionLabel = currentTheme === 'dark'
       ? 'Switch to light theme'
       : 'Switch to dark theme';
-    toggleThemeBtn.title = actionLabel;
+    setProtectedTooltip(toggleThemeBtn, actionLabel);
     toggleThemeBtn.setAttribute('aria-label', actionLabel);
   }
 }
@@ -407,7 +426,7 @@ function updateLayoutControls() {
 
   if (cycleLayoutBtn) {
     const label = `Switch layout (${currentLayoutMode})`;
-    cycleLayoutBtn.title = label;
+    setProtectedTooltip(cycleLayoutBtn, label);
     cycleLayoutBtn.setAttribute('aria-label', label);
   }
 
@@ -651,7 +670,7 @@ function updateTranscriptPanelCollapsed(isCollapsed) {
     ? 'Expand transcript panel'
     : 'Collapse transcript panel';
 
-  toggleTranscriptPanelBtn.title = actionLabel;
+  setProtectedTooltip(toggleTranscriptPanelBtn, actionLabel);
   toggleTranscriptPanelBtn.setAttribute('aria-label', actionLabel);
   toggleTranscriptPanelBtn.setAttribute('aria-expanded', String(!isTranscriptPanelCollapsed));
 
@@ -675,7 +694,7 @@ function updateModePanelCollapsed(isCollapsed) {
     ? 'Expand Mode panel'
     : 'Collapse Mode panel';
 
-  modeToggleBtn.title = actionLabel;
+  setProtectedTooltip(modeToggleBtn, actionLabel);
   modeToggleBtn.setAttribute('aria-label', actionLabel);
   modeToggleBtn.setAttribute('aria-expanded', String(!isModePanelCollapsed));
 }
@@ -1247,7 +1266,7 @@ function populateModeDropdownMenu(menuElement) {
     deleteButton.className = 'mode-dropdown-delete';
     deleteButton.textContent = '\u00D7';
     deleteButton.setAttribute('aria-label', `Delete ${mode.name}`);
-    deleteButton.title = `Delete ${mode.name}`;
+    setProtectedTooltip(deleteButton, `Delete ${mode.name}`);
 
     if (promptModes.length <= 1) {
       deleteButton.disabled = true;
@@ -1392,7 +1411,7 @@ function updatePromptModeState(state, options = {}) {
     const singleLinePrompt = promptPreviewText.replace(/\s+/g, ' ');
     const displayPrompt = singleLinePrompt || 'No prompt';
     modePromptPreview.textContent = displayPrompt;
-    modePromptPreview.title = promptPreviewText || 'No prompt';
+    setProtectedTooltip(modePromptPreview, promptPreviewText || 'No prompt');
   }
 
   renderModeDropdownMenu();
@@ -1449,7 +1468,7 @@ function updateLiveCaptionsToggleButton(isVisible) {
     ? 'Hide Live Captions window'
     : 'Show Live Captions window';
 
-  toggleLiveCaptionsBtn.title = actionLabel;
+  setProtectedTooltip(toggleLiveCaptionsBtn, actionLabel);
   toggleLiveCaptionsBtn.setAttribute('aria-label', actionLabel);
 }
 

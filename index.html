@@ -16,7 +16,7 @@
             class="app-theme-btn"
             id="toggleThemeBtn"
             type="button"
-            title="Switch to light theme"
+            data-protected-tooltip="Switch to light theme"
             aria-label="Switch to light theme"
           >
             <svg class="app-headbar-icon app-theme-icon-dark" viewBox="0 0 24 24" aria-hidden="true">
@@ -38,7 +38,7 @@
             class="app-layout-btn"
             id="cycleLayoutBtn"
             type="button"
-            title="Switch layout"
+            data-protected-tooltip="Switch layout"
             aria-label="Switch layout"
           >
             <svg class="app-headbar-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -51,7 +51,7 @@
             class="app-settings-btn"
             id="openHotkeySettingsBtn"
             type="button"
-            title="Hotkey settings"
+            data-protected-tooltip="Hotkey settings"
             aria-label="Hotkey settings"
             aria-expanded="false"
           >
@@ -64,7 +64,7 @@
             class="app-close-btn"
             id="closeAppBtn"
             type="button"
-            title="Close"
+            data-protected-tooltip="Close"
             aria-label="Close app"
           >
             <svg class="app-headbar-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -104,7 +104,7 @@
                   class="transcript-action-btn transcript-icon-btn"
                   id="toggleLiveCaptionsBtn"
                   type="button"
-                  title="Hide Live Captions window"
+                  data-protected-tooltip="Hide Live Captions window"
                   aria-label="Hide Live Captions window"
                 >
                   <svg class="transcript-icon transcript-icon-visible" viewBox="0 0 24 24" aria-hidden="true">
@@ -122,7 +122,7 @@
                   class="transcript-action-btn transcript-icon-btn is-hidden-state"
                   id="toggleTranslationBtn"
                   type="button"
-                  title="Show translations"
+                  data-protected-tooltip="Show translations"
                   aria-label="Show translations"
                   aria-pressed="true"
                 >
@@ -142,7 +142,7 @@
                   class="transcript-action-btn transcript-icon-btn"
                   id="clearTranscriptBtn"
                   type="button"
-                  title="Clear transcript and restart Live Captions"
+                  data-protected-tooltip="Clear transcript and restart Live Captions"
                   aria-label="Clear transcript and restart Live Captions"
                 >
                   <svg class="transcript-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -156,7 +156,7 @@
                   class="transcript-action-btn transcript-icon-btn"
                   id="toggleTranscriptPanelBtn"
                   type="button"
-                  title="Expand transcript panel"
+                  data-protected-tooltip="Expand transcript panel"
                   aria-label="Expand transcript panel"
                   aria-expanded="false"
                 >
@@ -175,22 +175,22 @@
       
         <div class="right-panel">
         <div class="tab-bar" id="tabBar">
-          <button class="new-tab-btn" id="newTabBtn" title="New Tab (Ctrl+T)">+</button>
+          <button class="new-tab-btn" id="newTabBtn" data-protected-tooltip="New Tab (Ctrl+T)">+</button>
         </div>
       
         <div class="url-bar-container">
           <div class="nav-buttons">
-            <button class="nav-btn" id="backBtn" title="Back (Alt+Left)" disabled>
+            <button class="nav-btn" id="backBtn" data-protected-tooltip="Back (Alt+Left)" disabled>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M10 12L6 8l4-4v8z"/>
               </svg>
             </button>
-            <button class="nav-btn" id="forwardBtn" title="Forward (Alt+Right)" disabled>
+            <button class="nav-btn" id="forwardBtn" data-protected-tooltip="Forward (Alt+Right)" disabled>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M6 12l4-4-4-4v8z"/>
               </svg>
             </button>
-            <button class="nav-btn" id="reloadBtn" title="Reload (Ctrl+R)">
+            <button class="nav-btn" id="reloadBtn" data-protected-tooltip="Reload (Ctrl+R)">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M13.65 2.35C12.2 0.9 10.2 0 8 0S3.8 0.9 2.35 2.35C0.9 3.8 0 5.8 0 8s0.9 4.2 2.35 5.65C3.8 15.1 5.8 16 8 16s4.2-0.9 5.65-2.35C15.1 12.2 16 10.2 16 8s-0.9-4.2-2.35-5.65zM8 14c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/>
                 <path d="M8 4v4l3 2"/>
@@ -235,14 +235,14 @@
                 </button>
                 <div class="mode-dropdown-menu" id="collapsedModeDropdownMenu" role="menu" hidden></div>
               </div>
-              <div class="mode-prompt-preview" id="modePromptPreview" title=""></div>
+              <div class="mode-prompt-preview" id="modePromptPreview"></div>
             </div>
           </div>
           <button
             class="mode-toggle-btn"
             id="modeToggleBtn"
             type="button"
-            title="Expand Mode panel"
+            data-protected-tooltip="Expand Mode panel"
             aria-label="Expand Mode panel"
             aria-expanded="false"
           >
@@ -298,6 +298,7 @@
     </div>
   </div>
   
+  <script src="protected-tooltips.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

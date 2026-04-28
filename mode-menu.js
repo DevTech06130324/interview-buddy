@@ -7,6 +7,25 @@ let selectedPromptModeId = null;
 let editingModeId = null;
 let pendingModeSelectionTimer = null;
 
+function setProtectedTooltip(element, text) {
+  if (!element) {
+    return;
+  }
+
+  if (window.protectedTooltips && typeof window.protectedTooltips.setTooltip === 'function') {
+    window.protectedTooltips.setTooltip(element, text);
+    return;
+  }
+
+  const tooltipText = String(text || '').trim();
+  element.removeAttribute('title');
+  if (tooltipText) {
+    element.setAttribute('data-protected-tooltip', tooltipText);
+  } else {
+    element.removeAttribute('data-protected-tooltip');
+  }
+}
+
 function clearPendingModeSelection() {
   if (pendingModeSelectionTimer !== null) {
     window.clearTimeout(pendingModeSelectionTimer);
@@ -190,7 +209,7 @@ function createModeItem(mode) {
   deleteButton.className = 'mode-menu-delete';
   deleteButton.textContent = '\u00D7';
   deleteButton.setAttribute('aria-label', `Delete ${mode.name}`);
-  deleteButton.title = `Delete ${mode.name}`;
+  setProtectedTooltip(deleteButton, `Delete ${mode.name}`);
   deleteButton.disabled = promptModes.length <= 1;
 
   deleteButton.onclick = async (event) => {
