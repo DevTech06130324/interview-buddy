@@ -50,15 +50,13 @@
   <div id="selection"></div>
 
   <script>
-    const { ipcRenderer } = require('electron');
-
     const selectionEl = document.getElementById('selection');
     const MIN_SIZE = 8;
     let startPoint = null;
     let dragging = false;
 
     function cancelSelection() {
-      ipcRenderer.send('screen-capture-overlay-cancel');
+      window.captureOverlay.cancel();
     }
 
     function normalizeRect(start, end) {
@@ -126,7 +124,7 @@
         return;
       }
 
-      ipcRenderer.send('screen-capture-overlay-select', rect);
+      window.captureOverlay.select(rect);
     });
   </script>
 </body>

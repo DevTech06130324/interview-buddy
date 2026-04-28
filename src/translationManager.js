@@ -5,6 +5,10 @@ const EOS_CHARS = new Set(['.', '?', '!', '\u3002', '\uff1f', '\uff01']);
 const GOOGLE_TRANSLATE_URL = 'https://clients5.google.com/translate_a/t';
 const TARGET_LANGUAGE = 'ko';
 const TRANSLATION_TIMEOUT_MS = 8000;
+const TRANSLATION_MAX_CONCURRENT_REQUESTS = 3;
+const TRANSLATION_MAX_RETRIES = 2;
+const TRANSLATION_RETRY_BASE_DELAY_MS = 500;
+const TRANSLATION_CACHE_MAX_ENTRIES = 300;
 const PARTIAL_MIN_LENGTH = 10;
 const PARTIAL_CHANGE_THRESHOLD = 3;
 const PARTIAL_IDLE_MS = 700;
@@ -159,6 +163,28 @@ function extractGoogleTranslation(responseBody) {
   throw new Error('Google Translate returned an empty translation.');
 }
 
+function createAbortError() {
+  const error = new Error('The operation was aborted.');
+  error.name = 'AbortError';
+  return error;
+}
+
+function isTransientTranslationError(error) {
+  if (!error) {
+    return false;
+  }
+
+  if (error.code === 'TRANSLATION_TIMEOUT' || error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
+    return true;
+  }
+
+  if (typeof error.status === 'number') {
+    return error.status === 408 || error.status === 429 || error.status >= 500;
+  }
+
+  return error.name === 'TypeError';
+}
+
 function getEntrySnapshot(entry, index = null) {
   if (!entry) {
     return null;
@@ -173,6 +199,7 @@ function getEntrySnapshot(entry, index = null) {
     isFinal: entry.isFinal,
     version: entry.version,
     lastQueuedText: entry.lastQueuedText,
+    queuedTranslationText: entry.queuedTranslationText,
     changeCount: entry.changeCount
   };
 }
@@ -205,6 +232,9 @@ class TranslationManager extends EventEmitter {
     this.sessionGeneration = 0;
     this.entryCounter = 0;
     this.partialIdleTimer = null;
+    this.translationCache = new Map();
+    this.translationQueue = [];
+    this.activeTranslationCount = 0;
   }
 
   getPayload() {
@@ -239,6 +269,7 @@ class TranslationManager extends EventEmitter {
       this.abortEntryTranslation(entry);
     }
 
+    this.translationQueue = [];
     this.entries = [];
     logTranscriptEvent('translation-manager-reset-completed', {
       sessionGeneration: this.sessionGeneration,
@@ -250,6 +281,11 @@ class TranslationManager extends EventEmitter {
   update(fullText) {
     const rawLiveCaptionText = String(fullText || '');
     this.liveCaptionText = sanitizeCaptionText(rawLiveCaptionText);
+
+    if (!this.liveCaptionText.trim()) {
+      return this.reset('');
+    }
+
     const segments = parseCaptionSegments(this.liveCaptionText);
     logTranscriptEvent('translation-manager-update-started', {
       sessionGeneration: this.sessionGeneration,
@@ -282,6 +318,7 @@ class TranslationManager extends EventEmitter {
       isFinal: segment.isFinal,
       version: (previousPartial?.version || 0) + 1,
       lastQueuedText: '',
+      queuedTranslationText: '',
       changeCount: (previousPartial?.changeCount || 0) + 1,
       controller: null
     };
@@ -294,6 +331,7 @@ class TranslationManager extends EventEmitter {
     entry.status = 'pending';
     entry.version += 1;
     entry.lastQueuedText = '';
+    entry.queuedTranslationText = '';
     entry.changeCount = segment.isFinal ? 0 : (entry.changeCount || 0) + 1;
   }
 
@@ -633,11 +671,13 @@ class TranslationManager extends EventEmitter {
 
   queueEntryTranslation(entry) {
     const hasActiveRequest = Boolean(entry?.controller && !entry.controller.signal.aborted);
+    const hasQueuedRequest = Boolean(entry?.queuedTranslationText && entry.queuedTranslationText === entry.sourceText);
     const hasUsableTranslation = Boolean(getUsableTranslationText(entry?.translatedText));
     const isSameQueuedText = Boolean(entry && entry.lastQueuedText === entry.sourceText);
     const shouldSkipSameQueuedText = isSameQueuedText
       && (
         hasActiveRequest
+        || hasQueuedRequest
         || hasUsableTranslation
         || entry.status === 'error'
       );
@@ -647,9 +687,26 @@ class TranslationManager extends EventEmitter {
         sessionGeneration: this.sessionGeneration,
         reason: !entry ? 'missing-entry' : (!entry.sourceText ? 'empty-source-text' : 'same-as-last-queued'),
         hasActiveRequest,
+        hasQueuedRequest,
         hasUsableTranslation,
         entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
       });
+      return;
+    }
+
+    const cachedTranslation = this.getCachedTranslation(entry.sourceText);
+    if (cachedTranslation) {
+      this.abortEntryTranslation(entry);
+      entry.translatedText = cachedTranslation;
+      entry.status = 'translated';
+      entry.lastQueuedText = entry.sourceText;
+      entry.queuedTranslationText = '';
+      entry.controller = null;
+      logTranscriptEvent('translation-cache-hit', {
+        sessionGeneration: this.sessionGeneration,
+        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
+      });
+      this.emit('updated', this.getPayload());
       return;
     }
 
@@ -657,16 +714,12 @@ class TranslationManager extends EventEmitter {
 
     entry.status = 'pending';
     entry.lastQueuedText = entry.sourceText;
+    entry.queuedTranslationText = entry.sourceText;
     entry.version += 1;
 
     const entryVersion = entry.version;
     const sessionGeneration = this.sessionGeneration;
     const controller = new AbortController();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, TRANSLATION_TIMEOUT_MS);
 
     entry.controller = controller;
 
@@ -677,68 +730,111 @@ class TranslationManager extends EventEmitter {
       timeoutMs: TRANSLATION_TIMEOUT_MS
     });
 
-    this.translateWithGoogle(entry.sourceText, controller.signal)
-      .then((translatedText) => {
-        if (!this.isCurrentTranslation(entry, entryVersion, sessionGeneration)) {
-          logTranscriptEvent('translation-result-ignored-stale', {
-            sessionGeneration,
-            entryVersion,
-            translatedText,
-            entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
-            currentSessionGeneration: this.sessionGeneration
-          });
-          return;
-        }
+    this.translationQueue.push({
+      entry,
+      entryVersion,
+      sessionGeneration,
+      sourceText: entry.sourceText,
+      controller
+    });
+    this.processTranslationQueue();
+  }
 
-        entry.translatedText = translatedText;
-        entry.status = 'translated';
-        entry.controller = null;
-        logTranscriptEvent('translation-succeeded', {
+  processTranslationQueue() {
+    while (
+      this.activeTranslationCount < TRANSLATION_MAX_CONCURRENT_REQUESTS
+      && this.translationQueue.length > 0
+    ) {
+      const task = this.translationQueue.shift();
+      if (!task || task.controller.signal.aborted) {
+        continue;
+      }
+
+      if (!this.isCurrentTranslation(task.entry, task.entryVersion, task.sessionGeneration)) {
+        logTranscriptEvent('translation-queued-task-ignored-stale', {
+          sessionGeneration: task.sessionGeneration,
+          entryVersion: task.entryVersion,
+          entry: getEntrySnapshot(task.entry, this.entries.indexOf(task.entry)),
+          currentSessionGeneration: this.sessionGeneration
+        });
+        continue;
+      }
+
+      this.activeTranslationCount += 1;
+      void this.runTranslationTask(task)
+        .catch((error) => {
+          console.error('[ERROR] Translation task failed unexpectedly:', error);
+        })
+        .finally(() => {
+          this.activeTranslationCount = Math.max(0, this.activeTranslationCount - 1);
+          this.processTranslationQueue();
+        });
+    }
+  }
+
+  async runTranslationTask(task) {
+    const { entry, entryVersion, sessionGeneration, sourceText, controller } = task;
+
+    try {
+      const translatedText = await this.translateWithGoogle(sourceText, controller.signal);
+      if (!this.isCurrentTranslation(entry, entryVersion, sessionGeneration)) {
+        logTranscriptEvent('translation-result-ignored-stale', {
           sessionGeneration,
           entryVersion,
           translatedText,
-          entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
+          entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
+          currentSessionGeneration: this.sessionGeneration
         });
-        this.emit('updated', this.getPayload());
-      })
-      .catch((error) => {
-        if (!this.isCurrentTranslation(entry, entryVersion, sessionGeneration)) {
-          logTranscriptEvent('translation-error-ignored-stale', {
-            sessionGeneration,
-            entryVersion,
-            error,
-            entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
-            currentSessionGeneration: this.sessionGeneration
-          });
-          return;
-        }
+        return;
+      }
 
-        if (error?.name === 'AbortError' && !timedOut) {
-          logTranscriptEvent('translation-aborted', {
-            sessionGeneration,
-            entryVersion,
-            entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
-          });
-          return;
-        }
-
-        entry.translatedText = timedOut
-          ? '[ERROR] Translation Failed: request timed out (> 8 seconds).'
-          : `[ERROR] Translation Failed: ${error?.message || String(error)}`;
-        entry.status = 'error';
-        entry.controller = null;
-        logTranscriptEvent('translation-failed', {
+      entry.translatedText = translatedText;
+      entry.status = 'translated';
+      entry.controller = null;
+      entry.queuedTranslationText = '';
+      logTranscriptEvent('translation-succeeded', {
+        sessionGeneration,
+        entryVersion,
+        translatedText,
+        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
+      });
+      this.emit('updated', this.getPayload());
+    } catch (error) {
+      if (!this.isCurrentTranslation(entry, entryVersion, sessionGeneration)) {
+        logTranscriptEvent('translation-error-ignored-stale', {
           sessionGeneration,
           entryVersion,
-          timedOut,
           error,
+          entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
+          currentSessionGeneration: this.sessionGeneration
+        });
+        return;
+      }
+
+      if (error?.name === 'AbortError' && controller.signal.aborted) {
+        logTranscriptEvent('translation-aborted', {
+          sessionGeneration,
+          entryVersion,
           entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
         });
-        this.emit('updated', this.getPayload());
-      })
-      .finally(() => {
-        clearTimeout(timeout);
+        return;
+      }
+
+      entry.translatedText = error?.code === 'TRANSLATION_TIMEOUT'
+        ? '[ERROR] Translation Failed: request timed out (> 8 seconds).'
+        : `[ERROR] Translation Failed: ${error?.message || String(error)}`;
+      entry.status = 'error';
+      entry.controller = null;
+      entry.queuedTranslationText = '';
+      logTranscriptEvent('translation-failed', {
+        sessionGeneration,
+        entryVersion,
+        timedOut: error?.code === 'TRANSLATION_TIMEOUT',
+        error,
+        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
       });
+      this.emit('updated', this.getPayload());
+    }
   }
 
   isCurrentTranslation(entry, entryVersion, sessionGeneration) {
@@ -758,6 +854,7 @@ class TranslationManager extends EventEmitter {
 
     if (entry) {
       entry.controller = null;
+      entry.queuedTranslationText = '';
     }
   }
 
@@ -768,27 +865,124 @@ class TranslationManager extends EventEmitter {
     }
   }
 
-  async translateWithGoogle(text, signal) {
-    const errors = [];
-    for (const sourceLanguage of ['auto', 'en']) {
-      try {
-        return await this.fetchGoogleTranslation(text, sourceLanguage, signal);
-      } catch (error) {
-        if (signal?.aborted) {
-          throw error;
-        }
+  getTranslationCacheKey(text) {
+    return normalizeSegmentText(text).toLowerCase();
+  }
 
-        errors.push(`${sourceLanguage}: ${error?.message || String(error)}`);
-        logTranscriptEvent('translation-provider-attempt-failed', {
-          sessionGeneration: this.sessionGeneration,
-          sourceLanguage,
-          text,
-          error
-        });
-      }
+  getCachedTranslation(text) {
+    const key = this.getTranslationCacheKey(text);
+    if (!key || !this.translationCache.has(key)) {
+      return null;
     }
 
-    throw new Error(`Google Translate returned no usable translation. ${errors.join(' | ')}`);
+    const translatedText = this.translationCache.get(key);
+    this.translationCache.delete(key);
+    this.translationCache.set(key, translatedText);
+    return translatedText;
+  }
+
+  setCachedTranslation(text, translatedText) {
+    const key = this.getTranslationCacheKey(text);
+    const translation = getUsableTranslationText(translatedText);
+    if (!key || !translation) {
+      return;
+    }
+
+    if (this.translationCache.has(key)) {
+      this.translationCache.delete(key);
+    }
+
+    this.translationCache.set(key, translation);
+
+    while (this.translationCache.size > TRANSLATION_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.translationCache.keys().next().value;
+      if (!oldestKey) {
+        break;
+      }
+      this.translationCache.delete(oldestKey);
+    }
+  }
+
+  sleepWithAbort(delayMs, signal) {
+    if (signal?.aborted) {
+      return Promise.reject(createAbortError());
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, delayMs);
+
+      const abort = () => {
+        cleanup();
+        reject(createAbortError());
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        signal?.removeEventListener?.('abort', abort);
+      };
+
+      signal?.addEventListener?.('abort', abort, { once: true });
+    });
+  }
+
+  async translateWithGoogle(text, signal) {
+    const cachedTranslation = this.getCachedTranslation(text);
+    if (cachedTranslation) {
+      return cachedTranslation;
+    }
+
+    const errors = [];
+    let hadTimeoutFailure = false;
+    for (let attempt = 0; attempt <= TRANSLATION_MAX_RETRIES; attempt += 1) {
+      let transientFailure = false;
+
+      for (const sourceLanguage of ['auto', 'en']) {
+        try {
+          const translatedText = await this.fetchGoogleTranslation(text, sourceLanguage, signal);
+          this.setCachedTranslation(text, translatedText);
+          return translatedText;
+        } catch (error) {
+          if (signal?.aborted) {
+            throw error;
+          }
+
+          transientFailure = transientFailure || isTransientTranslationError(error);
+          hadTimeoutFailure = hadTimeoutFailure || error?.code === 'TRANSLATION_TIMEOUT';
+          errors.push(`${sourceLanguage}: ${error?.message || String(error)}`);
+          logTranscriptEvent('translation-provider-attempt-failed', {
+            sessionGeneration: this.sessionGeneration,
+            sourceLanguage,
+            attempt,
+            text,
+            transient: isTransientTranslationError(error),
+            error
+          });
+        }
+      }
+
+      if (attempt < TRANSLATION_MAX_RETRIES && transientFailure) {
+        const backoffMs = TRANSLATION_RETRY_BASE_DELAY_MS * (2 ** attempt);
+        logTranscriptEvent('translation-provider-retry-scheduled', {
+          sessionGeneration: this.sessionGeneration,
+          attempt,
+          backoffMs,
+          text,
+        });
+        await this.sleepWithAbort(backoffMs, signal);
+        continue;
+      }
+
+      break;
+    }
+
+    const error = new Error(`Google Translate returned no usable translation. ${errors.join(' | ')}`);
+    if (hadTimeoutFailure) {
+      error.code = 'TRANSLATION_TIMEOUT';
+    }
+    throw error;
   }
 
   async fetchGoogleTranslation(text, sourceLanguage, signal) {
@@ -798,12 +992,45 @@ class TranslationManager extends EventEmitter {
     url.searchParams.set('tl', TARGET_LANGUAGE);
     url.searchParams.set('q', text);
 
-    const response = await fetch(url.toString(), { signal });
-    if (!response.ok) {
-      throw new Error(`HTTP Error - ${response.status}`);
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, TRANSLATION_TIMEOUT_MS);
+
+    const abort = () => {
+      controller.abort();
+    };
+
+    if (signal?.aborted) {
+      clearTimeout(timeout);
+      throw createAbortError();
     }
 
-    return extractGoogleTranslation(await response.text());
+    signal?.addEventListener?.('abort', abort, { once: true });
+
+    try {
+      const response = await fetch(url.toString(), { signal: controller.signal });
+      if (!response.ok) {
+        const error = new Error(`HTTP Error - ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+
+      return extractGoogleTranslation(await response.text());
+    } catch (error) {
+      if (timedOut && error?.name === 'AbortError') {
+        const timeoutError = new Error(`request timed out (> ${Math.round(TRANSLATION_TIMEOUT_MS / 1000)} seconds)`);
+        timeoutError.code = 'TRANSLATION_TIMEOUT';
+        throw timeoutError;
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener?.('abort', abort);
+    }
   }
 }
 

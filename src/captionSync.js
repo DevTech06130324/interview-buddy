@@ -17,12 +17,20 @@ class CaptionSyncService extends EventEmitter {
         this.lastRawPolledText = '';
         this.loopGeneration = 0;
         this.pollSequence = 0;
+        this.startPromise = null;
     }
 
     async start() {
-        if (this.isRunning) return;
+        if (this.isRunning) {
+            return true;
+        }
 
-        try {
+        if (this.startPromise) {
+            return this.startPromise;
+        }
+
+        const startGeneration = this.loopGeneration;
+        const startPromise = (async () => {
             // Initialize and launch LiveCaptions
             await liveCaptionsHandler.initialize();
             await liveCaptionsHandler.launchLiveCaptions();
@@ -30,16 +38,32 @@ class CaptionSyncService extends EventEmitter {
             // Small delay to allow window to initialize
             await this.sleep(1000);
 
+            if (this.loopGeneration !== startGeneration || this.isRunning) {
+                return this.isRunning;
+            }
+
             this.lastEmittedText = '';
             this.lastRawPolledText = '';
             this.currentPollInterval = this.activePollInterval;
             this.unchangedPollCount = 0;
             this.startSyncLoop();
+            return true;
+        })();
+
+        this.startPromise = startPromise;
+
+        try {
+            return await startPromise;
         } catch (error) {
             console.error('[ERROR] Failed to start caption sync:', error);
             this.emit('error', error);
             // Don't throw - allow app to continue even if LiveCaptions isn't available
             // The UI will show the error message
+            return false;
+        } finally {
+            if (this.startPromise === startPromise) {
+                this.startPromise = null;
+            }
         }
     }
 
@@ -54,6 +78,7 @@ class CaptionSyncService extends EventEmitter {
     }
 
     stopPolling() {
+        const hadStartInFlight = Boolean(this.startPromise);
         this.isRunning = false;
         this.lastEmittedText = '';
         this.lastRawPolledText = '';
@@ -61,7 +86,8 @@ class CaptionSyncService extends EventEmitter {
         this.unchangedPollCount = 0;
         this.loopGeneration += 1;
         logTranscriptEvent('caption-sync-stop', {
-            loopGeneration: this.loopGeneration
+            loopGeneration: this.loopGeneration,
+            hadStartInFlight
         });
     }
 
@@ -78,7 +104,8 @@ class CaptionSyncService extends EventEmitter {
         });
 
         this.emit('captionUpdate', {
-            fullText: ''
+            fullText: '',
+            entries: []
         });
 
         await this.sleep(100);

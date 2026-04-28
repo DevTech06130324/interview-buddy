@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, ipcMain, shell, globalShortcut, screen, clipboard, nativeTheme } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, globalShortcut, screen, clipboard, nativeTheme } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -50,6 +50,7 @@ const DEFAULT_PROMPT_MODE_SUFFIX = 'What should i say right now? The answer must
 const PROMPT_MODE_STORE_FILE = 'prompt-modes.json';
 const GLOBAL_HOTKEY_STORE_FILE = 'global-hotkeys.json';
 const APP_PREFERENCES_STORE_FILE = 'app-preferences.json';
+const TEMP_UPLOAD_DIR_NAME = 'assistant-temp-uploads';
 const DEFAULT_PROMPT_MODE_NAME = 'Default';
 const DEFAULT_THEME = 'dark';
 const DEFAULT_LAYOUT_MODE = 'vertical';
@@ -61,6 +62,7 @@ const DEFAULT_TAB_URLS = [
   'https://chatgpt.com/',
   'https://chat.deepseek.com/'
 ];
+const ALLOWED_NAVIGATION_PROTOCOLS = new Set(['http:', 'https:']);
 const SUPPORTED_ASSISTANT_HOSTS = new Set([
   'chatgpt.com',
   'chat.openai.com',
@@ -195,6 +197,7 @@ let lastClipboardTranscriptEntries = [];
 let appQuitRequested = false;
 let liveCaptionsExitCleanupComplete = false;
 let liveCaptionsExitCleanupPromise = null;
+const temporaryUploadCleanupTimers = new Set();
 
 function createDefaultPromptModes() {
   return [
@@ -223,6 +226,85 @@ function getGlobalHotkeyStorePath() {
 
 function getAppPreferencesStorePath() {
   return path.join(app.getPath('userData'), APP_PREFERENCES_STORE_FILE);
+}
+
+function getTemporaryUploadDir() {
+  return path.join(app.getPath('temp'), TEMP_UPLOAD_DIR_NAME);
+}
+
+async function cleanupTemporaryUploadDir() {
+  clearTemporaryUploadCleanupTimers();
+
+  try {
+    await fs.promises.rm(getTemporaryUploadDir(), { recursive: true, force: true });
+  } catch (error) {
+    console.error('[WARNING] Failed to clean temporary upload directory:', error);
+  }
+}
+
+function isSenderFromWindow(event, targetWindow) {
+  return Boolean(
+    event
+    && targetWindow
+    && !targetWindow.isDestroyed()
+    && event.sender === targetWindow.webContents
+  );
+}
+
+function isMainWindowSender(event) {
+  return isSenderFromWindow(event, mainWindow);
+}
+
+function isHotkeySettingsWindowSender(event) {
+  return isSenderFromWindow(event, hotkeySettingsWindow);
+}
+
+function isModeMenuWindowSender(event) {
+  return isSenderFromWindow(event, modeMenuWindow);
+}
+
+function isCaptureOverlaySender(event) {
+  return Boolean(
+    captureOverlayState
+    && captureOverlayState.window
+    && isSenderFromWindow(event, captureOverlayState.window)
+  );
+}
+
+function isMainOrHotkeySettingsSender(event) {
+  return isMainWindowSender(event) || isHotkeySettingsWindowSender(event);
+}
+
+function isMainOrModeMenuSender(event) {
+  return isMainWindowSender(event) || isModeMenuWindowSender(event);
+}
+
+function rejectUnauthorizedIpc(channel, fallbackValue = false) {
+  console.warn(`[WARNING] Ignored unauthorized IPC call: ${channel}`);
+  return fallbackValue;
+}
+
+function normalizeAllowedNavigationUrl(url) {
+  const requestedUrl = typeof url === 'string' && url.trim()
+    ? url.trim()
+    : 'about:blank';
+
+  if (requestedUrl === 'about:blank') {
+    return requestedUrl;
+  }
+
+  try {
+    const parsedUrl = new URL(requestedUrl);
+    return ALLOWED_NAVIGATION_PROTOCOLS.has(parsedUrl.protocol)
+      ? parsedUrl.toString()
+      : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function isAllowedNavigationUrl(url) {
+  return Boolean(normalizeAllowedNavigationUrl(url));
 }
 
 function serializePromptModeStateSnapshot() {
@@ -560,7 +642,7 @@ function setAppTheme(theme) {
   currentTheme = normalizeTheme(theme);
   applyNativeTheme();
   applyThemeWindowBackgrounds();
-  persistAppPreferencesSync();
+  scheduleAppPreferencesPersist();
   broadcastAppPreferences();
   applyWebThemeToAllTabs();
   return getAppPreferenceStateSnapshot();
@@ -584,7 +666,7 @@ function setLayoutMode(nextLayoutMode) {
     switchActiveView = normalizeSwitchActiveView(switchActiveView);
   }
 
-  persistAppPreferencesSync();
+  scheduleAppPreferencesPersist();
   broadcastAppPreferences();
   resizeTabs();
   return getAppPreferenceStateSnapshot();
@@ -598,7 +680,7 @@ function cycleLayoutMode() {
 
 function setSwitchActiveView(nextView) {
   switchActiveView = normalizeSwitchActiveView(nextView);
-  persistAppPreferencesSync();
+  scheduleAppPreferencesPersist();
   broadcastAppPreferences();
   resizeTabs();
   return getAppPreferenceStateSnapshot();
@@ -614,7 +696,7 @@ function toggleSwitchActiveView() {
 
 function setTranslationVisible(isVisible) {
   translationsVisible = Boolean(isVisible);
-  persistAppPreferencesSync();
+  scheduleAppPreferencesPersist();
   broadcastAppPreferences();
   return getAppPreferenceStateSnapshot();
 }
@@ -628,7 +710,7 @@ async function applyLiveCaptionsVisibilityPreference() {
     const isVisible = await captionSync.setLiveCaptionsVisibility(liveCaptionsWindowVisible);
     if (typeof isVisible === 'boolean') {
       liveCaptionsWindowVisible = isVisible;
-      persistAppPreferencesSync();
+      scheduleAppPreferencesPersist();
       broadcastAppPreferences();
     }
     return isVisible;
@@ -774,7 +856,11 @@ function unregisterGlobalHotkey(id) {
     return;
   }
 
-  globalShortcut.unregister(registeredHotkey);
+  try {
+    globalShortcut.unregister(registeredHotkey);
+  } catch (error) {
+    console.error('[WARNING] Failed to unregister global hotkey:', error);
+  }
   registeredGlobalHotkeys.delete(id);
 }
 
@@ -791,9 +877,15 @@ function registerGlobalHotkey(id, accelerator) {
     return true;
   }
 
-  const registered = globalShortcut.register(nextAccelerator, () => {
-    runGlobalHotkeyAction(id);
-  });
+  let registered = false;
+  try {
+    registered = globalShortcut.register(nextAccelerator, () => {
+      runGlobalHotkeyAction(id);
+    });
+  } catch (error) {
+    console.error(`[ERROR] Failed to register global hotkey "${nextAccelerator}" for "${definition.label}":`, error);
+    registered = false;
+  }
 
   if (registered) {
     registeredGlobalHotkeys.set(id, nextAccelerator);
@@ -869,7 +961,11 @@ function setGlobalHotkey(id, accelerator) {
     }
 
     if (previousRegisteredAccelerator) {
-      globalShortcut.unregister(previousRegisteredAccelerator);
+      try {
+        globalShortcut.unregister(previousRegisteredAccelerator);
+      } catch (error) {
+        console.error('[WARNING] Failed to unregister previous global hotkey:', error);
+      }
     }
     registeredGlobalHotkeys.set(id, nextAccelerator);
   } else if (!nextAccelerator) {
@@ -990,7 +1086,11 @@ function unregisterModeHotkey(modeId) {
     return;
   }
 
-  globalShortcut.unregister(registeredHotkey);
+  try {
+    globalShortcut.unregister(registeredHotkey);
+  } catch (error) {
+    console.error('[WARNING] Failed to unregister prompt mode hotkey:', error);
+  }
   registeredModeHotkeys.delete(modeId);
 }
 
@@ -1001,13 +1101,19 @@ function registerModeHotkey(modeId, hotkey) {
     return true;
   }
 
-  const registered = globalShortcut.register(accelerator, () => {
-    if (isHotkeySettingsWindowFocused()) {
-      return;
-    }
+  let registered = false;
+  try {
+    registered = globalShortcut.register(accelerator, () => {
+      if (isHotkeySettingsWindowFocused()) {
+        return;
+      }
 
-    selectPromptMode(modeId);
-  });
+      selectPromptMode(modeId);
+    });
+  } catch (error) {
+    console.error('[ERROR] Failed to register prompt mode hotkey:', error);
+    registered = false;
+  }
 
   if (registered) {
     registeredModeHotkeys.set(modeId, accelerator);
@@ -1260,6 +1366,101 @@ function setPromptModeHotkey(modeId, hotkey) {
   };
 }
 
+function clearRuntimeTimersForMainWindowClose() {
+  if (captionSyncStartTimer) {
+    clearTimeout(captionSyncStartTimer);
+    captionSyncStartTimer = null;
+  }
+
+  if (defaultTabWarmupTimer) {
+    clearTimeout(defaultTabWarmupTimer);
+    defaultTabWarmupTimer = null;
+  }
+
+  if (appPreferencesPersistTimer) {
+    clearTimeout(appPreferencesPersistTimer);
+    appPreferencesPersistTimer = null;
+  }
+}
+
+function destroyAllTabs() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.setBrowserView(null);
+    } catch (error) {
+      console.error('[WARNING] Failed to detach active BrowserView:', error);
+    }
+  }
+
+  for (const tab of tabs.values()) {
+    try {
+      if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
+        tab.view.webContents.removeAllListeners();
+        tab.view.webContents.destroy();
+      }
+    } catch (error) {
+      console.error('[WARNING] Failed to destroy tab webContents:', error);
+    }
+  }
+
+  tabs.clear();
+  activeTabId = null;
+}
+
+function closeCaptureOverlayWindow() {
+  if (!captureOverlayState) {
+    return;
+  }
+
+  resolveScreenSelection(null);
+}
+
+function cleanupMainWindowResources() {
+  closeModeMenuWindow();
+  closeCaptureOverlayWindow();
+  clearRuntimeTimersForMainWindowClose();
+  destroyAllTabs();
+}
+
+function bindMainWindowLifecycle(targetWindow) {
+  targetWindow.once('ready-to-show', () => {
+    if (targetWindow.isDestroyed() || mainWindow !== targetWindow) {
+      return;
+    }
+
+    createDefaultTabs();
+    scheduleCaptionSyncStart();
+  });
+
+  targetWindow.on('resize', () => {
+    closeModeMenuWindow();
+    resizeTabs();
+    scheduleAppPreferencesPersist();
+  });
+
+  targetWindow.on('move', () => {
+    closeModeMenuWindow();
+    scheduleAppPreferencesPersist();
+  });
+
+  targetWindow.on('close', (event) => {
+    if (!liveCaptionsExitCleanupComplete) {
+      event.preventDefault();
+      requestAppQuit();
+      return;
+    }
+
+    flushAppPreferencesPersist();
+    cleanupMainWindowResources();
+  });
+
+  targetWindow.once('closed', () => {
+    if (mainWindow === targetWindow) {
+      mainWindow = null;
+    }
+  });
+}
+
 function createWindow() {
   const restoredBounds = getRestoredWindowBounds();
 
@@ -1285,14 +1486,11 @@ function createWindow() {
 
   mainWindow.setContentProtection(true);
   mainWindow.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: false });
-  
+
   mainWindow.loadFile('index.html');
 
-  mainWindow.once('closed', () => {
-    mainWindow = null;
-  });
-
   setupGlobalShortcuts();
+  bindMainWindowLifecycle(mainWindow);
 }
 
 function getCenteredHotkeySettingsBounds(width, height) {
@@ -1482,7 +1680,7 @@ function closeModeMenuWindow() {
   return true;
 }
 
-function openModeMenuWindow(anchor) {
+async function openModeMenuWindow(anchor) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return false;
   }
@@ -1501,7 +1699,7 @@ function openModeMenuWindow(anchor) {
     return true;
   }
 
-  modeMenuWindow = new BrowserWindow({
+  const menuWindow = new BrowserWindow({
     ...getModeMenuBounds(modeMenuAnchor),
     frame: false,
     transparent: true,
@@ -1523,27 +1721,17 @@ function openModeMenuWindow(anchor) {
       preload: path.join(__dirname, 'preload.js')
     }
   });
+  modeMenuWindow = menuWindow;
 
-  modeMenuWindow.setContentProtection(true);
-  modeMenuWindow.setAlwaysOnTop(true, 'screen-saver');
-  modeMenuWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  modeMenuWindow.setMenuBarVisibility(false);
-  if (typeof modeMenuWindow.removeMenu === 'function') {
-    modeMenuWindow.removeMenu();
+  menuWindow.setContentProtection(true);
+  menuWindow.setAlwaysOnTop(true, 'screen-saver');
+  menuWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  menuWindow.setMenuBarVisibility(false);
+  if (typeof menuWindow.removeMenu === 'function') {
+    menuWindow.removeMenu();
   }
 
-  modeMenuWindow.once('ready-to-show', () => {
-    if (!modeMenuWindow || modeMenuWindow.isDestroyed()) {
-      return;
-    }
-
-    positionModeMenuWindow();
-    modeMenuWindow.show();
-    modeMenuWindow.focus();
-    broadcastModeMenuState();
-  });
-
-  modeMenuWindow.on('blur', () => {
+  menuWindow.on('blur', () => {
     setTimeout(() => {
       if (modeMenuWindow && !modeMenuWindow.isDestroyed() && !modeMenuWindow.isFocused()) {
         closeModeMenuWindow();
@@ -1551,21 +1739,60 @@ function openModeMenuWindow(anchor) {
     }, 120);
   });
 
-  modeMenuWindow.once('closed', () => {
-    modeMenuWindow = null;
-    modeMenuAnchor = null;
+  return new Promise((resolve) => {
+    let settled = false;
+    const readyTimeout = setTimeout(() => {
+      console.error('[ERROR] Timed out while opening mode menu window');
+      if (!menuWindow.isDestroyed()) {
+        menuWindow.close();
+      }
+      settle(false);
+    }, 3000);
 
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('mode-menu-closed');
-    }
+    const settle = (value) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(readyTimeout);
+      resolve(value);
+    };
+
+    menuWindow.once('ready-to-show', () => {
+      if (!modeMenuWindow || modeMenuWindow !== menuWindow || menuWindow.isDestroyed()) {
+        settle(false);
+        return;
+      }
+
+      positionModeMenuWindow();
+      menuWindow.show();
+      menuWindow.focus();
+      broadcastModeMenuState();
+      settle(true);
+    });
+
+    menuWindow.once('closed', () => {
+      if (modeMenuWindow === menuWindow) {
+        modeMenuWindow = null;
+        modeMenuAnchor = null;
+      }
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('mode-menu-closed');
+      }
+
+      settle(false);
+    });
+
+    menuWindow.loadFile('mode-menu.html').catch((error) => {
+      console.error('[ERROR] Failed to load mode menu window:', error);
+      if (!menuWindow.isDestroyed()) {
+        menuWindow.close();
+      }
+      settle(false);
+    });
   });
-
-  modeMenuWindow.loadFile('mode-menu.html').catch((error) => {
-    console.error('[ERROR] Failed to load mode menu window:', error);
-    closeModeMenuWindow();
-  });
-
-  return true;
 }
 
 function scheduleCaptionSyncStart(delayMs = 250) {
@@ -1581,7 +1808,7 @@ function scheduleCaptionSyncStart(delayMs = 250) {
   captionSyncStartTimer = setTimeout(() => {
     captionSyncStartTimer = null;
     captionSync.start()
-      .then(() => applyLiveCaptionsVisibilityPreference())
+      .then((started) => (started ? applyLiveCaptionsVisibilityPreference() : null))
       .catch((error) => {
         console.error('[ERROR] Failed to start caption sync:', error);
       });
@@ -1803,8 +2030,12 @@ function loadPendingTab(tabId) {
     return false;
   }
 
-  const nextUrl = tab.pendingUrl;
+  const nextUrl = normalizeAllowedNavigationUrl(tab.pendingUrl);
   tab.pendingUrl = null;
+  if (!nextUrl) {
+    return false;
+  }
+
   tab.view.webContents.loadURL(nextUrl);
   return true;
 }
@@ -1826,7 +2057,7 @@ function scheduleDefaultTabWarmup(delayMs = 1200) {
 }
 
 function createNewTab(url = 'about:blank', options = {}) {
-  const requestedUrl = url || 'about:blank';
+  const requestedUrl = normalizeAllowedNavigationUrl(url) || 'about:blank';
   const shouldDeferLoad = Boolean(options.deferLoad && requestedUrl !== 'about:blank');
   const shouldActivate = activeTabId === null || options.activate !== false;
   const tabId = tabIdCounter++;
@@ -1841,11 +2072,9 @@ function createNewTab(url = 'about:blank', options = {}) {
   
   // Set up window open handler immediately to prevent popups
   tabView.webContents.setWindowOpenHandler(({ url }) => {
-    // HTTP(S) stays in this tab; custom protocols (e.g. spotify:) go to OS handler
-    if (url && (url.startsWith('http:') || url.startsWith('https:'))) {
-      tabView.webContents.loadURL(url);
-    } else if (url) {
-      shell.openExternal(url);
+    const nextUrl = normalizeAllowedNavigationUrl(url);
+    if (nextUrl) {
+      tabView.webContents.loadURL(nextUrl);
     }
     return { action: 'deny' };
   });
@@ -1908,6 +2137,13 @@ function createNewTab(url = 'about:blank', options = {}) {
 
 function setupTabListeners(tabId, tabView) {
   const webContents = tabView.webContents;
+
+  webContents.on('will-navigate', (event, navigationUrl) => {
+    if (!isAllowedNavigationUrl(navigationUrl)) {
+      event.preventDefault();
+      console.warn(`[WARNING] Blocked unsupported navigation URL: ${navigationUrl || '<empty>'}`);
+    }
+  });
   
   webContents.on('did-start-loading', () => {
     const tab = tabs.get(tabId);
@@ -2038,11 +2274,9 @@ function setupTabListeners(tabId, tabView) {
   // Handle new-window event (legacy, but still needed for some cases)
   webContents.on('new-window', (event, navigationUrl) => {
     event.preventDefault();
-    // HTTP(S) stays in this tab; custom protocols (e.g. spotify:) go to OS handler
-    if (navigationUrl && (navigationUrl.startsWith('http:') || navigationUrl.startsWith('https:'))) {
-      webContents.loadURL(navigationUrl);
-    } else if (navigationUrl) {
-      shell.openExternal(navigationUrl);
+    const nextUrl = normalizeAllowedNavigationUrl(navigationUrl);
+    if (nextUrl) {
+      webContents.loadURL(nextUrl);
     }
   });
 }
@@ -2234,8 +2468,9 @@ function openScreenSelectionOverlay(targetDisplay) {
       hasShadow: false,
       backgroundColor: '#00000000',
       webPreferences: {
-        nodeIntegration: true,
-        contextIsolation: false,
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'capture-overlay-preload.js'),
         spellcheck: false
       }
     });
@@ -2988,9 +3223,9 @@ async function pasteTextIntoComposer(webContents, text) {
   }
 }
 
-function getTemporaryUploadFilePath(extension = '.png') {
-  const uploadDir = path.join(app.getPath('userData'), 'assistant-temp-uploads');
-  fs.mkdirSync(uploadDir, { recursive: true });
+async function getTemporaryUploadFilePath(extension = '.png') {
+  const uploadDir = getTemporaryUploadDir();
+  await fs.promises.mkdir(uploadDir, { recursive: true });
   return path.join(
     uploadDir,
     `capture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${extension}`
@@ -3002,9 +3237,19 @@ function scheduleTemporaryFileCleanup(filePath, delayMs = 120000) {
     return;
   }
 
-  setTimeout(() => {
+  const cleanupTimer = setTimeout(() => {
+    temporaryUploadCleanupTimers.delete(cleanupTimer);
     fs.unlink(filePath, () => {});
   }, delayMs);
+  temporaryUploadCleanupTimers.add(cleanupTimer);
+}
+
+function clearTemporaryUploadCleanupTimers() {
+  for (const cleanupTimer of temporaryUploadCleanupTimers) {
+    clearTimeout(cleanupTimer);
+  }
+
+  temporaryUploadCleanupTimers.clear();
 }
 
 async function markImageUploadInput(webContents, markerId) {
@@ -3408,12 +3653,12 @@ async function waitForAssistantImageAttachment(webContents, previousState, marke
 
 async function pasteImageIntoComposer(webContents, image) {
   const uploadMarkerId = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const temporaryUploadPath = getTemporaryUploadFilePath('.png');
   const imagePng = image.toPNG();
+  const temporaryUploadPath = await getTemporaryUploadFilePath('.png');
   const previousAttachmentState = await getAssistantImageAttachmentState(webContents, uploadMarkerId);
 
   try {
-    fs.writeFileSync(temporaryUploadPath, imagePng);
+    await fs.promises.writeFile(temporaryUploadPath, imagePng);
     scheduleTemporaryFileCleanup(temporaryUploadPath);
 
     const markedInput = await markImageUploadInput(webContents, uploadMarkerId);
@@ -4085,7 +4330,7 @@ function toggleMuteAllTabs() {
       tab.view.webContents.setAudioMuted(isMuted);
     }
   });
-  persistAppPreferencesSync();
+  scheduleAppPreferencesPersist();
 }
 
 function setupGlobalShortcuts() {
@@ -4145,17 +4390,17 @@ function requestAppQuit() {
     .catch((error) => {
       console.error('[WARNING] Live Captions shutdown failed:', error);
     })
+    .then(() => cleanupTemporaryUploadDir())
+    .catch((error) => {
+      console.error('[WARNING] Temporary upload cleanup failed:', error);
+    })
     .finally(() => {
       app.quit();
     });
 }
 
 ipcMain.on('screen-capture-overlay-select', (event, selectionRect) => {
-  if (!captureOverlayState || !captureOverlayState.window) {
-    return;
-  }
-
-  if (event.sender !== captureOverlayState.window.webContents) {
+  if (!isCaptureOverlaySender(event)) {
     return;
   }
 
@@ -4163,48 +4408,20 @@ ipcMain.on('screen-capture-overlay-select', (event, selectionRect) => {
 });
 
 ipcMain.on('screen-capture-overlay-cancel', (event) => {
-  if (!captureOverlayState || !captureOverlayState.window) {
-    return;
-  }
-
-  if (event.sender !== captureOverlayState.window.webContents) {
+  if (!isCaptureOverlaySender(event)) {
     return;
   }
 
   resolveScreenSelection(null);
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   loadPromptModeState();
   loadGlobalHotkeyState();
   loadAppPreferences();
   applyNativeTheme();
+  await cleanupTemporaryUploadDir();
   createWindow();
-  
-  mainWindow.once('ready-to-show', () => {
-    createDefaultTabs();
-    scheduleCaptionSyncStart();
-  });
-  
-  mainWindow.on('resize', () => {
-    closeModeMenuWindow();
-    resizeTabs();
-    scheduleAppPreferencesPersist();
-  });
-  mainWindow.on('move', () => {
-    closeModeMenuWindow();
-    scheduleAppPreferencesPersist();
-  });
-  mainWindow.on('close', (event) => {
-    if (!liveCaptionsExitCleanupComplete) {
-      event.preventDefault();
-      requestAppQuit();
-      return;
-    }
-
-    closeModeMenuWindow();
-    flushAppPreferencesPersist();
-  });
 });
 
 app.on('will-quit', () => {
@@ -4222,7 +4439,12 @@ app.on('will-quit', () => {
   flushPromptModeStatePersistSync();
   flushAppPreferencesPersist();
   translationManager.reset('');
-  globalShortcut.unregisterAll();
+  try {
+    globalShortcut.unregisterAll();
+  } catch (error) {
+    console.error('[WARNING] Failed to unregister global shortcuts:', error);
+  }
+  void cleanupTemporaryUploadDir();
 });
 
 app.on('window-all-closed', () => {
@@ -4237,38 +4459,64 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
-    mainWindow.once('ready-to-show', () => {
-      createDefaultTabs();
-    });
   }
 });
 
 ipcMain.handle('create-tab', (event, url) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('create-tab', null);
+  }
+
   return createNewTab(url || 'about:blank');
 });
 
 ipcMain.handle('close-tab', (event, tabId) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('close-tab');
+  }
+
   closeTab(tabId);
+  return true;
 });
 
-ipcMain.handle('close-app', () => {
+ipcMain.handle('close-app', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('close-app');
+  }
+
   requestAppQuit();
   return true;
 });
 
-ipcMain.handle('open-hotkey-settings', () => {
+ipcMain.handle('open-hotkey-settings', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('open-hotkey-settings');
+  }
+
   return openHotkeySettingsWindow();
 });
 
 ipcMain.handle('open-mode-menu', (event, payload) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('open-mode-menu');
+  }
+
   return openModeMenuWindow(payload?.anchor);
 });
 
-ipcMain.handle('close-mode-menu', () => {
+ipcMain.handle('close-mode-menu', (event) => {
+  if (!isMainOrModeMenuSender(event)) {
+    return rejectUnauthorizedIpc('close-mode-menu');
+  }
+
   return closeModeMenuWindow();
 });
 
-ipcMain.handle('get-mode-menu-state', () => {
+ipcMain.handle('get-mode-menu-state', (event) => {
+  if (!isMainOrModeMenuSender(event)) {
+    return rejectUnauthorizedIpc('get-mode-menu-state', null);
+  }
+
   return getModeMenuStateSnapshot();
 });
 
@@ -4281,58 +4529,104 @@ ipcMain.handle('mode-menu-action', (event, action) => {
     return false;
   }
 
+  if (!action || typeof action !== 'object' || typeof action.type !== 'string') {
+    return false;
+  }
+
   mainWindow.webContents.send('mode-menu-action', action);
   return true;
 });
 
 ipcMain.handle('switch-tab', (event, tabId) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('switch-tab');
+  }
+
   switchTab(tabId);
+  return true;
 });
 
 ipcMain.handle('navigate', (event, url) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('navigate');
+  }
+
+  const nextUrl = normalizeAllowedNavigationUrl(url);
+  if (!nextUrl) {
+    console.warn(`[WARNING] Blocked unsupported navigation URL from renderer: ${String(url || '')}`);
+    return false;
+  }
+
   if (activeTabId !== null) {
     const tab = tabs.get(activeTabId);
     if (tab) {
-      tab.view.webContents.loadURL(url);
+      tab.view.webContents.loadURL(nextUrl);
+      return true;
     }
   }
+  return false;
 });
 
-ipcMain.handle('go-back', () => {
+ipcMain.handle('go-back', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('go-back');
+  }
+
   if (activeTabId !== null) {
     const tab = tabs.get(activeTabId);
     if (tab && tab.view.webContents.navigationHistory.canGoBack()) {
       tab.view.webContents.navigationHistory.goBack();
+      return true;
     }
   }
+  return false;
 });
 
-ipcMain.handle('go-forward', () => {
+ipcMain.handle('go-forward', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('go-forward');
+  }
+
   if (activeTabId !== null) {
     const tab = tabs.get(activeTabId);
     if (tab && tab.view.webContents.navigationHistory.canGoForward()) {
       tab.view.webContents.navigationHistory.goForward();
+      return true;
     }
   }
+  return false;
 });
 
-ipcMain.handle('reload', () => {
+ipcMain.handle('reload', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('reload');
+  }
+
   if (activeTabId !== null) {
     const tab = tabs.get(activeTabId);
     if (tab) {
       tab.view.webContents.reload();
+      return true;
     }
   }
+  return false;
 });
 
 ipcMain.handle('set-panel-split-ratio', (event, ratio) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc(
+      'set-panel-split-ratio',
+      layoutMode === 'horizontal' ? horizontalTranscriptPanelRatio : verticalTranscriptPanelRatio
+    );
+  }
+
   if (layoutMode !== 'switch' && Number.isFinite(ratio)) {
     if (layoutMode === 'horizontal') {
       horizontalTranscriptPanelRatio = normalizeSplitRatio(ratio, DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO);
     } else {
       verticalTranscriptPanelRatio = normalizeSplitRatio(ratio, DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO);
     }
-    persistAppPreferencesSync();
+    scheduleAppPreferencesPersist();
     broadcastAppPreferences();
     resizeTabs();
   }
@@ -4341,91 +4635,176 @@ ipcMain.handle('set-panel-split-ratio', (event, ratio) => {
 });
 
 ipcMain.handle('set-transcript-panel-collapsed', (event, collapsed) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('set-transcript-panel-collapsed', isTranscriptPanelCollapsed);
+  }
+
   if (layoutMode === 'horizontal') {
     isTranscriptPanelCollapsed = false;
-    persistAppPreferencesSync();
+    scheduleAppPreferencesPersist();
     resizeTabs();
     return isTranscriptPanelCollapsed;
   }
 
   isTranscriptPanelCollapsed = Boolean(collapsed);
-  persistAppPreferencesSync();
+  scheduleAppPreferencesPersist();
   resizeTabs();
   return isTranscriptPanelCollapsed;
 });
 
 ipcMain.handle('set-mode-panel-collapsed', (event, collapsed) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('set-mode-panel-collapsed', isModePanelCollapsed);
+  }
+
   isModePanelCollapsed = Boolean(collapsed);
-  persistAppPreferencesSync();
+  scheduleAppPreferencesPersist();
   resizeTabs();
   return isModePanelCollapsed;
 });
 
-ipcMain.handle('get-app-preferences', () => {
+ipcMain.handle('get-app-preferences', (event) => {
+  if (!isMainOrHotkeySettingsSender(event)) {
+    return rejectUnauthorizedIpc('get-app-preferences', null);
+  }
+
   return getAppPreferenceStateSnapshot();
 });
 
 ipcMain.handle('set-app-theme', (event, theme) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('set-app-theme', getAppPreferenceStateSnapshot());
+  }
+
   return setAppTheme(theme);
 });
 
-ipcMain.handle('toggle-app-theme', () => {
+ipcMain.handle('toggle-app-theme', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('toggle-app-theme', getAppPreferenceStateSnapshot());
+  }
+
   return toggleAppTheme();
 });
 
 ipcMain.handle('set-layout-mode', (event, nextLayoutMode) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('set-layout-mode', getAppPreferenceStateSnapshot());
+  }
+
   return setLayoutMode(nextLayoutMode);
 });
 
-ipcMain.handle('cycle-layout-mode', () => {
+ipcMain.handle('cycle-layout-mode', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('cycle-layout-mode', getAppPreferenceStateSnapshot());
+  }
+
   return cycleLayoutMode();
 });
 
 ipcMain.handle('set-switch-active-view', (event, nextView) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('set-switch-active-view', getAppPreferenceStateSnapshot());
+  }
+
   return setSwitchActiveView(nextView);
 });
 
-ipcMain.handle('toggle-switch-active-view', () => {
+ipcMain.handle('toggle-switch-active-view', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('toggle-switch-active-view', getAppPreferenceStateSnapshot());
+  }
+
   return toggleSwitchActiveView();
 });
 
 ipcMain.handle('set-translation-visible', (event, isVisible) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('set-translation-visible', getAppPreferenceStateSnapshot());
+  }
+
   return setTranslationVisible(isVisible);
 });
 
-ipcMain.handle('add-prompt-mode', () => {
+ipcMain.handle('add-prompt-mode', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('add-prompt-mode', null);
+  }
+
   return addPromptMode();
 });
 
 ipcMain.handle('select-prompt-mode', (event, modeId) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('select-prompt-mode', null);
+  }
+
   return selectPromptMode(modeId);
 });
 
 ipcMain.handle('delete-prompt-mode', (event, modeId) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('delete-prompt-mode', null);
+  }
+
   return deletePromptMode(modeId);
 });
 
 ipcMain.handle('rename-prompt-mode', (event, payload) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('rename-prompt-mode', null);
+  }
+
   return renamePromptMode(payload?.modeId, payload?.name);
 });
 
 ipcMain.handle('save-prompt-mode', (event, payload) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('save-prompt-mode', null);
+  }
+
   return savePromptMode(payload?.modeId, payload?.suffix);
 });
 
 ipcMain.handle('set-prompt-mode-hotkey', (event, payload) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('set-prompt-mode-hotkey', {
+      success: false,
+      promptModeState: getPromptModeStateSnapshot()
+    });
+  }
+
   return setPromptModeHotkey(payload?.modeId, payload?.hotkey);
 });
 
-ipcMain.handle('get-global-hotkeys', () => {
+ipcMain.handle('get-global-hotkeys', (event) => {
+  if (!isHotkeySettingsWindowSender(event)) {
+    return rejectUnauthorizedIpc('get-global-hotkeys', null);
+  }
+
   return getGlobalHotkeyStateSnapshot();
 });
 
 ipcMain.handle('set-global-hotkey', (event, payload) => {
+  if (!isHotkeySettingsWindowSender(event)) {
+    return rejectUnauthorizedIpc('set-global-hotkey', {
+      success: false,
+      globalHotkeyState: getGlobalHotkeyStateSnapshot()
+    });
+  }
+
   return setGlobalHotkey(payload?.id, payload?.accelerator);
 });
 
-ipcMain.handle('clear-transcript', async () => {
+ipcMain.handle('clear-transcript', async (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('clear-transcript', {
+      success: false,
+      liveCaptionsVisible: null
+    });
+  }
+
   latestTranscriptText = '';
   latestTranscriptEntries = [];
   resetTranscriptCursors();
@@ -4437,7 +4816,7 @@ ipcMain.handle('clear-transcript', async () => {
       if (result && typeof result === 'object') {
         if (typeof result.liveCaptionsVisible === 'boolean') {
           liveCaptionsWindowVisible = result.liveCaptionsVisible;
-          persistAppPreferencesSync();
+          scheduleAppPreferencesPersist();
           broadcastAppPreferences();
         }
         return result;
@@ -4462,7 +4841,11 @@ ipcMain.handle('clear-transcript', async () => {
   };
 });
 
-ipcMain.handle('toggle-live-captions-window', async () => {
+ipcMain.handle('toggle-live-captions-window', async (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('toggle-live-captions-window', null);
+  }
+
   if (!captionSync || typeof captionSync.toggleLiveCaptionsVisibility !== 'function') {
     return null;
   }
@@ -4471,7 +4854,7 @@ ipcMain.handle('toggle-live-captions-window', async () => {
     const isVisible = await captionSync.toggleLiveCaptionsVisibility();
     if (typeof isVisible === 'boolean') {
       liveCaptionsWindowVisible = isVisible;
-      persistAppPreferencesSync();
+      scheduleAppPreferencesPersist();
       broadcastAppPreferences();
     }
     return isVisible;
@@ -4481,7 +4864,11 @@ ipcMain.handle('toggle-live-captions-window', async () => {
   }
 });
 
-ipcMain.handle('get-live-captions-window-visibility', async () => {
+ipcMain.handle('get-live-captions-window-visibility', async (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('get-live-captions-window-visibility', null);
+  }
+
   if (!captionSync || typeof captionSync.getLiveCaptionsVisibility !== 'function') {
     return null;
   }
@@ -4500,7 +4887,11 @@ ipcMain.handle('get-live-captions-window-visibility', async () => {
   }
 });
 
-ipcMain.handle('get-active-tab', () => {
+ipcMain.handle('get-active-tab', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('get-active-tab', null);
+  }
+
   if (activeTabId !== null) {
     const tab = tabs.get(activeTabId);
     if (tab) {
@@ -4516,7 +4907,11 @@ ipcMain.handle('get-active-tab', () => {
   return null;
 });
 
-ipcMain.handle('get-tabs', () => {
+ipcMain.handle('get-tabs', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('get-tabs', null);
+  }
+
   const currentPanelSplitRatio = layoutMode === 'horizontal'
     ? horizontalTranscriptPanelRatio
     : verticalTranscriptPanelRatio;
@@ -4541,15 +4936,24 @@ ipcMain.handle('get-tabs', () => {
 
 // LiveCaptions IPC handlers
 translationManager.on('updated', (payload) => {
-  latestTranscriptText = normalizeTranscriptTextForPrompt(payload?.fullText);
   latestTranscriptEntries = normalizeTranscriptEntriesForPrompt(payload?.entries);
-  sendCaptionUpdate(payload);
+  latestTranscriptText = typeof payload?.fullText === 'string'
+    ? normalizeTranscriptTextForPrompt(payload.fullText)
+    : getTranscriptTextFromEntries(latestTranscriptEntries);
+  sendCaptionUpdate({
+    ...payload,
+    fullText: latestTranscriptText,
+    entries: payload?.entries || latestTranscriptEntries
+  });
 });
 
 if (captionSync) {
   // Handle caption updates from caption sync service
   captionSync.on('captionUpdate', (data) => {
-    const liveCaptionText = typeof data?.fullText === 'string' ? data.fullText : '';
+    const incomingEntries = normalizeTranscriptEntriesForPrompt(data?.entries);
+    const liveCaptionText = typeof data?.fullText === 'string'
+      ? data.fullText
+      : getTranscriptTextFromEntries(incomingEntries);
     const payload = translationManager.update(liveCaptionText);
     latestTranscriptText = payload.fullText;
     latestTranscriptEntries = normalizeTranscriptEntriesForPrompt(payload.entries);

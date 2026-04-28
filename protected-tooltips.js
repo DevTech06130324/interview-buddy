@@ -3,8 +3,33 @@
   const STYLE_ID = 'protected-tooltip-styles';
   const OFFSET = 8;
 
+  if (
+    window.__protectedTooltipsState
+    && typeof window.__protectedTooltipsState.cleanup === 'function'
+  ) {
+    window.__protectedTooltipsState.cleanup();
+  }
+
+  const tooltipState = {
+    initialized: false,
+    observer: null,
+    listeners: [],
+    cleanup: null
+  };
+  window.__protectedTooltipsState = tooltipState;
+
   let tooltipElement = null;
   let activeTarget = null;
+
+  function addManagedListener(target, type, listener, options) {
+    target.addEventListener(type, listener, options);
+    tooltipState.listeners.push({
+      target,
+      type,
+      listener,
+      options
+    });
+  }
 
   function ensureTooltipStyles() {
     if (document.getElementById(STYLE_ID)) {
@@ -195,14 +220,20 @@
   }
 
   function initProtectedTooltips() {
+    if (tooltipState.initialized) {
+      return;
+    }
+
+    tooltipState.initialized = true;
     protectTooltips();
 
-    document.addEventListener('pointerover', handlePointerOver, true);
-    document.addEventListener('pointerout', handlePointerOut, true);
-    document.addEventListener('focusin', handleFocusIn, true);
-    document.addEventListener('focusout', hideTooltip, true);
-    document.addEventListener('scroll', () => positionTooltip(activeTarget), true);
-    window.addEventListener('resize', hideTooltip);
+    const handleScroll = () => positionTooltip(activeTarget);
+    addManagedListener(document, 'pointerover', handlePointerOver, true);
+    addManagedListener(document, 'pointerout', handlePointerOut, true);
+    addManagedListener(document, 'focusin', handleFocusIn, true);
+    addManagedListener(document, 'focusout', hideTooltip, true);
+    addManagedListener(document, 'scroll', handleScroll, true);
+    addManagedListener(window, 'resize', hideTooltip);
 
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
@@ -221,15 +252,40 @@
       attributes: true,
       attributeFilter: ['title']
     });
+    tooltipState.observer = observer;
   }
+
+  function cleanupProtectedTooltips() {
+    hideTooltip();
+
+    for (const { target, type, listener, options } of tooltipState.listeners) {
+      target.removeEventListener(type, listener, options);
+    }
+    tooltipState.listeners = [];
+
+    if (tooltipState.observer) {
+      tooltipState.observer.disconnect();
+      tooltipState.observer = null;
+    }
+
+    if (tooltipElement) {
+      tooltipElement.remove();
+      tooltipElement = null;
+    }
+
+    tooltipState.initialized = false;
+  }
+
+  tooltipState.cleanup = cleanupProtectedTooltips;
 
   window.protectedTooltips = {
     refresh: protectTooltips,
-    setTooltip
+    setTooltip,
+    cleanup: cleanupProtectedTooltips
   };
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initProtectedTooltips, { once: true });
+    addManagedListener(document, 'DOMContentLoaded', initProtectedTooltips, { once: true });
   } else {
     initProtectedTooltips();
   }

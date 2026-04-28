@@ -209,161 +209,6 @@ body {
   border-color: var(--accent);
 }
 
-.hotkey-dialog {
-  position: fixed;
-  top: 58px;
-  right: 16px;
-  z-index: 50;
-  width: min(398px, calc(100vw - 32px));
-  max-height: calc(100vh - 82px);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid #3f3f3f;
-  border-radius: 8px;
-  background: #181818;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
-  -webkit-app-region: no-drag;
-}
-
-.hotkey-dialog[hidden] {
-  display: none;
-}
-
-.hotkey-dialog-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 12px 10px 14px;
-  border-bottom: 1px solid #303030;
-  background: #202020;
-}
-
-.hotkey-dialog-title {
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.hotkey-dialog-subtitle {
-  margin-top: 4px;
-  color: #a9a9a9;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.hotkey-dialog-close {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: #ffffff;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.hotkey-dialog-close:hover {
-  background: #343434;
-  border-color: #555555;
-}
-
-.hotkey-dialog-close-icon {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  pointer-events: none;
-}
-
-.hotkey-list {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 8px;
-  scrollbar-width: thin;
-  scrollbar-color: #515151 #181818;
-}
-
-.hotkey-list::-webkit-scrollbar {
-  width: 10px;
-}
-
-.hotkey-list::-webkit-scrollbar-track {
-  background: #181818;
-}
-
-.hotkey-list::-webkit-scrollbar-thumb {
-  background: #4a4a4a;
-  border-radius: 999px;
-}
-
-.hotkey-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 142px;
-  gap: 10px;
-  align-items: center;
-  padding: 9px 8px;
-  border-bottom: 1px solid #282828;
-}
-
-.hotkey-row:last-child {
-  border-bottom: none;
-}
-
-.hotkey-name {
-  color: #f4f4f4;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.25;
-}
-
-.hotkey-description {
-  margin-top: 3px;
-  color: #a8a8a8;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.hotkey-input {
-  width: 100%;
-  height: 32px;
-  border: 1px solid #444444;
-  border-radius: 7px;
-  background: #121212;
-  color: #ffffff;
-  padding: 0 9px;
-  font-size: 12px;
-  line-height: 32px;
-  outline: none;
-  cursor: text;
-  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
-}
-
-.hotkey-input:focus {
-  border-color: #4a9eff;
-  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.16);
-}
-
-.hotkey-input.is-success {
-  border-color: #42c46f;
-  box-shadow: 0 0 0 2px rgba(66, 196, 111, 0.18);
-}
-
-.hotkey-input.is-error {
-  border-color: #ff6262;
-  box-shadow: 0 0 0 2px rgba(255, 98, 98, 0.18);
-}
-
 .browser-container {
   display: flex;
   flex-direction: column;
@@ -1165,8 +1010,6 @@ body.is-resizing-panels * {
 .app-theme-btn:focus-visible,
 .app-layout-btn:focus-visible,
 .app-settings-btn:focus-visible,
-.hotkey-dialog-close:focus-visible,
-.hotkey-input:focus-visible,
 .new-tab-btn:focus-visible,
 .tab:focus-visible,
 .tab-close:focus-visible,
@@ -1436,7 +1279,6 @@ body {
 .transcript-cell-translation.is-placeholder,
 .transcript-cell-translation.is-refreshing,
 .mode-header-summary,
-.hotkey-description,
 .mode-dropdown-item-hotkey,
 .mode-hotkey-input::placeholder {
   color: var(--text-muted);

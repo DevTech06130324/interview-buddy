@@ -3,6 +3,7 @@ const hotkeyList = document.getElementById('hotkeyList');
 
 let globalHotkeys = [];
 const globalHotkeyFeedbackTimers = new Map();
+const HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
@@ -168,6 +169,16 @@ function setGlobalHotkeyStatus(id, status) {
 function showGlobalHotkeyStatus(id, status) {
   clearGlobalHotkeyFeedbackTimer(id);
   setGlobalHotkeyStatus(id, status);
+
+  if (status === 'idle') {
+    return;
+  }
+
+  const timer = window.setTimeout(() => {
+    globalHotkeyFeedbackTimers.delete(id);
+    setGlobalHotkeyStatus(id, 'idle');
+  }, HOTKEY_FEEDBACK_RESET_DELAY_MS);
+  globalHotkeyFeedbackTimers.set(id, timer);
 }
 
 function updateGlobalHotkeyState(state) {

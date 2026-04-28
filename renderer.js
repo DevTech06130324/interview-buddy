@@ -55,6 +55,7 @@ let promptModes = [];
 let selectedPromptModeId = null;
 let isModeDropdownOpen = false;
 let activeModeDropdownToggle = null;
+let modeDropdownOpenRequestId = 0;
 let isModeEditorDirty = false;
 let editingPromptModeId = null;
 let modeHotkeyStatus = 'idle';
@@ -296,6 +297,65 @@ function getTranscriptEntriesSignature(entries) {
   })));
 }
 
+function getTranscriptEntrySignature(entry) {
+  return JSON.stringify({
+    sourceText: entry.sourceText,
+    translatedText: entry.translatedText,
+    status: entry.status,
+    isFinal: entry.isFinal
+  });
+}
+
+function createTranscriptRow(entry) {
+  const row = document.createElement('div');
+  row.dataset.captionId = entry.id;
+
+  const sourceCell = document.createElement('div');
+  sourceCell.className = 'transcript-cell transcript-cell-source';
+
+  const translatedCell = document.createElement('div');
+  translatedCell.className = 'transcript-cell transcript-cell-translation';
+
+  row.appendChild(sourceCell);
+  row.appendChild(translatedCell);
+  updateTranscriptRow(row, entry);
+  return row;
+}
+
+function updateTranscriptRow(row, entry) {
+  const signature = getTranscriptEntrySignature(entry);
+  if (row.dataset.entrySignature === signature) {
+    return;
+  }
+
+  row.dataset.entrySignature = signature;
+  row.className = `transcript-row transcript-row-${entry.status}`;
+  row.classList.toggle('is-partial', !entry.isFinal);
+
+  const sourceCell = row.querySelector('.transcript-cell-source');
+  if (sourceCell && sourceCell.textContent !== entry.sourceText) {
+    sourceCell.textContent = entry.sourceText;
+  }
+
+  const translatedCell = row.querySelector('.transcript-cell-translation');
+  if (!translatedCell) {
+    return;
+  }
+
+  translatedCell.className = 'transcript-cell transcript-cell-translation';
+
+  if (entry.status === 'pending' && !entry.translatedText) {
+    translatedCell.classList.add('is-placeholder');
+    translatedCell.textContent = 'Translating...';
+  } else {
+    translatedCell.textContent = entry.translatedText;
+  }
+
+  if (entry.status === 'pending' && entry.translatedText) {
+    translatedCell.classList.add('is-refreshing');
+  }
+}
+
 function renderTranscriptEntries(entries) {
   if (!transcriptEl) {
     return;
@@ -308,35 +368,27 @@ function renderTranscriptEntries(entries) {
     return;
   }
 
-  transcriptRowsEl.textContent = '';
+  for (const nonCaptionRow of transcriptRowsEl.querySelectorAll('.transcript-row:not([data-caption-id])')) {
+    nonCaptionRow.remove();
+  }
+
+  const existingRows = new Map();
+  for (const row of transcriptRowsEl.querySelectorAll('.transcript-row[data-caption-id]')) {
+    existingRows.set(row.dataset.captionId, row);
+  }
 
   for (const entry of entries) {
-    const row = document.createElement('div');
-    row.className = `transcript-row transcript-row-${entry.status}`;
-    row.dataset.captionId = entry.id;
-    row.classList.toggle('is-partial', !entry.isFinal);
+    const row = existingRows.get(entry.id) || createTranscriptRow(entry);
+    updateTranscriptRow(row, entry);
+    existingRows.delete(entry.id);
 
-    const sourceCell = document.createElement('div');
-    sourceCell.className = 'transcript-cell transcript-cell-source';
-    sourceCell.textContent = entry.sourceText;
-
-    const translatedCell = document.createElement('div');
-    translatedCell.className = 'transcript-cell transcript-cell-translation';
-
-    if (entry.status === 'pending' && !entry.translatedText) {
-      translatedCell.classList.add('is-placeholder');
-      translatedCell.textContent = 'Translating...';
-    } else {
-      translatedCell.textContent = entry.translatedText;
+    if (row.parentElement !== transcriptRowsEl || row !== transcriptRowsEl.lastElementChild) {
+      transcriptRowsEl.appendChild(row);
     }
+  }
 
-    if (entry.status === 'pending' && entry.translatedText) {
-      translatedCell.classList.add('is-refreshing');
-    }
-
-    row.appendChild(sourceCell);
-    row.appendChild(translatedCell);
-    transcriptRowsEl.appendChild(row);
+  for (const staleRow of existingRows.values()) {
+    staleRow.remove();
   }
 }
 
@@ -855,6 +907,7 @@ function showModeHotkeyFailure(displayValue = '') {
   modeHotkeyFeedbackTimer = window.setTimeout(() => {
     modeHotkeyFeedbackTimer = null;
     modeHotkeyDisplayOverride = null;
+    setModeHotkeyStatus('idle');
     updateModeHotkeyInput();
   }, MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS);
 }
@@ -978,6 +1031,10 @@ async function applyPromptModeHotkey(modeId, hotkey, displayValue) {
       modeHotkeyDisplayOverride = null;
       setModeHotkeyStatus('success');
       updateModeHotkeyInput();
+      modeHotkeyFeedbackTimer = window.setTimeout(() => {
+        modeHotkeyFeedbackTimer = null;
+        setModeHotkeyStatus('idle');
+      }, MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS);
       return;
     }
   } catch (error) {
@@ -987,11 +1044,28 @@ async function applyPromptModeHotkey(modeId, hotkey, displayValue) {
   showModeHotkeyFailure(displayValue);
 }
 
-function setModeDropdownOpen(isOpen, options = {}) {
-  if (getModeDropdownMenus().length === 0 || getModeDropdownToggles().length === 0) {
-    return;
+function getActiveModeDropdownMenu() {
+  if (activeModeDropdownToggle === collapsedModeDropdownToggle) {
+    return collapsedModeDropdownMenu || modeDropdownMenu;
   }
 
+  return modeDropdownMenu || collapsedModeDropdownMenu;
+}
+
+function setInlineModeDropdownFallbackVisible(isVisible) {
+  const activeMenu = getActiveModeDropdownMenu();
+
+  for (const dropdownMenu of getModeDropdownMenus()) {
+    dropdownMenu.hidden = !(isVisible && dropdownMenu === activeMenu);
+  }
+}
+
+async function setModeDropdownOpen(isOpen, options = {}) {
+  if (getModeDropdownMenus().length === 0 || getModeDropdownToggles().length === 0) {
+    return false;
+  }
+
+  const requestId = ++modeDropdownOpenRequestId;
   isModeDropdownOpen = Boolean(isOpen);
   if (!isModeDropdownOpen) {
     editingPromptModeId = null;
@@ -1012,13 +1086,25 @@ function setModeDropdownOpen(isOpen, options = {}) {
   }
 
   if (options.syncMenu === false) {
-    return;
+    return true;
   }
 
   if (isModeDropdownOpen) {
-    void openModeMenuWindow();
+    const opened = await openModeMenuWindow();
+    if (requestId !== modeDropdownOpenRequestId || !isModeDropdownOpen) {
+      return opened;
+    }
+
+    if (!opened) {
+      setInlineModeDropdownFallbackVisible(true);
+      return false;
+    }
+
+    setInlineModeDropdownFallbackVisible(false);
+    return true;
   } else {
     closeModeMenuWindow();
+    return true;
   }
 }
 
@@ -2012,12 +2098,14 @@ if (transcriptEl) {
 }
 
 window.electronAPI.onCaptionUpdate((data) => {
-  if (!transcriptEl || !data || typeof data.fullText !== 'string') {
+  if (!transcriptEl || !data || (typeof data.fullText !== 'string' && !Array.isArray(data.entries))) {
     return;
   }
 
-  const nextTranscript = data.fullText;
   const nextEntries = normalizeTranscriptEntries(data);
+  const nextTranscript = typeof data.fullText === 'string'
+    ? data.fullText
+    : nextEntries.map((entry) => entry.sourceText).join('\n');
   const nextEntriesSignature = getTranscriptEntriesSignature(nextEntries);
   if (nextTranscript === transcriptHistory && transcriptEntriesSignature === nextEntriesSignature) {
     return;

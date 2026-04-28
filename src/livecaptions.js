@@ -1,10 +1,7 @@
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
 
 let native = null;
-const execFileAsync = promisify(execFile);
 
 function getNativeModuleCandidates() {
     const candidates = [];
@@ -115,7 +112,7 @@ class LiveCaptionsHandler {
         const nativeModule = loadNativeModule();
         let launched = nativeModule.launchLiveCaptions();
         if (!launched && process.platform === 'win32') {
-            console.warn('[WARNING] Live Captions launch/attach failed. Closing any existing LiveCaptions.exe and retrying once.');
+            console.warn('[WARNING] Live Captions launch/attach failed. Closing the tracked Live Captions instance and retrying once.');
             await this.closeLiveCaptions();
             await this.sleep(400);
             await this.initialize();
@@ -224,27 +221,7 @@ class LiveCaptionsHandler {
             this.initialized = false;
         }
 
-        if (process.platform !== 'win32') {
-            return closed;
-        }
-
-        try {
-            await execFileAsync('taskkill', ['/IM', 'LiveCaptions.exe', '/F', '/T'], {
-                timeout: 2500,
-                windowsHide: true
-            });
-            return true;
-        } catch (error) {
-            const output = `${error?.stdout || ''}\n${error?.stderr || ''}`;
-            const wasNotRunning = error?.code === 128
-                || /not found|no running instance|not running|no tasks/i.test(output);
-
-            if (!wasNotRunning) {
-                console.error('[WARNING] Failed to taskkill LiveCaptions.exe:', error.message || error);
-            }
-
-            return closed;
-        }
+        return closed;
     }
 
     cleanup() {

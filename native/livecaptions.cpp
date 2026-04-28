@@ -10,6 +10,57 @@ static IUIAutomationElement* g_textBlock = nullptr;
 static DWORD g_processId = 0;
 static bool g_ownsProcess = false;
 
+bool GetLiveCaptionsWindowHandle(HWND* windowHandle, bool allowLaunch);
+
+void ReleaseCachedLiveCaptionsElements() {
+    if (g_textBlock) {
+        g_textBlock->Release();
+        g_textBlock = nullptr;
+    }
+    if (g_window) {
+        g_window->Release();
+        g_window = nullptr;
+    }
+}
+
+bool WaitForWindowToClose(HWND windowHandle, int timeoutMs) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (!IsWindow(windowHandle)) {
+            return true;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    return !IsWindow(windowHandle);
+}
+
+bool CloseTrackedLiveCaptions(bool allowOwnedProcessTerminate) {
+    HWND windowHandle = nullptr;
+    bool closed = false;
+
+    if (GetLiveCaptionsWindowHandle(&windowHandle, false) && windowHandle && IsWindow(windowHandle)) {
+        PostMessageW(windowHandle, WM_CLOSE, 0, 0);
+        closed = WaitForWindowToClose(windowHandle, 2000);
+    }
+
+    if (!closed && allowOwnedProcessTerminate && g_ownsProcess && g_processId) {
+        HRESULT killHr = Win32Automation::KillProcess(g_processId);
+        if (SUCCEEDED(killHr)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            closed = true;
+        }
+    }
+
+    ReleaseCachedLiveCaptionsElements();
+    g_processId = 0;
+    g_ownsProcess = false;
+
+    return closed;
+}
+
 bool AttachToLiveCaptionsWindow(DWORD processId) {
     IUIAutomationElement* window = nullptr;
     int attempts = 0;
@@ -177,21 +228,10 @@ Napi::Value GetCaptions(const Napi::CallbackInfo& info) {
 Napi::Value RestartLiveCaptions(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    if (g_textBlock) {
-        g_textBlock->Release();
-        g_textBlock = nullptr;
-    }
-    if (g_window) {
-        g_window->Release();
-        g_window = nullptr;
-    }
-
-    if (g_processId) {
-        HRESULT killHr = Win32Automation::KillProcess(g_processId);
-        if (FAILED(killHr)) {
+    if (g_processId || g_window) {
+        if (!CloseTrackedLiveCaptions(true)) {
             return Napi::Boolean::New(env, false);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
 
     g_processId = 0;
@@ -208,6 +248,11 @@ Napi::Value RestartLiveCaptions(const Napi::CallbackInfo& info) {
     g_ownsProcess = launchedProcess;
 
     return Napi::Boolean::New(env, AttachToLiveCaptionsWindow(processId));
+}
+
+Napi::Value CloseLiveCaptions(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    return Napi::Boolean::New(env, CloseTrackedLiveCaptions(true));
 }
 
 Napi::Value SetLiveCaptionsVisible(const Napi::CallbackInfo& info) {
@@ -256,14 +301,7 @@ Napi::Value IsLiveCaptionsVisible(const Napi::CallbackInfo& info) {
 
 // Cleanup
 Napi::Value Cleanup(const Napi::CallbackInfo& info) {
-    if (g_textBlock) {
-        g_textBlock->Release();
-        g_textBlock = nullptr;
-    }
-    if (g_window) {
-        g_window->Release();
-        g_window = nullptr;
-    }
+    ReleaseCachedLiveCaptionsElements();
     if (g_ownsProcess && g_processId) {
         Win32Automation::KillProcess(g_processId);
     }
@@ -298,6 +336,10 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set(
         Napi::String::New(env, "isLiveCaptionsVisible"),
         Napi::Function::New(env, IsLiveCaptionsVisible)
+    );
+    exports.Set(
+        Napi::String::New(env, "closeLiveCaptions"),
+        Napi::Function::New(env, CloseLiveCaptions)
     );
     exports.Set(
         Napi::String::New(env, "cleanup"),
