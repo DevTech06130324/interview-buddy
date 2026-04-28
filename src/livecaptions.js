@@ -1,7 +1,10 @@
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 
 let native = null;
+const execFileAsync = promisify(execFile);
 
 function getNativeModuleCandidates() {
     const candidates = [];
@@ -94,6 +97,10 @@ class LiveCaptionsHandler {
         this.initialized = false;
     }
 
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
     async initialize() {
         if (this.initialized) return true;
         const nativeModule = loadNativeModule();
@@ -106,7 +113,15 @@ class LiveCaptionsHandler {
             await this.initialize();
         }
         const nativeModule = loadNativeModule();
-        const launched = nativeModule.launchLiveCaptions();
+        let launched = nativeModule.launchLiveCaptions();
+        if (!launched && process.platform === 'win32') {
+            console.warn('[WARNING] Live Captions launch/attach failed. Closing any existing LiveCaptions.exe and retrying once.');
+            await this.closeLiveCaptions();
+            await this.sleep(400);
+            await this.initialize();
+            launched = loadNativeModule().launchLiveCaptions();
+        }
+
         if (!launched) {
             throw new Error('Failed to launch or find LiveCaptions. Please ensure Windows LiveCaptions is running or installed.');
         }
@@ -191,6 +206,45 @@ class LiveCaptionsHandler {
     async toggleWindowVisibility() {
         const isVisible = await this.isWindowVisible();
         return this.setWindowVisibility(!isVisible);
+    }
+
+    async closeLiveCaptions() {
+        let closed = false;
+
+        try {
+            const nativeModule = loadNativeModule();
+            if (typeof nativeModule.closeLiveCaptions === 'function') {
+                closed = Boolean(nativeModule.closeLiveCaptions());
+            } else if (typeof nativeModule.cleanup === 'function') {
+                nativeModule.cleanup();
+            }
+        } catch (error) {
+            console.error('[WARNING] Failed to close Live Captions through native addon:', error.message || error);
+        } finally {
+            this.initialized = false;
+        }
+
+        if (process.platform !== 'win32') {
+            return closed;
+        }
+
+        try {
+            await execFileAsync('taskkill', ['/IM', 'LiveCaptions.exe', '/F', '/T'], {
+                timeout: 2500,
+                windowsHide: true
+            });
+            return true;
+        } catch (error) {
+            const output = `${error?.stdout || ''}\n${error?.stderr || ''}`;
+            const wasNotRunning = error?.code === 128
+                || /not found|no running instance|not running|no tasks/i.test(output);
+
+            if (!wasNotRunning) {
+                console.error('[WARNING] Failed to taskkill LiveCaptions.exe:', error.message || error);
+            }
+
+            return closed;
+        }
     }
 
     cleanup() {

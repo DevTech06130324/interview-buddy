@@ -44,6 +44,16 @@ class CaptionSyncService extends EventEmitter {
     }
 
     stop() {
+        this.stopPolling();
+        liveCaptionsHandler.cleanup();
+    }
+
+    async stopAndCloseLiveCaptions() {
+        this.stopPolling();
+        await liveCaptionsHandler.closeLiveCaptions();
+    }
+
+    stopPolling() {
         this.isRunning = false;
         this.lastEmittedText = '';
         this.lastRawPolledText = '';
@@ -53,7 +63,6 @@ class CaptionSyncService extends EventEmitter {
         logTranscriptEvent('caption-sync-stop', {
             loopGeneration: this.loopGeneration
         });
-        liveCaptionsHandler.cleanup();
     }
 
     async clearTranscript() {

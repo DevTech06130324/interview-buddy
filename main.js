@@ -192,6 +192,9 @@ let lastClipboardTranscriptText = '';
 let latestTranscriptEntries = [];
 let lastSubmittedTranscriptEntries = [];
 let lastClipboardTranscriptEntries = [];
+let appQuitRequested = false;
+let liveCaptionsExitCleanupComplete = false;
+let liveCaptionsExitCleanupPromise = null;
 
 function createDefaultPromptModes() {
   return [
@@ -541,6 +544,18 @@ function applyThemeWindowBackgrounds() {
   }
 }
 
+function applyOpacityToWindow(targetWindow) {
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.setOpacity(currentOpacity);
+  }
+}
+
+function applyOpacityToAppWindows() {
+  applyOpacityToWindow(mainWindow);
+  applyOpacityToWindow(hotkeySettingsWindow);
+  applyOpacityToWindow(modeMenuWindow);
+}
+
 function setAppTheme(theme) {
   currentTheme = normalizeTheme(theme);
   applyNativeTheme();
@@ -693,14 +708,14 @@ function runGlobalHotkeyAction(id) {
     case 'opacityUp':
       if (currentOpacity < MAX_OPACITY && mainWindow) {
         currentOpacity = Math.min(MAX_OPACITY, currentOpacity + OPACITY_STEP);
-        mainWindow.setOpacity(currentOpacity);
+        applyOpacityToAppWindows();
         scheduleAppPreferencesPersist();
       }
       return;
     case 'opacityDown':
       if (currentOpacity > MIN_OPACITY && mainWindow) {
         currentOpacity = Math.max(MIN_OPACITY, currentOpacity - OPACITY_STEP);
-        mainWindow.setOpacity(currentOpacity);
+        applyOpacityToAppWindows();
         scheduleAppPreferencesPersist();
       }
       return;
@@ -1301,6 +1316,7 @@ function openHotkeySettingsWindow() {
     const bounds = getCenteredHotkeySettingsBounds(width, height);
     hotkeySettingsWindow.setBounds(bounds);
     hotkeySettingsWindow.setBackgroundColor(getThemeWindowBackground());
+    hotkeySettingsWindow.setOpacity(currentOpacity);
     hotkeySettingsWindow.show();
     hotkeySettingsWindow.focus();
     return true;
@@ -1323,6 +1339,7 @@ function openHotkeySettingsWindow() {
     alwaysOnTop: true,
     show: false,
     backgroundColor: getThemeWindowBackground(),
+    opacity: currentOpacity,
     modal: false,
     webPreferences: {
       nodeIntegration: false,
@@ -1477,6 +1494,7 @@ function openModeMenuWindow(anchor) {
 
   if (modeMenuWindow && !modeMenuWindow.isDestroyed()) {
     positionModeMenuWindow();
+    modeMenuWindow.setOpacity(currentOpacity);
     modeMenuWindow.show();
     modeMenuWindow.focus();
     broadcastModeMenuState();
@@ -1497,6 +1515,7 @@ function openModeMenuWindow(anchor) {
     show: false,
     hasShadow: false,
     backgroundColor: '#00000000',
+    opacity: currentOpacity,
     modal: false,
     webPreferences: {
       nodeIntegration: false,
@@ -4074,6 +4093,63 @@ function setupGlobalShortcuts() {
   registerAllModeHotkeys();
 }
 
+async function closeLiveCaptionsForAppExit() {
+  if (liveCaptionsExitCleanupComplete) {
+    return;
+  }
+
+  if (liveCaptionsExitCleanupPromise) {
+    await liveCaptionsExitCleanupPromise;
+    return;
+  }
+
+  if (captionSyncStartTimer) {
+    clearTimeout(captionSyncStartTimer);
+    captionSyncStartTimer = null;
+  }
+
+  liveCaptionsExitCleanupPromise = (async () => {
+    try {
+      if (captionSync && typeof captionSync.stopAndCloseLiveCaptions === 'function') {
+        await captionSync.stopAndCloseLiveCaptions();
+      } else if (captionSync && typeof captionSync.stop === 'function') {
+        captionSync.stop();
+      }
+    } catch (error) {
+      console.error('[WARNING] Failed to close Live Captions during app shutdown:', error);
+    } finally {
+      liveCaptionsExitCleanupComplete = true;
+    }
+  })();
+
+  await liveCaptionsExitCleanupPromise;
+}
+
+function closeAuxiliaryWindowsForAppExit() {
+  closeModeMenuWindow();
+
+  if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
+    hotkeySettingsWindow.close();
+  }
+}
+
+function requestAppQuit() {
+  if (appQuitRequested) {
+    return;
+  }
+
+  appQuitRequested = true;
+  closeAuxiliaryWindowsForAppExit();
+
+  closeLiveCaptionsForAppExit()
+    .catch((error) => {
+      console.error('[WARNING] Live Captions shutdown failed:', error);
+    })
+    .finally(() => {
+      app.quit();
+    });
+}
+
 ipcMain.on('screen-capture-overlay-select', (event, selectionRect) => {
   if (!captureOverlayState || !captureOverlayState.window) {
     return;
@@ -4119,7 +4195,13 @@ app.whenReady().then(() => {
     closeModeMenuWindow();
     scheduleAppPreferencesPersist();
   });
-  mainWindow.on('close', () => {
+  mainWindow.on('close', (event) => {
+    if (!liveCaptionsExitCleanupComplete) {
+      event.preventDefault();
+      requestAppQuit();
+      return;
+    }
+
     closeModeMenuWindow();
     flushAppPreferencesPersist();
   });
@@ -4170,7 +4252,7 @@ ipcMain.handle('close-tab', (event, tabId) => {
 });
 
 ipcMain.handle('close-app', () => {
-  app.quit();
+  requestAppQuit();
   return true;
 });
 
