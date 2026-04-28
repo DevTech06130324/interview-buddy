@@ -22,6 +22,7 @@
   --danger-bg: #5a2424;
   --danger-border: #7a3434;
   --success: #42c46f;
+  --overlay-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 }
 
@@ -42,6 +43,7 @@
   --danger-bg: #ffe8e8;
   --danger-border: #d76262;
   --success: #128a43;
+  --overlay-shadow: 0 14px 32px rgba(20, 28, 40, 0.16);
   color-scheme: light;
 }
 
@@ -1333,7 +1335,6 @@ body.is-resizing-panels * {
 }
 
 /* Theme and layout overrides */
-body,
 .app-layout,
 .browser-container,
 .left-panel,
@@ -1343,8 +1344,14 @@ body,
   color: var(--text);
 }
 
+body {
+  background: transparent;
+  color: var(--text);
+}
+
 .window-wrapper {
   border-color: var(--border);
+  background: transparent;
 }
 
 .app-headbar,
@@ -1525,6 +1532,88 @@ body,
 
 .mode-dropdown-separator {
   background: var(--border);
+}
+
+.mode-dropdown-toggle {
+  background: var(--control-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.mode-dropdown-toggle:hover {
+  background: var(--control-bg-hover);
+  border-color: var(--border-strong);
+}
+
+.mode-dropdown.is-open .mode-dropdown-toggle {
+  background: var(--control-bg-active);
+  border-color: var(--accent);
+}
+
+.mode-dropdown-menu {
+  background: var(--panel-bg);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: var(--overlay-shadow);
+  scrollbar-color: var(--border-strong) var(--panel-bg);
+}
+
+.mode-dropdown-menu::-webkit-scrollbar-track {
+  background: var(--panel-bg);
+}
+
+.mode-dropdown-menu::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-color: var(--panel-bg);
+}
+
+.mode-dropdown-menu::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+.mode-dropdown-item,
+.mode-dropdown-add,
+.mode-dropdown-item-editing {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+}
+
+.mode-dropdown-item:hover,
+.mode-dropdown-add:hover {
+  background: var(--control-bg-hover);
+  border-color: var(--border);
+}
+
+.mode-dropdown-item:hover .mode-dropdown-item-hotkey {
+  color: var(--text-soft);
+}
+
+.mode-dropdown-item.is-active {
+  background: var(--control-bg-active);
+  border-color: var(--accent);
+}
+
+.mode-dropdown-edit-input {
+  background: var(--control-bg);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.mode-dropdown-delete {
+  color: var(--text-muted);
+}
+
+.mode-dropdown-delete:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-border);
+}
+
+.mode-dropdown-delete:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
 }
 
 .panel-divider:focus-visible,

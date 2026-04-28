@@ -187,7 +187,6 @@ let appPreferencesPersistTimer = null;
 let defaultTabWarmupTimer = null;
 let lastSubmittedTranscriptText = '';
 let lastClipboardTranscriptText = '';
-let savedBrowserTabState = createDefaultBrowserTabState();
 
 function createDefaultPromptModes() {
   return [
@@ -204,13 +203,6 @@ function createDefaultGlobalHotkeys() {
     state[definition.id] = definition.defaultAccelerator;
     return state;
   }, {});
-}
-
-function createDefaultBrowserTabState() {
-  return {
-    browserTabs: DEFAULT_TAB_URLS.map((url) => ({ url })),
-    activeBrowserTabIndex: 0
-  };
 }
 
 function getPromptModeStorePath() {
@@ -411,54 +403,7 @@ function getCurrentWindowBoundsSnapshot() {
   };
 }
 
-function normalizeBrowserTabState(browserTabs, activeBrowserTabIndex) {
-  const normalizedTabs = Array.isArray(browserTabs)
-    ? browserTabs
-      .map((tab) => {
-        const url = typeof tab?.url === 'string' && tab.url.trim()
-          ? tab.url.trim()
-          : '';
-        return url ? { url } : null;
-      })
-      .filter(Boolean)
-      .slice(0, 12)
-    : [];
-
-  const fallback = createDefaultBrowserTabState();
-  if (normalizedTabs.length === 0) {
-    return fallback;
-  }
-
-  const index = Number(activeBrowserTabIndex);
-  return {
-    browserTabs: normalizedTabs,
-    activeBrowserTabIndex: Number.isInteger(index)
-      ? Math.min(normalizedTabs.length - 1, Math.max(0, index))
-      : 0
-  };
-}
-
-function getSerializableBrowserTabState() {
-  if (tabs.size === 0) {
-    return savedBrowserTabState || createDefaultBrowserTabState();
-  }
-
-  const tabIds = Array.from(tabs.keys());
-  const browserTabs = Array.from(tabs.values()).map((tab) => ({
-    url: tab.pendingUrl || tab.url || 'about:blank'
-  }));
-  const activeBrowserTabIndex = Math.max(
-    0,
-    tabIds.findIndex((tabId) => tabId === activeTabId)
-  );
-
-  savedBrowserTabState = normalizeBrowserTabState(browserTabs, activeBrowserTabIndex);
-  return savedBrowserTabState;
-}
-
 function getAppPreferenceStateSnapshot() {
-  const browserTabState = getSerializableBrowserTabState();
-
   return {
     theme: currentTheme,
     layoutMode,
@@ -471,9 +416,7 @@ function getAppPreferenceStateSnapshot() {
     transcriptPanelCollapsed: layoutMode === 'horizontal' ? false : isTranscriptPanelCollapsed,
     modePanelCollapsed: isModePanelCollapsed,
     translationsVisible,
-    liveCaptionsWindowVisible,
-    browserTabs: browserTabState.browserTabs,
-    activeBrowserTabIndex: browserTabState.activeBrowserTabIndex
+    liveCaptionsWindowVisible
   };
 }
 
@@ -536,10 +479,6 @@ function loadAppPreferences() {
     isModePanelCollapsed = normalizeBoolean(parsed?.modePanelCollapsed, true);
     translationsVisible = normalizeBoolean(parsed?.translationsVisible, false);
     liveCaptionsWindowVisible = normalizeBoolean(parsed?.liveCaptionsWindowVisible, true);
-    savedBrowserTabState = normalizeBrowserTabState(
-      parsed?.browserTabs,
-      parsed?.activeBrowserTabIndex
-    );
   } catch (error) {
     currentTheme = DEFAULT_THEME;
     layoutMode = DEFAULT_LAYOUT_MODE;
@@ -556,7 +495,6 @@ function loadAppPreferences() {
     isModePanelCollapsed = true;
     translationsVisible = false;
     liveCaptionsWindowVisible = true;
-    savedBrowserTabState = createDefaultBrowserTabState();
   }
 
   if (layoutMode === 'horizontal') {
@@ -1946,7 +1884,7 @@ function closeTab(tabId) {
     } else {
       activeTabId = null;
       mainWindow.setBrowserView(null);
-      createDefaultTabs(createDefaultBrowserTabState());
+      createDefaultTabs();
     }
   }
 
@@ -1969,32 +1907,13 @@ function resizeTabs() {
   }
 }
 
-function createDefaultTabs(tabState = savedBrowserTabState || createDefaultBrowserTabState()) {
-  const browserTabs = tabState.browserTabs.length > 0
-    ? tabState.browserTabs
-    : createDefaultBrowserTabState().browserTabs;
-  const activeIndex = Math.min(
-    browserTabs.length - 1,
-    Math.max(0, tabState.activeBrowserTabIndex || 0)
-  );
-  let activeRestoredTabId = null;
-
-  browserTabs.forEach((tab, index) => {
-    const tabId = createNewTab(tab.url, {
-      activate: index === 0,
-      deferLoad: index !== 0
-    });
-
-    if (index === activeIndex) {
-      activeRestoredTabId = tabId;
-    }
-  });
-
-  if (activeRestoredTabId !== null) {
-    switchTab(activeRestoredTabId);
+function createDefaultTabs() {
+  const firstTabId = createNewTab(DEFAULT_TAB_URLS[0], { activate: true });
+  for (const url of DEFAULT_TAB_URLS.slice(1)) {
+    createNewTab(url, { activate: false, deferLoad: true });
   }
-
   scheduleDefaultTabWarmup();
+  switchTab(firstTabId);
 }
 
 function moveWindow(deltaX, deltaY) {
