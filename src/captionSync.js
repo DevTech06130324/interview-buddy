@@ -120,6 +120,10 @@ class CaptionSyncService extends EventEmitter {
         return liveCaptionsHandler.toggleWindowVisibility();
     }
 
+    async setLiveCaptionsVisibility(isVisible) {
+        return liveCaptionsHandler.setWindowVisibility(Boolean(isVisible));
+    }
+
     startSyncLoop() {
         this.loopGeneration += 1;
         this.isRunning = true;

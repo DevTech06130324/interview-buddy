@@ -400,6 +400,10 @@ function updateLayoutControls() {
   document.body.dataset.layoutMode = currentLayoutMode;
   document.body.dataset.switchActiveView = currentSwitchActiveView;
 
+  if (currentLayoutMode === 'horizontal' && isTranscriptPanelCollapsed) {
+    updateTranscriptPanelCollapsed(false);
+  }
+
   if (cycleLayoutBtn) {
     const label = `Switch layout (${currentLayoutMode})`;
     cycleLayoutBtn.title = label;
@@ -433,6 +437,14 @@ function applyAppPreferences(preferences = {}) {
 
   if (preferences.switchActiveView === 'webview' || preferences.switchActiveView === 'transcript') {
     currentSwitchActiveView = preferences.switchActiveView;
+  }
+
+  if (typeof preferences.translationsVisible === 'boolean') {
+    setTranslationVisibility(preferences.translationsVisible);
+  }
+
+  if (typeof preferences.liveCaptionsWindowVisible === 'boolean') {
+    updateLiveCaptionsToggleButton(preferences.liveCaptionsWindowVisible);
   }
 
   if (Number.isFinite(preferences.verticalTranscriptPanelRatio)) {
@@ -1505,8 +1517,18 @@ if (toggleLiveCaptionsBtn) {
 if (toggleTranslationBtn) {
   setTranslationVisibility(translationsVisible);
 
-  toggleTranslationBtn.onclick = () => {
-    setTranslationVisibility(!translationsVisible);
+  toggleTranslationBtn.onclick = async () => {
+    const previousVisible = translationsVisible;
+    const nextVisible = !translationsVisible;
+    setTranslationVisibility(nextVisible);
+
+    try {
+      const preferences = await window.electronAPI.setTranslationVisible(nextVisible);
+      applyAppPreferences(preferences);
+    } catch (error) {
+      setTranslationVisibility(previousVisible);
+      console.error('[ERROR] Failed to persist translation visibility:', error);
+    }
   };
 } else {
   setTranslationVisibility(translationsVisible);
@@ -1516,6 +1538,11 @@ if (toggleTranscriptPanelBtn) {
   updateTranscriptPanelCollapsed(isTranscriptPanelCollapsed);
 
   toggleTranscriptPanelBtn.onclick = async () => {
+    if (currentLayoutMode === 'horizontal') {
+      updateTranscriptPanelCollapsed(false);
+      return;
+    }
+
     const nextCollapsed = !isTranscriptPanelCollapsed;
     updateTranscriptPanelCollapsed(nextCollapsed);
 

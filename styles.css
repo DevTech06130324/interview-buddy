@@ -1557,9 +1557,13 @@ body[data-layout-mode="horizontal"] .left-panel {
 }
 
 body[data-layout-mode="horizontal"] .left-panel.is-collapsed {
-  width: 55px !important;
+  width: 30%;
   height: 100% !important;
-  flex-basis: 55px;
+  flex-basis: auto;
+}
+
+body[data-layout-mode="horizontal"] .left-panel.is-collapsed .transcript-content {
+  display: block;
 }
 
 body[data-layout-mode="horizontal"] .panel-divider {
@@ -1602,6 +1606,7 @@ body[data-layout-mode="switch"] .browser-container {
   flex-direction: column;
 }
 
+body[data-layout-mode="horizontal"] #toggleTranscriptPanelBtn,
 body[data-layout-mode="switch"] .panel-divider,
 body[data-layout-mode="switch"] #toggleTranscriptPanelBtn {
   display: none;

@@ -38,6 +38,8 @@ const OPACITY_STEP = 0.1;
 const MIN_OPACITY = 0.1;
 const MAX_OPACITY = 1.0;
 const DEFAULT_OPACITY = 1.0;
+const DEFAULT_WINDOW_WIDTH = 430;
+const DEFAULT_WINDOW_HEIGHT = 700;
 const MIN_TRANSCRIPT_PANEL_HEIGHT = TRANSCRIPT_PANEL_COLLAPSED_HEIGHT;
 const MIN_BROWSER_PANEL_HEIGHT = 190;
 const MIN_TRANSCRIPT_PANEL_WIDTH = TRANSCRIPT_PANEL_COLLAPSED_HEIGHT;
@@ -156,6 +158,10 @@ let tabIdCounter = 0;
 let currentOpacity = DEFAULT_OPACITY;
 let isWindowVisible = true;
 let isMuted = false;
+let appWindowBounds = {
+  width: DEFAULT_WINDOW_WIDTH,
+  height: DEFAULT_WINDOW_HEIGHT
+};
 let currentTheme = DEFAULT_THEME;
 let layoutMode = DEFAULT_LAYOUT_MODE;
 let switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
@@ -163,6 +169,8 @@ let verticalTranscriptPanelRatio = DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO;
 let horizontalTranscriptPanelRatio = DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
 let isTranscriptPanelCollapsed = true;
 let isModePanelCollapsed = true;
+let translationsVisible = false;
+let liveCaptionsWindowVisible = true;
 let captureOverlayState = null;
 const shortcutCooldowns = new Map();
 const registeredGlobalHotkeys = new Map();
@@ -175,9 +183,11 @@ let captionSyncStartTimer = null;
 let promptModePersistTimer = null;
 let pendingPromptModePersistPayload = null;
 let promptModePersistInFlight = false;
+let appPreferencesPersistTimer = null;
 let defaultTabWarmupTimer = null;
 let lastSubmittedTranscriptText = '';
 let lastClipboardTranscriptText = '';
+let savedBrowserTabState = createDefaultBrowserTabState();
 
 function createDefaultPromptModes() {
   return [
@@ -194,6 +204,13 @@ function createDefaultGlobalHotkeys() {
     state[definition.id] = definition.defaultAccelerator;
     return state;
   }, {});
+}
+
+function createDefaultBrowserTabState() {
+  return {
+    browserTabs: DEFAULT_TAB_URLS.map((url) => ({ url })),
+    activeBrowserTabIndex: 0
+  };
 }
 
 function getPromptModeStorePath() {
@@ -305,22 +322,167 @@ function normalizeSwitchActiveView(value) {
   return value === 'webview' ? 'webview' : 'transcript';
 }
 
+function normalizeBoolean(value, fallback) {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function normalizeOpacity(value) {
+  const opacity = Number(value);
+  return Number.isFinite(opacity) ? Math.min(MAX_OPACITY, Math.max(MIN_OPACITY, opacity)) : DEFAULT_OPACITY;
+}
+
 function normalizeSplitRatio(value, fallback) {
   const ratio = Number(value);
   return Number.isFinite(ratio) ? Math.min(0.9, Math.max(0.1, ratio)) : fallback;
 }
 
+function normalizeWindowBounds(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const width = Number(value.width);
+  const height = Number(value.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    return null;
+  }
+
+  const bounds = {
+    width: Math.max(400, Math.round(width)),
+    height: Math.max(300, Math.round(height))
+  };
+
+  const x = Number(value.x);
+  const y = Number(value.y);
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    bounds.x = Math.round(x);
+    bounds.y = Math.round(y);
+  }
+
+  return bounds;
+}
+
+function doRectsOverlap(left, right) {
+  return (
+    left.x < right.x + right.width
+    && left.x + left.width > right.x
+    && left.y < right.y + right.height
+    && left.y + left.height > right.y
+  );
+}
+
+function getCenteredWindowBounds(width, height) {
+  const workArea = screen.getPrimaryDisplay().workArea;
+  return {
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + (workArea.height - height) / 2),
+    width,
+    height
+  };
+}
+
+function getRestoredWindowBounds() {
+  const bounds = normalizeWindowBounds(appWindowBounds) || {
+    width: DEFAULT_WINDOW_WIDTH,
+    height: DEFAULT_WINDOW_HEIGHT
+  };
+
+  if (!Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) {
+    return getCenteredWindowBounds(bounds.width, bounds.height);
+  }
+
+  const isVisibleOnAnyDisplay = screen.getAllDisplays().some((display) => {
+    return doRectsOverlap(bounds, display.workArea);
+  });
+
+  return isVisibleOnAnyDisplay
+    ? bounds
+    : getCenteredWindowBounds(bounds.width, bounds.height);
+}
+
+function getCurrentWindowBoundsSnapshot() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    appWindowBounds = normalizeWindowBounds(mainWindow.getBounds()) || appWindowBounds;
+  }
+
+  return normalizeWindowBounds(appWindowBounds) || {
+    width: DEFAULT_WINDOW_WIDTH,
+    height: DEFAULT_WINDOW_HEIGHT
+  };
+}
+
+function normalizeBrowserTabState(browserTabs, activeBrowserTabIndex) {
+  const normalizedTabs = Array.isArray(browserTabs)
+    ? browserTabs
+      .map((tab) => {
+        const url = typeof tab?.url === 'string' && tab.url.trim()
+          ? tab.url.trim()
+          : '';
+        return url ? { url } : null;
+      })
+      .filter(Boolean)
+      .slice(0, 12)
+    : [];
+
+  const fallback = createDefaultBrowserTabState();
+  if (normalizedTabs.length === 0) {
+    return fallback;
+  }
+
+  const index = Number(activeBrowserTabIndex);
+  return {
+    browserTabs: normalizedTabs,
+    activeBrowserTabIndex: Number.isInteger(index)
+      ? Math.min(normalizedTabs.length - 1, Math.max(0, index))
+      : 0
+  };
+}
+
+function getSerializableBrowserTabState() {
+  if (tabs.size === 0) {
+    return savedBrowserTabState || createDefaultBrowserTabState();
+  }
+
+  const tabIds = Array.from(tabs.keys());
+  const browserTabs = Array.from(tabs.values()).map((tab) => ({
+    url: tab.pendingUrl || tab.url || 'about:blank'
+  }));
+  const activeBrowserTabIndex = Math.max(
+    0,
+    tabIds.findIndex((tabId) => tabId === activeTabId)
+  );
+
+  savedBrowserTabState = normalizeBrowserTabState(browserTabs, activeBrowserTabIndex);
+  return savedBrowserTabState;
+}
+
 function getAppPreferenceStateSnapshot() {
+  const browserTabState = getSerializableBrowserTabState();
+
   return {
     theme: currentTheme,
     layoutMode,
     switchActiveView,
     verticalTranscriptPanelRatio,
-    horizontalTranscriptPanelRatio
+    horizontalTranscriptPanelRatio,
+    windowBounds: getCurrentWindowBoundsSnapshot(),
+    opacity: currentOpacity,
+    isMuted,
+    transcriptPanelCollapsed: layoutMode === 'horizontal' ? false : isTranscriptPanelCollapsed,
+    modePanelCollapsed: isModePanelCollapsed,
+    translationsVisible,
+    liveCaptionsWindowVisible,
+    browserTabs: browserTabState.browserTabs,
+    activeBrowserTabIndex: browserTabState.activeBrowserTabIndex
   };
 }
 
 function persistAppPreferencesSync() {
+  if (appPreferencesPersistTimer) {
+    clearTimeout(appPreferencesPersistTimer);
+    appPreferencesPersistTimer = null;
+  }
+
   try {
     fs.writeFileSync(
       getAppPreferencesStorePath(),
@@ -329,6 +491,26 @@ function persistAppPreferencesSync() {
   } catch (error) {
     console.error('[ERROR] Failed to persist app preferences:', error);
   }
+}
+
+function scheduleAppPreferencesPersist(delayMs = 250) {
+  if (appPreferencesPersistTimer) {
+    clearTimeout(appPreferencesPersistTimer);
+  }
+
+  appPreferencesPersistTimer = setTimeout(() => {
+    appPreferencesPersistTimer = null;
+    persistAppPreferencesSync();
+  }, delayMs);
+}
+
+function flushAppPreferencesPersist() {
+  if (appPreferencesPersistTimer) {
+    clearTimeout(appPreferencesPersistTimer);
+    appPreferencesPersistTimer = null;
+  }
+
+  persistAppPreferencesSync();
 }
 
 function loadAppPreferences() {
@@ -347,12 +529,38 @@ function loadAppPreferences() {
       parsed?.horizontalTranscriptPanelRatio,
       DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO
     );
+    appWindowBounds = normalizeWindowBounds(parsed?.windowBounds) || appWindowBounds;
+    currentOpacity = normalizeOpacity(parsed?.opacity);
+    isMuted = normalizeBoolean(parsed?.isMuted, false);
+    isTranscriptPanelCollapsed = normalizeBoolean(parsed?.transcriptPanelCollapsed, true);
+    isModePanelCollapsed = normalizeBoolean(parsed?.modePanelCollapsed, true);
+    translationsVisible = normalizeBoolean(parsed?.translationsVisible, false);
+    liveCaptionsWindowVisible = normalizeBoolean(parsed?.liveCaptionsWindowVisible, true);
+    savedBrowserTabState = normalizeBrowserTabState(
+      parsed?.browserTabs,
+      parsed?.activeBrowserTabIndex
+    );
   } catch (error) {
     currentTheme = DEFAULT_THEME;
     layoutMode = DEFAULT_LAYOUT_MODE;
     switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
     verticalTranscriptPanelRatio = DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO;
     horizontalTranscriptPanelRatio = DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
+    appWindowBounds = {
+      width: DEFAULT_WINDOW_WIDTH,
+      height: DEFAULT_WINDOW_HEIGHT
+    };
+    currentOpacity = DEFAULT_OPACITY;
+    isMuted = false;
+    isTranscriptPanelCollapsed = true;
+    isModePanelCollapsed = true;
+    translationsVisible = false;
+    liveCaptionsWindowVisible = true;
+    savedBrowserTabState = createDefaultBrowserTabState();
+  }
+
+  if (layoutMode === 'horizontal') {
+    isTranscriptPanelCollapsed = false;
   }
 }
 
@@ -400,6 +608,10 @@ function setLayoutMode(nextLayoutMode) {
   const previousLayoutMode = layoutMode;
   layoutMode = normalizeLayoutMode(nextLayoutMode);
 
+  if (layoutMode === 'horizontal') {
+    isTranscriptPanelCollapsed = false;
+  }
+
   if (layoutMode === 'switch' && previousLayoutMode !== 'switch') {
     switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
   } else {
@@ -432,6 +644,32 @@ function toggleSwitchActiveView() {
   }
 
   return setSwitchActiveView(switchActiveView === 'transcript' ? 'webview' : 'transcript');
+}
+
+function setTranslationVisible(isVisible) {
+  translationsVisible = Boolean(isVisible);
+  persistAppPreferencesSync();
+  broadcastAppPreferences();
+  return getAppPreferenceStateSnapshot();
+}
+
+async function applyLiveCaptionsVisibilityPreference() {
+  if (!captionSync || typeof captionSync.setLiveCaptionsVisibility !== 'function') {
+    return null;
+  }
+
+  try {
+    const isVisible = await captionSync.setLiveCaptionsVisibility(liveCaptionsWindowVisible);
+    if (typeof isVisible === 'boolean') {
+      liveCaptionsWindowVisible = isVisible;
+      persistAppPreferencesSync();
+      broadcastAppPreferences();
+    }
+    return isVisible;
+  } catch (error) {
+    console.error('[WARNING] Failed to restore Live Captions window visibility:', error.message || error);
+    return null;
+  }
 }
 
 function ensureGlobalHotkeyState() {
@@ -505,12 +743,14 @@ function runGlobalHotkeyAction(id) {
       if (currentOpacity < MAX_OPACITY && mainWindow) {
         currentOpacity = Math.min(MAX_OPACITY, currentOpacity + OPACITY_STEP);
         mainWindow.setOpacity(currentOpacity);
+        scheduleAppPreferencesPersist();
       }
       return;
     case 'opacityDown':
       if (currentOpacity > MIN_OPACITY && mainWindow) {
         currentOpacity = Math.max(MIN_OPACITY, currentOpacity - OPACITY_STEP);
         mainWindow.setOpacity(currentOpacity);
+        scheduleAppPreferencesPersist();
       }
       return;
     case 'moveUp':
@@ -1054,9 +1294,10 @@ function setPromptModeHotkey(modeId, hotkey) {
 }
 
 function createWindow() {
+  const restoredBounds = getRestoredWindowBounds();
+
   mainWindow = new BrowserWindow({
-    width: 430,
-    height: 700,
+    ...restoredBounds,
     title: WINDOW_TITLE,
     minWidth: 400,
     minHeight: 300,
@@ -1071,7 +1312,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js')
     },
     backgroundColor: '#00000000',
-    opacity: DEFAULT_OPACITY,
+    opacity: currentOpacity,
     hasShadow: false
   });
 
@@ -1184,9 +1425,11 @@ function scheduleCaptionSyncStart(delayMs = 250) {
 
   captionSyncStartTimer = setTimeout(() => {
     captionSyncStartTimer = null;
-    captionSync.start().catch((error) => {
-      console.error('[ERROR] Failed to start caption sync:', error);
-    });
+    captionSync.start()
+      .then(() => applyLiveCaptionsVisibilityPreference())
+      .catch((error) => {
+        console.error('[ERROR] Failed to start caption sync:', error);
+      });
   }, delayMs);
 }
 
@@ -1298,29 +1541,25 @@ function getLayoutDimensions() {
       };
     }
 
-    let transcriptPanelWidth = Math.min(TRANSCRIPT_PANEL_COLLAPSED_HEIGHT, adjustableWidth);
+    let minTranscriptWidth = MIN_TRANSCRIPT_PANEL_WIDTH;
+    let minBrowserPanelWidth = MIN_BROWSER_PANEL_WIDTH;
 
-    if (!isTranscriptPanelCollapsed) {
-      let minTranscriptWidth = MIN_TRANSCRIPT_PANEL_WIDTH;
-      let minBrowserPanelWidth = MIN_BROWSER_PANEL_WIDTH;
-
-      if (adjustableWidth < (minTranscriptWidth + minBrowserPanelWidth)) {
-        const fallbackWidth = Math.floor(adjustableWidth / 2);
-        minTranscriptWidth = Math.min(minTranscriptWidth, fallbackWidth);
-        minBrowserPanelWidth = Math.min(minBrowserPanelWidth, Math.max(0, adjustableWidth - minTranscriptWidth));
-      }
-
-      const maxTranscriptWidth = Math.max(minTranscriptWidth, adjustableWidth - minBrowserPanelWidth);
-      const normalizedRatio = Number.isFinite(horizontalTranscriptPanelRatio)
-        ? horizontalTranscriptPanelRatio
-        : DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
-      const desiredTranscriptWidth = adjustableWidth * normalizedRatio;
-      transcriptPanelWidth = Math.round(Math.min(
-        maxTranscriptWidth,
-        Math.max(minTranscriptWidth, desiredTranscriptWidth)
-      ));
-      horizontalTranscriptPanelRatio = transcriptPanelWidth / adjustableWidth;
+    if (adjustableWidth < (minTranscriptWidth + minBrowserPanelWidth)) {
+      const fallbackWidth = Math.floor(adjustableWidth / 2);
+      minTranscriptWidth = Math.min(minTranscriptWidth, fallbackWidth);
+      minBrowserPanelWidth = Math.min(minBrowserPanelWidth, Math.max(0, adjustableWidth - minTranscriptWidth));
     }
+
+    const maxTranscriptWidth = Math.max(minTranscriptWidth, adjustableWidth - minBrowserPanelWidth);
+    const normalizedRatio = Number.isFinite(horizontalTranscriptPanelRatio)
+      ? horizontalTranscriptPanelRatio
+      : DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
+    const desiredTranscriptWidth = adjustableWidth * normalizedRatio;
+    const transcriptPanelWidth = Math.round(Math.min(
+      maxTranscriptWidth,
+      Math.max(minTranscriptWidth, desiredTranscriptWidth)
+    ));
+    horizontalTranscriptPanelRatio = transcriptPanelWidth / adjustableWidth;
 
     const browserPanelWidth = Math.max(0, adjustableWidth - transcriptPanelWidth);
     const browserViewHeight = Math.max(0, browserContainerHeight - TAB_BAR_HEIGHT - URL_BAR_HEIGHT);
@@ -1507,7 +1746,8 @@ function createNewTab(url = 'about:blank', options = {}) {
     url: requestedUrl,
     active: shouldActivate
   });
-  
+  scheduleAppPreferencesPersist();
+
   return tabId;
 }
 
@@ -1548,6 +1788,7 @@ function setupTabListeners(tabId, tabView) {
         canGoBack: tab.canGoBack,
         canGoForward: tab.canGoForward
       });
+      scheduleAppPreferencesPersist();
     }
   });
   
@@ -1556,6 +1797,7 @@ function setupTabListeners(tabId, tabView) {
     if (tab) {
       tab.title = title;
       mainWindow.webContents.send('tab-title-updated', { id: tabId, title: title });
+      scheduleAppPreferencesPersist();
     }
   });
   
@@ -1571,6 +1813,7 @@ function setupTabListeners(tabId, tabView) {
         canGoBack: tab.canGoBack,
         canGoForward: tab.canGoForward
       });
+      scheduleAppPreferencesPersist();
     }
   });
 
@@ -1681,6 +1924,7 @@ function switchTab(tabId) {
       canGoBack: tab.canGoBack,
       canGoForward: tab.canGoForward
     });
+    scheduleAppPreferencesPersist();
   }
 }
 
@@ -1702,11 +1946,12 @@ function closeTab(tabId) {
     } else {
       activeTabId = null;
       mainWindow.setBrowserView(null);
-      createDefaultTabs();
+      createDefaultTabs(createDefaultBrowserTabState());
     }
   }
-  
+
   mainWindow.webContents.send('tab-closed', { id: tabId });
+  scheduleAppPreferencesPersist();
 }
 
 function resizeTabs() {
@@ -1724,19 +1969,39 @@ function resizeTabs() {
   }
 }
 
-function createDefaultTabs() {
-  const firstTabId = createNewTab(DEFAULT_TAB_URLS[0], { activate: true });
-  for (const url of DEFAULT_TAB_URLS.slice(1)) {
-    createNewTab(url, { activate: false, deferLoad: true });
+function createDefaultTabs(tabState = savedBrowserTabState || createDefaultBrowserTabState()) {
+  const browserTabs = tabState.browserTabs.length > 0
+    ? tabState.browserTabs
+    : createDefaultBrowserTabState().browserTabs;
+  const activeIndex = Math.min(
+    browserTabs.length - 1,
+    Math.max(0, tabState.activeBrowserTabIndex || 0)
+  );
+  let activeRestoredTabId = null;
+
+  browserTabs.forEach((tab, index) => {
+    const tabId = createNewTab(tab.url, {
+      activate: index === 0,
+      deferLoad: index !== 0
+    });
+
+    if (index === activeIndex) {
+      activeRestoredTabId = tabId;
+    }
+  });
+
+  if (activeRestoredTabId !== null) {
+    switchTab(activeRestoredTabId);
   }
+
   scheduleDefaultTabWarmup();
-  switchTab(firstTabId);
 }
 
 function moveWindow(deltaX, deltaY) {
   if (!mainWindow) return;
   const bounds = mainWindow.getBounds();
   mainWindow.setPosition(bounds.x + deltaX, bounds.y + deltaY);
+  scheduleAppPreferencesPersist();
 }
 
 function getCurrentDisplayId() {
@@ -3454,6 +3719,7 @@ function toggleMuteAllTabs() {
       tab.view.webContents.setAudioMuted(isMuted);
     }
   });
+  persistAppPreferencesSync();
 }
 
 function setupGlobalShortcuts() {
@@ -3497,7 +3763,16 @@ app.whenReady().then(() => {
     scheduleCaptionSyncStart();
   });
   
-  mainWindow.on('resize', resizeTabs);
+  mainWindow.on('resize', () => {
+    resizeTabs();
+    scheduleAppPreferencesPersist();
+  });
+  mainWindow.on('move', () => {
+    scheduleAppPreferencesPersist();
+  });
+  mainWindow.on('close', () => {
+    flushAppPreferencesPersist();
+  });
 });
 
 app.on('will-quit', () => {
@@ -3513,6 +3788,7 @@ app.on('will-quit', () => {
     hotkeySettingsWindow.close();
   }
   flushPromptModeStatePersistSync();
+  flushAppPreferencesPersist();
   translationManager.reset('');
   globalShortcut.unregisterAll();
 });
@@ -3608,13 +3884,22 @@ ipcMain.handle('set-panel-split-ratio', (event, ratio) => {
 });
 
 ipcMain.handle('set-transcript-panel-collapsed', (event, collapsed) => {
+  if (layoutMode === 'horizontal') {
+    isTranscriptPanelCollapsed = false;
+    persistAppPreferencesSync();
+    resizeTabs();
+    return isTranscriptPanelCollapsed;
+  }
+
   isTranscriptPanelCollapsed = Boolean(collapsed);
+  persistAppPreferencesSync();
   resizeTabs();
   return isTranscriptPanelCollapsed;
 });
 
 ipcMain.handle('set-mode-panel-collapsed', (event, collapsed) => {
   isModePanelCollapsed = Boolean(collapsed);
+  persistAppPreferencesSync();
   resizeTabs();
   return isModePanelCollapsed;
 });
@@ -3645,6 +3930,10 @@ ipcMain.handle('set-switch-active-view', (event, nextView) => {
 
 ipcMain.handle('toggle-switch-active-view', () => {
   return toggleSwitchActiveView();
+});
+
+ipcMain.handle('set-translation-visible', (event, isVisible) => {
+  return setTranslationVisible(isVisible);
 });
 
 ipcMain.handle('add-prompt-mode', () => {
@@ -3688,6 +3977,11 @@ ipcMain.handle('clear-transcript', async () => {
     try {
       const result = await captionSync.clearTranscript();
       if (result && typeof result === 'object') {
+        if (typeof result.liveCaptionsVisible === 'boolean') {
+          liveCaptionsWindowVisible = result.liveCaptionsVisible;
+          persistAppPreferencesSync();
+          broadcastAppPreferences();
+        }
         return result;
       }
 
@@ -3716,7 +4010,13 @@ ipcMain.handle('toggle-live-captions-window', async () => {
   }
 
   try {
-    return await captionSync.toggleLiveCaptionsVisibility();
+    const isVisible = await captionSync.toggleLiveCaptionsVisibility();
+    if (typeof isVisible === 'boolean') {
+      liveCaptionsWindowVisible = isVisible;
+      persistAppPreferencesSync();
+      broadcastAppPreferences();
+    }
+    return isVisible;
   } catch (error) {
     console.error('[ERROR] Failed to toggle Live Captions window visibility:', error);
     throw error;
@@ -3729,7 +4029,13 @@ ipcMain.handle('get-live-captions-window-visibility', async () => {
   }
 
   try {
-    return await captionSync.getLiveCaptionsVisibility();
+    const isVisible = await captionSync.getLiveCaptionsVisibility();
+    if (typeof isVisible === 'boolean' && isVisible !== liveCaptionsWindowVisible) {
+      liveCaptionsWindowVisible = isVisible;
+      scheduleAppPreferencesPersist();
+      broadcastAppPreferences();
+    }
+    return isVisible;
   } catch (error) {
     console.error('[ERROR] Failed to get Live Captions window visibility:', error);
     throw error;
