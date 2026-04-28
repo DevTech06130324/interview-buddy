@@ -1903,8 +1903,10 @@ function getLayoutDimensions() {
       browserPanelWidth: totalContentWidth,
       browserViewX: switchActiveView === 'webview' ? contentX : -9999,
       browserViewY: switchActiveView === 'webview' ? contentY + TAB_BAR_HEIGHT + URL_BAR_HEIGHT : -9999,
-      browserViewWidth: switchActiveView === 'webview' ? totalContentWidth : 0,
-      browserViewHeight: switchActiveView === 'webview' ? browserViewHeight : 0
+      // Keep the hidden webview sized so offscreen DOM automation can still
+      // measure and activate assistant controls while transcript view is active.
+      browserViewWidth: totalContentWidth,
+      browserViewHeight
     };
   }
 
