@@ -54,6 +54,7 @@ let isModePanelCollapsed = true;
 let promptModes = [];
 let selectedPromptModeId = null;
 let isModeDropdownOpen = false;
+let activeModeDropdownToggle = null;
 let isModeEditorDirty = false;
 let editingPromptModeId = null;
 let modeHotkeyStatus = 'idle';
@@ -702,6 +703,52 @@ function getModeDropdownContainers() {
   return [modeDropdown, collapsedModeDropdown].filter(Boolean);
 }
 
+function getModeMenuAnchor(toggleElement) {
+  if (!toggleElement) {
+    return null;
+  }
+
+  const rect = toggleElement.getBoundingClientRect();
+  return {
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height
+  };
+}
+
+function getFallbackModeDropdownToggle() {
+  return isModePanelCollapsed
+    ? (collapsedModeDropdownToggle || modeDropdownToggle)
+    : (modeDropdownToggle || collapsedModeDropdownToggle);
+}
+
+async function openModeMenuWindow() {
+  const toggleElement = activeModeDropdownToggle || getFallbackModeDropdownToggle();
+  const anchor = getModeMenuAnchor(toggleElement);
+
+  if (!anchor || !window.electronAPI?.openModeMenu) {
+    return false;
+  }
+
+  try {
+    return await window.electronAPI.openModeMenu({ anchor });
+  } catch (error) {
+    console.error('[ERROR] Failed to open Mode menu window:', error);
+    return false;
+  }
+}
+
+function closeModeMenuWindow() {
+  if (!window.electronAPI?.closeModeMenu) {
+    return;
+  }
+
+  window.electronAPI.closeModeMenu().catch((error) => {
+    console.error('[ERROR] Failed to close Mode menu window:', error);
+  });
+}
+
 function clearModeHotkeyFeedbackTimer() {
   if (modeHotkeyFeedbackTimer !== null) {
     window.clearTimeout(modeHotkeyFeedbackTimer);
@@ -921,7 +968,7 @@ async function applyPromptModeHotkey(modeId, hotkey, displayValue) {
   showModeHotkeyFailure(displayValue);
 }
 
-function setModeDropdownOpen(isOpen) {
+function setModeDropdownOpen(isOpen, options = {}) {
   if (getModeDropdownMenus().length === 0 || getModeDropdownToggles().length === 0) {
     return;
   }
@@ -929,6 +976,7 @@ function setModeDropdownOpen(isOpen) {
   isModeDropdownOpen = Boolean(isOpen);
   if (!isModeDropdownOpen) {
     editingPromptModeId = null;
+    activeModeDropdownToggle = null;
     clearPendingModeSelection();
   }
 
@@ -941,7 +989,17 @@ function setModeDropdownOpen(isOpen) {
   }
 
   for (const dropdownMenu of getModeDropdownMenus()) {
-    dropdownMenu.hidden = !isModeDropdownOpen;
+    dropdownMenu.hidden = true;
+  }
+
+  if (options.syncMenu === false) {
+    return;
+  }
+
+  if (isModeDropdownOpen) {
+    void openModeMenuWindow();
+  } else {
+    closeModeMenuWindow();
   }
 }
 
@@ -1083,6 +1141,18 @@ async function deletePromptModeFromMenu(modeId) {
     updatePromptModeState(nextState);
   } catch (error) {
     console.error('[ERROR] Failed to delete prompt mode:', error);
+  }
+}
+
+async function addPromptModeFromMenu() {
+  try {
+    await flushPendingPromptModeAutosave();
+    const nextState = await window.electronAPI.addPromptMode();
+    updatePromptModeState(nextState);
+    setModeDropdownOpen(false);
+    modeSuffixInput?.focus();
+  } catch (error) {
+    console.error('[ERROR] Failed to add prompt mode:', error);
   }
 }
 
@@ -1239,15 +1309,7 @@ function populateModeDropdownMenu(menuElement) {
   addButton.textContent = '+ Add Mode';
   addButton.setAttribute('role', 'menuitem');
   addButton.onclick = async () => {
-    try {
-      await flushPendingPromptModeAutosave();
-      const nextState = await window.electronAPI.addPromptMode();
-      updatePromptModeState(nextState);
-      setModeDropdownOpen(false);
-      modeSuffixInput?.focus();
-    } catch (error) {
-      console.error('[ERROR] Failed to add prompt mode:', error);
-    }
+    await addPromptModeFromMenu();
   };
   menuElement.appendChild(addButton);
 }
@@ -1255,6 +1317,32 @@ function populateModeDropdownMenu(menuElement) {
 function renderModeDropdownMenu() {
   for (const menuElement of getModeDropdownMenus()) {
     populateModeDropdownMenu(menuElement);
+  }
+}
+
+async function handleModeMenuAction(action) {
+  if (!action || typeof action.type !== 'string') {
+    return;
+  }
+
+  switch (action.type) {
+    case 'select':
+      await selectPromptModeFromMenu(action.modeId);
+      break;
+    case 'delete':
+      await deletePromptModeFromMenu(action.modeId);
+      break;
+    case 'rename':
+      await commitPromptModeRename(action.modeId, action.name);
+      break;
+    case 'add':
+      await addPromptModeFromMenu();
+      break;
+    case 'close':
+      setModeDropdownOpen(false);
+      break;
+    default:
+      break;
   }
 }
 
@@ -1619,14 +1707,18 @@ if (modeToggleBtn) {
 if (modeDropdownToggle) {
   modeDropdownToggle.onclick = (event) => {
     event.stopPropagation();
-    setModeDropdownOpen(!isModeDropdownOpen);
+    const shouldOpen = !isModeDropdownOpen || activeModeDropdownToggle !== modeDropdownToggle;
+    activeModeDropdownToggle = modeDropdownToggle;
+    setModeDropdownOpen(shouldOpen);
   };
 }
 
 if (collapsedModeDropdownToggle) {
   collapsedModeDropdownToggle.onclick = (event) => {
     event.stopPropagation();
-    setModeDropdownOpen(!isModeDropdownOpen);
+    const shouldOpen = !isModeDropdownOpen || activeModeDropdownToggle !== collapsedModeDropdownToggle;
+    activeModeDropdownToggle = collapsedModeDropdownToggle;
+    setModeDropdownOpen(shouldOpen);
   };
 }
 
@@ -1840,6 +1932,18 @@ window.electronAPI.onTabLoading((data) => {
 
 window.electronAPI.onPromptModeState((state) => {
   queueIncomingPromptModeState(state);
+});
+
+window.electronAPI.onModeMenuAction((action) => {
+  handleModeMenuAction(action).catch((error) => {
+    console.error('[ERROR] Failed to handle Mode menu action:', error);
+  });
+});
+
+window.electronAPI.onModeMenuClosed(() => {
+  if (isModeDropdownOpen) {
+    setModeDropdownOpen(false, { syncMenu: false });
+  }
 });
 
 window.electronAPI.onAppPreferencesUpdated((preferences) => {

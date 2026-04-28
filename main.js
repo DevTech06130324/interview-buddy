@@ -152,6 +152,8 @@ const GLOBAL_HOTKEY_DEFINITIONS = [
 // State
 let mainWindow;
 let hotkeySettingsWindow = null;
+let modeMenuWindow = null;
+let modeMenuAnchor = null;
 const tabs = new Map();
 let activeTabId = null;
 let tabIdCounter = 0;
@@ -300,6 +302,8 @@ function broadcastPromptModeState() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('prompt-mode-state', getPromptModeStateSnapshot());
   }
+
+  broadcastModeMenuState();
 }
 
 function normalizeTheme(value) {
@@ -512,6 +516,8 @@ function broadcastAppPreferences() {
   if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
     hotkeySettingsWindow.webContents.send('app-preferences-updated', snapshot);
   }
+
+  broadcastModeMenuState();
 }
 
 function applyNativeTheme() {
@@ -525,6 +531,10 @@ function getThemeWindowBackground() {
 function applyThemeWindowBackgrounds() {
   if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
     hotkeySettingsWindow.setBackgroundColor(getThemeWindowBackground());
+  }
+
+  if (modeMenuWindow && !modeMenuWindow.isDestroyed()) {
+    modeMenuWindow.setBackgroundColor('#00000000');
   }
 }
 
@@ -709,6 +719,7 @@ function runGlobalHotkeyAction(id) {
       }
 
       if (isWindowVisible) {
+        closeModeMenuWindow();
         mainWindow.hide();
         isWindowVisible = false;
       } else {
@@ -1348,6 +1359,189 @@ function isHotkeySettingsWindowFocused() {
     && !hotkeySettingsWindow.isDestroyed()
     && hotkeySettingsWindow.isFocused()
   );
+}
+
+function normalizeModeMenuAnchor(anchor) {
+  if (!anchor || typeof anchor !== 'object') {
+    return null;
+  }
+
+  const x = Number(anchor.x);
+  const y = Number(anchor.y);
+  const width = Number(anchor.width);
+  const height = Number(anchor.height);
+
+  if (![x, y, width, height].every(Number.isFinite)) {
+    return null;
+  }
+
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.max(120, Math.round(width)),
+    height: Math.max(24, Math.round(height))
+  };
+}
+
+function getModeMenuStateSnapshot() {
+  return {
+    ...getPromptModeStateSnapshot(),
+    theme: currentTheme
+  };
+}
+
+function getModeMenuContentHeight() {
+  const modeCount = Math.max(1, Array.isArray(promptModes) ? promptModes.length : 1);
+  return Math.min(320, Math.max(104, 32 + (modeCount * 42) + 48));
+}
+
+function getModeMenuBounds(anchor = modeMenuAnchor) {
+  const normalizedAnchor = normalizeModeMenuAnchor(anchor) || {
+    x: 0,
+    y: 0,
+    width: 280,
+    height: 40
+  };
+  const mainBounds = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow.getBounds()
+    : screen.getPrimaryDisplay().workArea;
+  const preferredWidth = Math.max(260, normalizedAnchor.width);
+  const initialX = mainBounds.x + normalizedAnchor.x;
+  const initialY = mainBounds.y + normalizedAnchor.y;
+  const display = screen.getDisplayMatching({
+    x: initialX,
+    y: initialY,
+    width: preferredWidth,
+    height: normalizedAnchor.height
+  });
+  const workArea = display.workArea;
+  const width = Math.min(preferredWidth, Math.max(220, workArea.width - 12));
+  const height = Math.min(getModeMenuContentHeight(), Math.max(96, workArea.height - 12));
+  const aboveY = initialY - height - 8;
+  const belowY = initialY + normalizedAnchor.height + 8;
+  const preferredY = aboveY >= workArea.y + 6 ? aboveY : belowY;
+
+  return {
+    x: Math.round(Math.min(
+      workArea.x + workArea.width - width - 6,
+      Math.max(workArea.x + 6, initialX)
+    )),
+    y: Math.round(Math.min(
+      workArea.y + workArea.height - height - 6,
+      Math.max(workArea.y + 6, preferredY)
+    )),
+    width: Math.round(width),
+    height: Math.round(height)
+  };
+}
+
+function positionModeMenuWindow(anchor = modeMenuAnchor) {
+  if (!modeMenuWindow || modeMenuWindow.isDestroyed()) {
+    return;
+  }
+
+  modeMenuWindow.setBounds(getModeMenuBounds(anchor));
+}
+
+function broadcastModeMenuState() {
+  if (!modeMenuWindow || modeMenuWindow.isDestroyed()) {
+    return;
+  }
+
+  positionModeMenuWindow();
+  modeMenuWindow.webContents.send('mode-menu-state', getModeMenuStateSnapshot());
+}
+
+function closeModeMenuWindow() {
+  if (!modeMenuWindow || modeMenuWindow.isDestroyed()) {
+    return false;
+  }
+
+  modeMenuWindow.close();
+  return true;
+}
+
+function openModeMenuWindow(anchor) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false;
+  }
+
+  const normalizedAnchor = normalizeModeMenuAnchor(anchor);
+  if (normalizedAnchor) {
+    modeMenuAnchor = normalizedAnchor;
+  }
+
+  if (modeMenuWindow && !modeMenuWindow.isDestroyed()) {
+    positionModeMenuWindow();
+    modeMenuWindow.show();
+    modeMenuWindow.focus();
+    broadcastModeMenuState();
+    return true;
+  }
+
+  modeMenuWindow = new BrowserWindow({
+    ...getModeMenuBounds(modeMenuAnchor),
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    modal: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  });
+
+  modeMenuWindow.setAlwaysOnTop(true, 'screen-saver');
+  modeMenuWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  modeMenuWindow.setMenuBarVisibility(false);
+  if (typeof modeMenuWindow.removeMenu === 'function') {
+    modeMenuWindow.removeMenu();
+  }
+
+  modeMenuWindow.once('ready-to-show', () => {
+    if (!modeMenuWindow || modeMenuWindow.isDestroyed()) {
+      return;
+    }
+
+    positionModeMenuWindow();
+    modeMenuWindow.show();
+    modeMenuWindow.focus();
+    broadcastModeMenuState();
+  });
+
+  modeMenuWindow.on('blur', () => {
+    setTimeout(() => {
+      if (modeMenuWindow && !modeMenuWindow.isDestroyed() && !modeMenuWindow.isFocused()) {
+        closeModeMenuWindow();
+      }
+    }, 120);
+  });
+
+  modeMenuWindow.once('closed', () => {
+    modeMenuWindow = null;
+    modeMenuAnchor = null;
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('mode-menu-closed');
+    }
+  });
+
+  modeMenuWindow.loadFile('mode-menu.html').catch((error) => {
+    console.error('[ERROR] Failed to load mode menu window:', error);
+    closeModeMenuWindow();
+  });
+
+  return true;
 }
 
 function scheduleCaptionSyncStart(delayMs = 250) {
@@ -3687,13 +3881,16 @@ app.whenReady().then(() => {
   });
   
   mainWindow.on('resize', () => {
+    closeModeMenuWindow();
     resizeTabs();
     scheduleAppPreferencesPersist();
   });
   mainWindow.on('move', () => {
+    closeModeMenuWindow();
     scheduleAppPreferencesPersist();
   });
   mainWindow.on('close', () => {
+    closeModeMenuWindow();
     flushAppPreferencesPersist();
   });
 });
@@ -3749,6 +3946,31 @@ ipcMain.handle('close-app', () => {
 
 ipcMain.handle('open-hotkey-settings', () => {
   return openHotkeySettingsWindow();
+});
+
+ipcMain.handle('open-mode-menu', (event, payload) => {
+  return openModeMenuWindow(payload?.anchor);
+});
+
+ipcMain.handle('close-mode-menu', () => {
+  return closeModeMenuWindow();
+});
+
+ipcMain.handle('get-mode-menu-state', () => {
+  return getModeMenuStateSnapshot();
+});
+
+ipcMain.handle('mode-menu-action', (event, action) => {
+  if (!modeMenuWindow || modeMenuWindow.isDestroyed() || event.sender !== modeMenuWindow.webContents) {
+    return false;
+  }
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false;
+  }
+
+  mainWindow.webContents.send('mode-menu-action', action);
+  return true;
 });
 
 ipcMain.handle('switch-tab', (event, tabId) => {
