@@ -189,6 +189,9 @@ let appPreferencesPersistTimer = null;
 let defaultTabWarmupTimer = null;
 let lastSubmittedTranscriptText = '';
 let lastClipboardTranscriptText = '';
+let latestTranscriptEntries = [];
+let lastSubmittedTranscriptEntries = [];
+let lastClipboardTranscriptEntries = [];
 
 function createDefaultPromptModes() {
   return [
@@ -2324,11 +2327,157 @@ function normalizeTranscriptTextForPrompt(text) {
   return String(text || '').trim();
 }
 
+function normalizeTranscriptEntryForPrompt(entry, index = 0) {
+  if (!entry || typeof entry.sourceText !== 'string') {
+    return null;
+  }
+
+  const sourceText = normalizeTranscriptTextForPrompt(entry.sourceText);
+  if (!sourceText) {
+    return null;
+  }
+
+  return {
+    id: typeof entry.id === 'string' && entry.id ? entry.id : `caption-${index}`,
+    sourceText
+  };
+}
+
+function normalizeTranscriptEntriesForPrompt(entries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  return entries
+    .map((entry, index) => normalizeTranscriptEntryForPrompt(entry, index))
+    .filter(Boolean);
+}
+
+function getTranscriptTextFromEntries(entries) {
+  return normalizeTranscriptEntriesForPrompt(entries)
+    .map((entry) => entry.sourceText)
+    .join('\n')
+    .trim();
+}
+
+function getComparableTranscriptText(text) {
+  return normalizeTranscriptTextForPrompt(text)
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 function getTranscriptLines(text) {
   return normalizeTranscriptTextForPrompt(text)
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function getPendingTextFromMatchedEntry(currentSourceText, cursorSourceText) {
+  const currentText = normalizeTranscriptTextForPrompt(currentSourceText);
+  const cursorText = normalizeTranscriptTextForPrompt(cursorSourceText);
+
+  if (!currentText || !cursorText || currentText === cursorText) {
+    return '';
+  }
+
+  if (currentText.startsWith(cursorText)) {
+    return currentText.slice(cursorText.length).trim();
+  }
+
+  const currentComparable = getComparableTranscriptText(currentText);
+  const cursorComparable = getComparableTranscriptText(cursorText);
+  if (currentComparable && cursorComparable && currentComparable.startsWith(cursorComparable)) {
+    return currentText.slice(Math.min(currentText.length, cursorText.length)).trim();
+  }
+
+  return '';
+}
+
+function getPendingTranscriptTextFromEntryCursor(currentEntries, cursorEntries) {
+  const normalizedCurrentEntries = normalizeTranscriptEntriesForPrompt(currentEntries);
+  const normalizedCursorEntries = normalizeTranscriptEntriesForPrompt(cursorEntries);
+
+  if (normalizedCurrentEntries.length === 0) {
+    return null;
+  }
+
+  if (normalizedCursorEntries.length === 0) {
+    return getTranscriptTextFromEntries(normalizedCurrentEntries);
+  }
+
+  for (let cursorIndex = normalizedCursorEntries.length - 1; cursorIndex >= 0; cursorIndex -= 1) {
+    const cursorEntry = normalizedCursorEntries[cursorIndex];
+    const currentIndex = normalizedCurrentEntries.findIndex((entry) => entry.id === cursorEntry.id);
+
+    if (currentIndex === -1) {
+      continue;
+    }
+
+    const currentEntry = normalizedCurrentEntries[currentIndex];
+    const parts = [];
+    const currentEntryRemainder = getPendingTextFromMatchedEntry(
+      currentEntry.sourceText,
+      cursorEntry.sourceText
+    );
+
+    if (currentEntryRemainder) {
+      parts.push(currentEntryRemainder);
+    }
+
+    parts.push(...normalizedCurrentEntries.slice(currentIndex + 1).map((entry) => entry.sourceText));
+    return parts.join('\n').trim();
+  }
+
+  for (let cursorIndex = normalizedCursorEntries.length - 1; cursorIndex >= 0; cursorIndex -= 1) {
+    const cursorEntry = normalizedCursorEntries[cursorIndex];
+    const cursorComparable = getComparableTranscriptText(cursorEntry.sourceText);
+    if (!cursorComparable) {
+      continue;
+    }
+
+    for (let currentIndex = normalizedCurrentEntries.length - 1; currentIndex >= 0; currentIndex -= 1) {
+      const currentEntry = normalizedCurrentEntries[currentIndex];
+      const currentComparable = getComparableTranscriptText(currentEntry.sourceText);
+      const isSameEntryText = currentEntry.sourceText === cursorEntry.sourceText
+        || currentComparable === cursorComparable
+        || currentComparable.startsWith(cursorComparable);
+
+      if (!isSameEntryText) {
+        continue;
+      }
+
+      const parts = [];
+      const currentEntryRemainder = getPendingTextFromMatchedEntry(
+        currentEntry.sourceText,
+        cursorEntry.sourceText
+      );
+
+      if (currentEntryRemainder) {
+        parts.push(currentEntryRemainder);
+      }
+
+      parts.push(...normalizedCurrentEntries.slice(currentIndex + 1).map((entry) => entry.sourceText));
+      return parts.join('\n').trim();
+    }
+  }
+
+  return null;
+}
+
+function getLongestTranscriptBoundaryOverlap(previousText, currentText) {
+  const previous = normalizeTranscriptTextForPrompt(previousText);
+  const current = normalizeTranscriptTextForPrompt(currentText);
+  const maxLength = Math.min(previous.length, current.length);
+
+  for (let length = maxLength; length >= 24; length -= 1) {
+    if (previous.slice(previous.length - length) === current.slice(0, length)) {
+      return length;
+    }
+  }
+
+  return 0;
 }
 
 function getPendingTranscriptText(transcriptText = latestTranscriptText, cursorText = lastSubmittedTranscriptText) {
@@ -2347,8 +2496,44 @@ function getPendingTranscriptText(transcriptText = latestTranscriptText, cursorT
     return currentTranscriptText.slice(submittedTranscriptText.length).replace(/^\s*\n?/, '').trim();
   }
 
+  const cursorTextIndex = currentTranscriptText.lastIndexOf(submittedTranscriptText);
+  if (cursorTextIndex !== -1) {
+    return currentTranscriptText.slice(cursorTextIndex + submittedTranscriptText.length).trim();
+  }
+
+  const overlapLength = getLongestTranscriptBoundaryOverlap(submittedTranscriptText, currentTranscriptText);
+  if (overlapLength > 0) {
+    return currentTranscriptText.slice(overlapLength).trim();
+  }
+
   const currentLines = getTranscriptLines(currentTranscriptText);
   const submittedLines = getTranscriptLines(submittedTranscriptText);
+  for (let submittedLineIndex = submittedLines.length - 1; submittedLineIndex >= 0; submittedLineIndex -= 1) {
+    const submittedLine = submittedLines[submittedLineIndex];
+    const submittedComparable = getComparableTranscriptText(submittedLine);
+    if (!submittedComparable) {
+      continue;
+    }
+
+    for (let currentLineIndex = currentLines.length - 1; currentLineIndex >= 0; currentLineIndex -= 1) {
+      const currentLine = currentLines[currentLineIndex];
+      const currentComparable = getComparableTranscriptText(currentLine);
+      const isSameLine = currentLine === submittedLine
+        || currentComparable === submittedComparable
+        || currentComparable.startsWith(submittedComparable);
+
+      if (!isSameLine) {
+        continue;
+      }
+
+      const lineRemainder = getPendingTextFromMatchedEntry(currentLine, submittedLine);
+      return [
+        lineRemainder,
+        ...currentLines.slice(currentLineIndex + 1)
+      ].filter(Boolean).join('\n').trim();
+    }
+  }
+
   let firstUnsubmittedLineIndex = 0;
 
   while (
@@ -2359,23 +2544,56 @@ function getPendingTranscriptText(transcriptText = latestTranscriptText, cursorT
     firstUnsubmittedLineIndex += 1;
   }
 
+  if (firstUnsubmittedLineIndex === 0 && submittedLines.length > 0) {
+    if (currentTranscriptText.length > submittedTranscriptText.length) {
+      return currentTranscriptText.slice(submittedTranscriptText.length).trim();
+    }
+
+    return '';
+  }
+
   return currentLines.slice(firstUnsubmittedLineIndex).join('\n').trim();
+}
+
+function getPendingTranscriptTextForCursor({
+  transcriptText = latestTranscriptText,
+  transcriptEntries = latestTranscriptEntries,
+  cursorText = lastSubmittedTranscriptText,
+  cursorEntries = lastSubmittedTranscriptEntries
+} = {}) {
+  const currentTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
+  const submittedTranscriptText = normalizeTranscriptTextForPrompt(cursorText);
+
+  if (!currentTranscriptText || !submittedTranscriptText) {
+    return currentTranscriptText;
+  }
+
+  const entryPendingText = getPendingTranscriptTextFromEntryCursor(transcriptEntries, cursorEntries);
+  if (entryPendingText !== null) {
+    return entryPendingText;
+  }
+
+  return getPendingTranscriptText(currentTranscriptText, submittedTranscriptText);
 }
 
 function markTranscriptSubmitted(transcriptText = latestTranscriptText) {
   lastSubmittedTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
+  lastSubmittedTranscriptEntries = normalizeTranscriptEntriesForPrompt(latestTranscriptEntries);
 }
 
 function markTranscriptCopiedToClipboard(transcriptText = latestTranscriptText) {
   lastClipboardTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
+  lastClipboardTranscriptEntries = normalizeTranscriptEntriesForPrompt(latestTranscriptEntries);
 }
 
 function resetSubmittedTranscriptCursor() {
   lastSubmittedTranscriptText = '';
+  lastSubmittedTranscriptEntries = [];
 }
 
 function resetClipboardTranscriptCursor() {
   lastClipboardTranscriptText = '';
+  lastClipboardTranscriptEntries = [];
 }
 
 function resetTranscriptCursors() {
@@ -3717,7 +3935,12 @@ async function submitCurrentComposer(webContents, expectedText) {
 
 async function submitTranscriptToAssistant() {
   const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
-  const pendingTranscriptText = getPendingTranscriptText(transcriptSnapshot);
+  const pendingTranscriptText = getPendingTranscriptTextForCursor({
+    transcriptText: transcriptSnapshot,
+    transcriptEntries: latestTranscriptEntries,
+    cursorText: lastSubmittedTranscriptText,
+    cursorEntries: lastSubmittedTranscriptEntries
+  });
   if (transcriptSnapshot && !pendingTranscriptText) {
     console.error('[ERROR] No new transcript is available for Ctrl+Enter');
     return;
@@ -3783,7 +4006,12 @@ async function submitTranscriptToAssistant() {
 
 async function copyTranscriptPromptToClipboard() {
   const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
-  const pendingTranscriptText = getPendingTranscriptText(transcriptSnapshot, lastClipboardTranscriptText);
+  const pendingTranscriptText = getPendingTranscriptTextForCursor({
+    transcriptText: transcriptSnapshot,
+    transcriptEntries: latestTranscriptEntries,
+    cursorText: lastClipboardTranscriptText,
+    cursorEntries: lastClipboardTranscriptEntries
+  });
   if (transcriptSnapshot && !pendingTranscriptText) {
     console.error('[ERROR] No new transcript is available for Alt+Enter');
     return;
@@ -4115,6 +4343,7 @@ ipcMain.handle('set-global-hotkey', (event, payload) => {
 
 ipcMain.handle('clear-transcript', async () => {
   latestTranscriptText = '';
+  latestTranscriptEntries = [];
   resetTranscriptCursors();
   sendCaptionUpdate(translationManager.reset(''));
 
@@ -4228,6 +4457,8 @@ ipcMain.handle('get-tabs', () => {
 
 // LiveCaptions IPC handlers
 translationManager.on('updated', (payload) => {
+  latestTranscriptText = normalizeTranscriptTextForPrompt(payload?.fullText);
+  latestTranscriptEntries = normalizeTranscriptEntriesForPrompt(payload?.entries);
   sendCaptionUpdate(payload);
 });
 
@@ -4237,12 +4468,14 @@ if (captionSync) {
     const liveCaptionText = typeof data?.fullText === 'string' ? data.fullText : '';
     const payload = translationManager.update(liveCaptionText);
     latestTranscriptText = payload.fullText;
+    latestTranscriptEntries = normalizeTranscriptEntriesForPrompt(payload.entries);
     sendCaptionUpdate(payload);
   });
 
   captionSync.on('error', (error) => {
     console.error('[ERROR] Caption sync error:', error);
     latestTranscriptText = '';
+    latestTranscriptEntries = [];
     resetTranscriptCursors();
     translationManager.reset('');
     if (mainWindow && !mainWindow.isDestroyed()) {
