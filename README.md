@@ -129,7 +129,7 @@ npm run dist-packaged
 The packaged app is written to:
 
 ```text
-dist-packaged\Notepad++-win32-x64
+dist-packaged\Notepadd++-win32-x64
 ```
 
 ## Project Layout

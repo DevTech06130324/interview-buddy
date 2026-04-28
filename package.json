@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "build-native": "node -e \"const v=require('electron/package.json').version; require('child_process').execSync('cd native && node-gyp rebuild --target='+v+' --arch=x64 --dist-url=https://electronjs.org/headers', {stdio:'inherit'})\"",
-    "dist-packaged": "npm run build-native && electron-packager . \"Notepadd++\" --platform=win32 --arch=x64 --out=dist-packaged --overwrite --asar.unpackDir=native/build/Release"
+    "dist-packaged": "npm run build-native && electron-packager . \"Notepadd++\" --platform=win32 --arch=x64 --out=dist-packaged --overwrite --asar.unpackDir=native/build/Release --icon=assets/notepad-plus-plus"
   },
   "keywords": [
     "electron",

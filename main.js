@@ -3,9 +3,15 @@ const fs = require('fs');
 const path = require('path');
 
 const APP_PROCESS_NAME = 'Notepadd++';
-const WINDOW_TITLE = 'Interview assistant';
+const WINDOW_TITLE = 'Interview Assistant';
+const APP_ICON_PATH = process.platform === 'win32'
+  ? path.join(__dirname, 'assets', 'notepad-plus-plus.ico')
+  : path.join(__dirname, 'assets', 'notepad-plus-plus.png');
 
 app.setName(APP_PROCESS_NAME);
+if (process.platform === 'win32') {
+  app.setAppUserModelId(APP_PROCESS_NAME);
+}
 process.title = APP_PROCESS_NAME;
 
 // LiveCaptions integration
@@ -70,6 +76,11 @@ const SUPPORTED_ASSISTANT_HOSTS = new Set([
   'deepseek.com',
   'www.deepseek.com'
 ]);
+
+function getWindowIconOptions() {
+  return fs.existsSync(APP_ICON_PATH) ? { icon: APP_ICON_PATH } : {};
+}
+
 const GLOBAL_HOTKEY_DEFINITIONS = [
   {
     id: 'opacityUp',
@@ -1466,6 +1477,7 @@ function createWindow() {
 
   mainWindow = new BrowserWindow({
     ...restoredBounds,
+    ...getWindowIconOptions(),
     title: WINDOW_TITLE,
     minWidth: 400,
     minHeight: 300,
@@ -1523,6 +1535,8 @@ function openHotkeySettingsWindow() {
   const bounds = getCenteredHotkeySettingsBounds(width, height);
   hotkeySettingsWindow = new BrowserWindow({
     ...bounds,
+    ...getWindowIconOptions(),
+    title: WINDOW_TITLE,
     width,
     height,
     minWidth: 380,
@@ -1701,6 +1715,8 @@ async function openModeMenuWindow(anchor) {
 
   const menuWindow = new BrowserWindow({
     ...getModeMenuBounds(modeMenuAnchor),
+    ...getWindowIconOptions(),
+    title: WINDOW_TITLE,
     frame: false,
     transparent: true,
     resizable: false,
@@ -2456,6 +2472,8 @@ function openScreenSelectionOverlay(targetDisplay) {
       y: targetDisplay.bounds.y,
       width: targetDisplay.bounds.width,
       height: targetDisplay.bounds.height,
+      ...getWindowIconOptions(),
+      title: WINDOW_TITLE,
       frame: false,
       transparent: true,
       resizable: false,
