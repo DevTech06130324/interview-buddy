@@ -1259,7 +1259,7 @@ function createWindow() {
   
   mainWindow.loadFile('index.html');
 
-  mainWindow.on('closed', () => {
+  mainWindow.once('closed', () => {
     mainWindow = null;
   });
 
@@ -1309,7 +1309,6 @@ function openHotkeySettingsWindow() {
     alwaysOnTop: true,
     show: false,
     backgroundColor: getThemeWindowBackground(),
-    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
     modal: false,
     webPreferences: {
       nodeIntegration: false,
@@ -1332,7 +1331,7 @@ function openHotkeySettingsWindow() {
     }
   });
 
-  hotkeySettingsWindow.on('closed', () => {
+  hotkeySettingsWindow.once('closed', () => {
     hotkeySettingsWindow = null;
   });
 
@@ -1963,7 +1962,9 @@ function resolveScreenSelection(selectionRect = null) {
   captureOverlayState = null;
 
   if (state.window && !state.window.isDestroyed()) {
-    state.window.removeAllListeners('closed');
+    if (state.onClosed) {
+      state.window.removeListener('closed', state.onClosed);
+    }
     state.window.close();
   }
 
@@ -2029,18 +2030,21 @@ function openScreenSelectionOverlay(targetDisplay) {
       overlayWindow.removeMenu();
     }
 
-    captureOverlayState = {
-      window: overlayWindow,
-      resolve,
-      display: targetDisplay
-    };
-
-    overlayWindow.on('closed', () => {
+    const onClosed = () => {
       if (captureOverlayState && captureOverlayState.window === overlayWindow) {
         captureOverlayState = null;
         resolve(null);
       }
-    });
+    };
+
+    captureOverlayState = {
+      window: overlayWindow,
+      resolve,
+      display: targetDisplay,
+      onClosed
+    };
+
+    overlayWindow.once('closed', onClosed);
 
     overlayWindow.once('ready-to-show', () => {
       overlayWindow.show();
