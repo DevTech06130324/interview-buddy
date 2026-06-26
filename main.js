@@ -3259,27 +3259,82 @@ async function markImageUploadInput(webContents, markerId) {
 
         const sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
 
+        function isVisibleElement(element) {
+          if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return false;
+          }
+
+          const style = window.getComputedStyle(element);
+          if (
+            style.display === 'none'
+            || style.visibility === 'hidden'
+            || style.opacity === '0'
+            || element.getAttribute('aria-hidden') === 'true'
+          ) {
+            return false;
+          }
+
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }
+
+        function isUsableComposer(element) {
+          if (!element) return false;
+          if ('disabled' in element && element.disabled) return false;
+          if ('readOnly' in element && element.readOnly) return false;
+          return isVisibleElement(element);
+        }
+
+        function elementMatchesComposer(element) {
+          return Boolean(
+            element
+            && typeof element.matches === 'function'
+            && composerSelectors.some((selector) => element.matches(selector))
+          );
+        }
+
         function findComposer() {
+          const activeElement = document.activeElement;
+          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
+            return activeElement;
+          }
+
+          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
+          if (isUsableComposer(activeComposer)) {
+            return activeComposer;
+          }
+
           for (const selector of composerSelectors) {
-            const element = document.querySelector(selector);
-            if (!element) continue;
-            if ('disabled' in element && element.disabled) continue;
-            if ('readOnly' in element && element.readOnly) continue;
-            return element;
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
+            }
           }
 
           return null;
         }
 
         function getSearchScopes(composer) {
-          return [
+          const scopes = [
             composer,
             composer?.closest('form'),
+            composer?.closest('[data-testid="chat-input"]'),
             composer?.parentElement,
             composer?.closest('[data-testid], section, main, div'),
             document,
             document.body
           ].filter(Boolean);
+
+          const uniqueScopes = [];
+          const seenScopes = new Set();
+          for (const scope of scopes) {
+            if (seenScopes.has(scope)) continue;
+            seenScopes.add(scope);
+            uniqueScopes.push(scope);
+          }
+
+          return uniqueScopes;
         }
 
         function findFileInput(composer) {
@@ -3338,10 +3393,6 @@ async function markImageUploadInput(webContents, markerId) {
           .forEach((element) => element.removeAttribute('data-assistant-upload-marker'));
 
         const composer = findComposer();
-        if (!composer) {
-          return false;
-        }
-
         let input = findFileInput(composer);
         if (!input) {
           input = await revealFileInput(composer);
@@ -3826,23 +3877,59 @@ async function waitForComposerTextChange(webContents, previousText = '', attempt
 
 async function clickComposerSendButton(webContents) {
   try {
-    return await webContents.executeJavaScript(`
+    const clickTarget = await webContents.executeJavaScript(`
       (() => {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
 
-        function isComposerReady(element) {
+        function isVisibleElement(element) {
+          if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return false;
+          }
+
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          const isHidden = style.display === 'none'
+            || style.visibility === 'hidden'
+            || style.opacity === '0'
+            || element.getAttribute('aria-hidden') === 'true'
+            || rect.width === 0
+            || rect.height === 0;
+
+          return !isHidden;
+        }
+
+        function isUsableComposer(element) {
           if (!element) return false;
           if ('disabled' in element && element.disabled) return false;
           if ('readOnly' in element && element.readOnly) return false;
-          return true;
+          return isVisibleElement(element);
+        }
+
+        function elementMatchesComposer(element) {
+          return Boolean(
+            element
+            && typeof element.matches === 'function'
+            && composerSelectors.some((selector) => element.matches(selector))
+          );
         }
 
         function findComposer() {
+          const activeElement = document.activeElement;
+          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
+            return activeElement;
+          }
+
+          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
+          if (isUsableComposer(activeComposer)) {
+            return activeComposer;
+          }
+
           for (const selector of composerSelectors) {
-            const element = document.querySelector(selector);
-            if (isComposerReady(element)) {
-              return element;
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
             }
           }
 
@@ -3856,15 +3943,7 @@ async function clickComposerSendButton(webContents) {
             || button.getAttribute('aria-disabled') === 'true'
             || button.matches('[disabled]');
 
-          const style = window.getComputedStyle(button);
-          const rect = button.getBoundingClientRect();
-          const isHidden = style.display === 'none'
-            || style.visibility === 'hidden'
-            || style.opacity === '0'
-            || rect.width === 0
-            || rect.height === 0;
-
-          return !isDisabled && !isHidden;
+          return !isDisabled && isVisibleElement(button);
         }
 
         function findSendButton(composer) {
@@ -3898,38 +3977,51 @@ async function clickComposerSendButton(webContents) {
           return null;
         }
 
-        const composer = findComposer();
-        const button = findSendButton(composer);
-        if (!button) return false;
-
-        button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-
-        const form = button.closest('form') || composer?.closest('form');
-        if (form && typeof form.requestSubmit === 'function') {
-          try {
-            form.requestSubmit(button);
-            return true;
-          } catch (error) {
-            // Fall through to pointer and click dispatch below.
+        function getButtonClickPoint(button) {
+          if (!isButtonReady(button)) {
+            return null;
           }
+
+          button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+          const rect = button.getBoundingClientRect();
+          const x = Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1);
+          const y = Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1);
+
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return null;
+          }
+
+          return { x, y };
         }
 
-        const pointerEventInit = {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          button: 0,
-          buttons: 1
-        };
-
-        button.dispatchEvent(new PointerEvent('pointerdown', pointerEventInit));
-        button.dispatchEvent(new MouseEvent('mousedown', pointerEventInit));
-        button.dispatchEvent(new PointerEvent('pointerup', pointerEventInit));
-        button.dispatchEvent(new MouseEvent('mouseup', pointerEventInit));
-        button.click();
-        return true;
+        const composer = findComposer();
+        const button = findSendButton(composer);
+        return getButtonClickPoint(button);
       })();
     `, true);
+
+    if (
+      !clickTarget
+      || !Number.isFinite(clickTarget.x)
+      || !Number.isFinite(clickTarget.y)
+      || typeof webContents.sendInputEvent !== 'function'
+    ) {
+      return false;
+    }
+
+    const x = Math.round(clickTarget.x);
+    const y = Math.round(clickTarget.y);
+
+    if (typeof webContents.focus === 'function') {
+      webContents.focus();
+    }
+
+    webContents.sendInputEvent({ type: 'mouseMove', x, y });
+    webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+    await sleep(20);
+    webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    return true;
   } catch (error) {
     console.error('[ERROR] Failed to click assistant send button:', error);
     return false;
@@ -4023,32 +4115,53 @@ async function submitComposerViaDom(webContents) {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
 
-        function isButtonReady(button) {
-          if (!button) return false;
+        function isVisibleElement(element) {
+          if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return false;
+          }
 
-          const isDisabled = button.disabled
-            || button.getAttribute('aria-disabled') === 'true'
-            || button.matches('[disabled]');
-
-          const style = window.getComputedStyle(button);
-          const rect = button.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
           const isHidden = style.display === 'none'
             || style.visibility === 'hidden'
             || style.opacity === '0'
+            || element.getAttribute('aria-hidden') === 'true'
             || rect.width === 0
             || rect.height === 0;
 
-          return !isDisabled && !isHidden;
+          return !isHidden;
         }
 
-        function findSendButton(composer) {
-          const form = composer?.closest('form');
-          if (form) {
-            for (const selector of buttonSelectors) {
-              for (const button of form.querySelectorAll(selector)) {
-                if (isButtonReady(button)) {
-                  return button;
-                }
+        function isUsableComposer(element) {
+          if (!element) return false;
+          if ('disabled' in element && element.disabled) return false;
+          if ('readOnly' in element && element.readOnly) return false;
+          return isVisibleElement(element);
+        }
+
+        function elementMatchesComposer(element) {
+          return Boolean(
+            element
+            && typeof element.matches === 'function'
+            && composerSelectors.some((selector) => element.matches(selector))
+          );
+        }
+
+        function findComposer() {
+          const activeElement = document.activeElement;
+          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
+            return activeElement;
+          }
+
+          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
+          if (isUsableComposer(activeComposer)) {
+            return activeComposer;
+          }
+
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
               }
             }
           }
@@ -4056,41 +4169,131 @@ async function submitComposerViaDom(webContents) {
           return null;
         }
 
-        for (const selector of composerSelectors) {
-          const element = document.querySelector(selector);
-          if (!element) continue;
-          if ('disabled' in element && element.disabled) continue;
-          if ('readOnly' in element && element.readOnly) continue;
+        function isButtonReady(button) {
+          if (!button) return false;
 
-          const button = findSendButton(element);
+          const isDisabled = button.disabled
+            || button.getAttribute('aria-disabled') === 'true'
+            || button.matches('[disabled]');
 
-          const form = element.closest('form');
-          if (form) {
-            if (typeof form.requestSubmit === 'function') {
-              form.requestSubmit(button || undefined);
-              return true;
-            } else {
-              form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-              return true;
+          return !isDisabled && isVisibleElement(button);
+        }
+
+        function findSendButton(composer) {
+          const candidates = [];
+          const seen = new Set();
+
+          const addButtonsFromRoot = (root) => {
+            if (!root || typeof root.querySelectorAll !== 'function') return;
+
+            for (const selector of buttonSelectors) {
+              for (const button of root.querySelectorAll(selector)) {
+                if (!button || seen.has(button)) continue;
+                seen.add(button);
+                candidates.push(button);
+              }
+            }
+          };
+
+          const form = composer?.closest('form');
+          addButtonsFromRoot(form);
+          addButtonsFromRoot(composer?.parentElement);
+          addButtonsFromRoot(composer?.closest('[data-testid], section, main, div'));
+          addButtonsFromRoot(document);
+
+          for (const button of candidates) {
+            if (isButtonReady(button)) {
+              return button;
             }
           }
 
-          const eventInit = {
-            key: 'Enter',
-            code: 'Enter',
-            keyCode: 13,
-            which: 13,
+          return null;
+        }
+
+        function dispatchPointerEvent(target, type, eventInit) {
+          if (typeof PointerEvent !== 'function') {
+            return;
+          }
+
+          target.dispatchEvent(new PointerEvent(type, eventInit));
+        }
+
+        function clickReadySendButton(button) {
+          if (!isButtonReady(button)) {
+            return false;
+          }
+
+          button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+          try {
+            button.focus({ preventScroll: true });
+          } catch (error) {
+            // Ignore buttons that cannot be focused.
+          }
+
+          const downEventInit = {
             bubbles: true,
-            cancelable: true
+            cancelable: true,
+            composed: true,
+            button: 0,
+            buttons: 1,
+            view: window
+          };
+          const upEventInit = {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            button: 0,
+            buttons: 0,
+            view: window
           };
 
-          element.dispatchEvent(new KeyboardEvent('keydown', eventInit));
-          element.dispatchEvent(new KeyboardEvent('keypress', eventInit));
-          element.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+          dispatchPointerEvent(button, 'pointerdown', downEventInit);
+          button.dispatchEvent(new MouseEvent('mousedown', downEventInit));
+          dispatchPointerEvent(button, 'pointerup', upEventInit);
+          button.dispatchEvent(new MouseEvent('mouseup', upEventInit));
+          button.click();
           return true;
         }
 
-        return false;
+        const element = findComposer();
+        if (!element) {
+          return false;
+        }
+
+        const button = findSendButton(element);
+        if (clickReadySendButton(button)) {
+          return true;
+        }
+
+        const form = element.closest('form');
+        if (form) {
+          if (typeof form.requestSubmit === 'function') {
+            try {
+              form.requestSubmit(button || undefined);
+              return true;
+            } catch (error) {
+              // Fall through to submit event and keyboard dispatch.
+            }
+          }
+
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          return true;
+        }
+
+        const eventInit = {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true
+        };
+
+        element.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+        element.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+        element.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+        return true;
       })();
     `, true);
   } catch (error) {
@@ -4100,6 +4303,8 @@ async function submitComposerViaDom(webContents) {
 }
 
 async function submitCurrentComposer(webContents, expectedText) {
+  await waitForSendButtonReady(webContents, 12, 100);
+
   const clickSubmitted = await clickComposerSendButton(webContents);
   if (clickSubmitted && await waitForComposerTextChange(webContents, expectedText, 30, 200)) {
     return true;

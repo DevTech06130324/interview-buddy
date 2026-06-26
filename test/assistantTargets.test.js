@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   DEFAULT_ASSISTANT_URLS,
   ASSISTANT_COMPOSER_SELECTORS,
+  ASSISTANT_SEND_BUTTON_SELECTORS,
   ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS,
   isSupportedAssistantUrl
 } = require('../src/assistantTargets');
@@ -21,5 +22,6 @@ test('Claude opens as one of the default assistant tabs', () => {
 test('assistant DOM selectors include Claude composer and attachment controls', () => {
   assert.ok(ASSISTANT_COMPOSER_SELECTORS.includes('[contenteditable="true"][aria-label*="Claude"]'));
   assert.ok(ASSISTANT_COMPOSER_SELECTORS.includes('.ProseMirror[contenteditable="true"]'));
+  assert.ok(ASSISTANT_SEND_BUTTON_SELECTORS.includes('button[aria-label*="Send message"]'));
   assert.ok(ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS.includes('button[aria-label*="Attach files"]'));
 });
