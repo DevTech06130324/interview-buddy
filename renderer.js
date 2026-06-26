@@ -77,6 +77,8 @@ const MIN_BROWSER_PANEL_WIDTH = 220;
 const MODE_SELECTION_DELAY_MS = 320;
 const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
+const TRANSCRIPT_SPEAKER_TAG = 'Them';
+const DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL = '00:00:00';
 
 function setProtectedTooltip(element, text) {
   if (!element) {
@@ -254,6 +256,29 @@ function checkIfAtBottom() {
   return (scrollHeight - scrollTop - clientHeight) <= threshold;
 }
 
+function normalizeTranscriptTimestampLabel(label) {
+  const value = String(label || '').trim();
+  const match = value.match(/^(\d{1,}):([0-5]\d):([0-5]\d)$/);
+  if (!match) {
+    return '';
+  }
+
+  return `${match[1].padStart(2, '0')}:${match[2]}:${match[3]}`;
+}
+
+function normalizeTranscriptSpeakerTag(speakerTag) {
+  const value = String(speakerTag || '').trim();
+  return value || TRANSCRIPT_SPEAKER_TAG;
+}
+
+function formatTranscriptEntryMarker(entry = {}) {
+  const timestampLabel = normalizeTranscriptTimestampLabel(entry.timestampLabel)
+    || DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL;
+  const speakerTag = normalizeTranscriptSpeakerTag(entry.speakerTag);
+
+  return `[${timestampLabel} | ${speakerTag}]`;
+}
+
 function normalizeTranscriptEntries(data) {
   if (Array.isArray(data?.entries)) {
     return data.entries
@@ -268,7 +293,10 @@ function normalizeTranscriptEntries(data) {
           sourceText: entry.sourceText,
           translatedText: typeof entry.translatedText === 'string' ? entry.translatedText : '',
           status,
-          isFinal: Boolean(entry.isFinal)
+          isFinal: Boolean(entry.isFinal),
+          timestampLabel: normalizeTranscriptTimestampLabel(entry.timestampLabel)
+            || DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
+          speakerTag: normalizeTranscriptSpeakerTag(entry.speakerTag)
         };
       });
   }
@@ -283,7 +311,9 @@ function normalizeTranscriptEntries(data) {
     sourceText: fallbackText,
     translatedText: '',
     status: 'pending',
-    isFinal: false
+    isFinal: false,
+    timestampLabel: DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
+    speakerTag: TRANSCRIPT_SPEAKER_TAG
   }];
 }
 
@@ -293,7 +323,9 @@ function getTranscriptEntriesSignature(entries) {
     sourceText: entry.sourceText,
     translatedText: entry.translatedText,
     status: entry.status,
-    isFinal: entry.isFinal
+    isFinal: entry.isFinal,
+    timestampLabel: entry.timestampLabel,
+    speakerTag: entry.speakerTag
   })));
 }
 
@@ -302,8 +334,22 @@ function getTranscriptEntrySignature(entry) {
     sourceText: entry.sourceText,
     translatedText: entry.translatedText,
     status: entry.status,
-    isFinal: entry.isFinal
+    isFinal: entry.isFinal,
+    timestampLabel: entry.timestampLabel,
+    speakerTag: entry.speakerTag
   });
+}
+
+function updateTranscriptSourceCell(sourceCell, entry) {
+  const marker = document.createElement('span');
+  marker.className = 'transcript-entry-marker';
+  marker.textContent = formatTranscriptEntryMarker(entry);
+
+  const sourceText = document.createElement('span');
+  sourceText.className = 'transcript-entry-text';
+  sourceText.textContent = entry.sourceText;
+
+  sourceCell.replaceChildren(marker, document.createTextNode(' '), sourceText);
 }
 
 function createTranscriptRow(entry) {
@@ -333,8 +379,8 @@ function updateTranscriptRow(row, entry) {
   row.classList.toggle('is-partial', !entry.isFinal);
 
   const sourceCell = row.querySelector('.transcript-cell-source');
-  if (sourceCell && sourceCell.textContent !== entry.sourceText) {
-    sourceCell.textContent = entry.sourceText;
+  if (sourceCell) {
+    updateTranscriptSourceCell(sourceCell, entry);
   }
 
   const translatedCell = row.querySelector('.transcript-cell-translation');
@@ -364,7 +410,9 @@ function renderTranscriptEntries(entries) {
   transcriptEl.classList.remove('has-error');
 
   if (!transcriptRowsEl) {
-    transcriptEl.textContent = entries.map((entry) => entry.sourceText).join('\n');
+    transcriptEl.textContent = entries
+      .map((entry) => `${formatTranscriptEntryMarker(entry)} ${entry.sourceText}`)
+      .join('\n');
     return;
   }
 

@@ -418,6 +418,17 @@ body {
   color: #f1f1f1;
 }
 
+.transcript-entry-marker {
+  color: #9fb6d8;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.transcript-entry-text {
+  white-space: pre-wrap;
+}
+
 .transcript-cell-translation {
   color: #dfe9f7;
 }

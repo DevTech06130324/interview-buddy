@@ -36,6 +36,14 @@ const {
   ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS,
   isSupportedAssistantUrl: isSupportedAssistantTargetUrl
 } = require('./src/assistantTargets');
+const {
+  TRANSCRIPT_SPEAKER_TAG,
+  buildTranscriptPromptText,
+  formatTranscriptElapsedTimestamp,
+  normalizeTranscriptPromptText,
+  normalizeTranscriptSpeakerTag,
+  normalizeTranscriptTimestampLabel
+} = require('./src/transcriptPrompt');
 
 // Constants
 const BORDER_WIDTH = 3;
@@ -207,6 +215,8 @@ let lastClipboardTranscriptText = '';
 let latestTranscriptEntries = [];
 let lastSubmittedTranscriptEntries = [];
 let lastClipboardTranscriptEntries = [];
+let transcriptSessionStartedAtMs = null;
+const transcriptEntryMetadata = new Map();
 let appQuitRequested = false;
 let liveCaptionsExitCleanupComplete = false;
 let liveCaptionsExitCleanupPromise = null;
@@ -2602,7 +2612,69 @@ function getActiveTabWebContents() {
 }
 
 function normalizeTranscriptTextForPrompt(text) {
-  return String(text || '').trim();
+  return normalizeTranscriptPromptText(text);
+}
+
+function normalizeTranscriptEntryTimestampMs(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) {
+      return numericValue;
+    }
+
+    const parsedValue = Date.parse(value);
+    if (Number.isFinite(parsedValue)) {
+      return parsedValue;
+    }
+  }
+
+  return null;
+}
+
+function getIncomingTranscriptEntryTimestampMs(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  return normalizeTranscriptEntryTimestampMs(entry.timestampMs)
+    ?? normalizeTranscriptEntryTimestampMs(entry.receivedAtMs)
+    ?? normalizeTranscriptEntryTimestampMs(entry.createdAtMs)
+    ?? normalizeTranscriptEntryTimestampMs(entry.timestamp);
+}
+
+function getTranscriptEntryMetadata(entryId, entry = {}) {
+  const existing = transcriptEntryMetadata.get(entryId);
+  const incomingTimestampMs = getIncomingTranscriptEntryTimestampMs(entry);
+  const receivedAtMs = existing?.receivedAtMs
+    ?? incomingTimestampMs
+    ?? Date.now();
+
+  if (transcriptSessionStartedAtMs === null) {
+    transcriptSessionStartedAtMs = receivedAtMs;
+  }
+
+  const incomingTimestampLabel = normalizeTranscriptTimestampLabel(entry.timestampLabel);
+  const elapsedMs = Math.max(0, receivedAtMs - transcriptSessionStartedAtMs);
+  const timestampLabel = incomingTimestampLabel
+    || existing?.timestampLabel
+    || formatTranscriptElapsedTimestamp(elapsedMs);
+  const metadata = {
+    receivedAtMs,
+    timestampLabel,
+    speakerTag: TRANSCRIPT_SPEAKER_TAG
+  };
+
+  transcriptEntryMetadata.set(entryId, metadata);
+  return metadata;
+}
+
+function resetTranscriptMetadata() {
+  transcriptSessionStartedAtMs = null;
+  transcriptEntryMetadata.clear();
 }
 
 function normalizeTranscriptEntryForPrompt(entry, index = 0) {
@@ -2615,9 +2687,21 @@ function normalizeTranscriptEntryForPrompt(entry, index = 0) {
     return null;
   }
 
+  const id = typeof entry.id === 'string' && entry.id ? entry.id : `caption-${index}`;
+  const status = ['pending', 'translated', 'error'].includes(entry.status)
+    ? entry.status
+    : 'pending';
+  const metadata = getTranscriptEntryMetadata(id, entry);
+
   return {
-    id: typeof entry.id === 'string' && entry.id ? entry.id : `caption-${index}`,
-    sourceText
+    id,
+    sourceText,
+    translatedText: typeof entry.translatedText === 'string' ? entry.translatedText : '',
+    status,
+    isFinal: Boolean(entry.isFinal),
+    timestampLabel: metadata.timestampLabel,
+    speakerTag: normalizeTranscriptSpeakerTag(metadata.speakerTag),
+    receivedAtMs: metadata.receivedAtMs
   };
 }
 
@@ -2673,7 +2757,19 @@ function getPendingTextFromMatchedEntry(currentSourceText, cursorSourceText) {
   return '';
 }
 
-function getPendingTranscriptTextFromEntryCursor(currentEntries, cursorEntries) {
+function getTranscriptEntryWithSourceText(entry, sourceText) {
+  const normalizedSourceText = normalizeTranscriptTextForPrompt(sourceText);
+  if (!entry || !normalizedSourceText) {
+    return null;
+  }
+
+  return {
+    ...entry,
+    sourceText: normalizedSourceText
+  };
+}
+
+function getPendingTranscriptEntriesFromEntryCursor(currentEntries, cursorEntries) {
   const normalizedCurrentEntries = normalizeTranscriptEntriesForPrompt(currentEntries);
   const normalizedCursorEntries = normalizeTranscriptEntriesForPrompt(cursorEntries);
 
@@ -2682,7 +2778,7 @@ function getPendingTranscriptTextFromEntryCursor(currentEntries, cursorEntries) 
   }
 
   if (normalizedCursorEntries.length === 0) {
-    return getTranscriptTextFromEntries(normalizedCurrentEntries);
+    return normalizedCurrentEntries;
   }
 
   for (let cursorIndex = normalizedCursorEntries.length - 1; cursorIndex >= 0; cursorIndex -= 1) {
@@ -2701,11 +2797,14 @@ function getPendingTranscriptTextFromEntryCursor(currentEntries, cursorEntries) 
     );
 
     if (currentEntryRemainder) {
-      parts.push(currentEntryRemainder);
+      const remainderEntry = getTranscriptEntryWithSourceText(currentEntry, currentEntryRemainder);
+      if (remainderEntry) {
+        parts.push(remainderEntry);
+      }
     }
 
-    parts.push(...normalizedCurrentEntries.slice(currentIndex + 1).map((entry) => entry.sourceText));
-    return parts.join('\n').trim();
+    parts.push(...normalizedCurrentEntries.slice(currentIndex + 1));
+    return parts;
   }
 
   for (let cursorIndex = normalizedCursorEntries.length - 1; cursorIndex >= 0; cursorIndex -= 1) {
@@ -2733,15 +2832,25 @@ function getPendingTranscriptTextFromEntryCursor(currentEntries, cursorEntries) 
       );
 
       if (currentEntryRemainder) {
-        parts.push(currentEntryRemainder);
+        const remainderEntry = getTranscriptEntryWithSourceText(currentEntry, currentEntryRemainder);
+        if (remainderEntry) {
+          parts.push(remainderEntry);
+        }
       }
 
-      parts.push(...normalizedCurrentEntries.slice(currentIndex + 1).map((entry) => entry.sourceText));
-      return parts.join('\n').trim();
+      parts.push(...normalizedCurrentEntries.slice(currentIndex + 1));
+      return parts;
     }
   }
 
   return null;
+}
+
+function getPendingTranscriptTextFromEntryCursor(currentEntries, cursorEntries) {
+  const pendingEntries = getPendingTranscriptEntriesFromEntryCursor(currentEntries, cursorEntries);
+  return pendingEntries === null
+    ? null
+    : getTranscriptTextFromEntries(pendingEntries);
 }
 
 function getLongestTranscriptBoundaryOverlap(previousText, currentText) {
@@ -2854,6 +2963,30 @@ function getPendingTranscriptTextForCursor({
   return getPendingTranscriptText(currentTranscriptText, submittedTranscriptText);
 }
 
+function getPendingTranscriptEntriesForCursor({
+  transcriptText = latestTranscriptText,
+  transcriptEntries = latestTranscriptEntries,
+  cursorText = lastSubmittedTranscriptText,
+  cursorEntries = lastSubmittedTranscriptEntries
+} = {}) {
+  const currentTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
+  const submittedTranscriptText = normalizeTranscriptTextForPrompt(cursorText);
+  const normalizedTranscriptEntries = normalizeTranscriptEntriesForPrompt(transcriptEntries);
+
+  if (!currentTranscriptText) {
+    return [];
+  }
+
+  if (!submittedTranscriptText) {
+    return normalizedTranscriptEntries;
+  }
+
+  return getPendingTranscriptEntriesFromEntryCursor(
+    normalizedTranscriptEntries,
+    cursorEntries
+  );
+}
+
 function markTranscriptSubmitted(transcriptText = latestTranscriptText) {
   lastSubmittedTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
   lastSubmittedTranscriptEntries = normalizeTranscriptEntriesForPrompt(latestTranscriptEntries);
@@ -2879,26 +3012,15 @@ function resetTranscriptCursors() {
   resetClipboardTranscriptCursor();
 }
 
-function getTranscriptPromptText(transcriptText = latestTranscriptText) {
-  const normalizedTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
-  const promptText = String(getSelectedPromptMode()?.suffix || '').trim();
-
-  if (!normalizedTranscriptText) {
-    return promptText;
-  }
-
-  const sections = [
-    'Interviewer said like this',
-    '"""',
-    normalizedTranscriptText,
-    '"""'
-  ];
-
-  if (promptText) {
-    sections.push('', promptText);
-  }
-
-  return sections.join('\n');
+function getTranscriptPromptText(
+  transcriptText = latestTranscriptText,
+  transcriptEntries = latestTranscriptEntries
+) {
+  return buildTranscriptPromptText({
+    transcriptText,
+    transcriptEntries,
+    promptText: String(getSelectedPromptMode()?.suffix || '').trim()
+  });
 }
 
 function sendCaptionUpdate(payload = translationManager.getPayload()) {
@@ -4454,18 +4576,23 @@ async function submitCurrentComposer(webContents, expectedText) {
 
 async function submitTranscriptToAssistant() {
   const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
+  const pendingTranscriptEntries = getPendingTranscriptEntriesForCursor({
+    transcriptText: transcriptSnapshot,
+    transcriptEntries: latestTranscriptEntries,
+    cursorText: lastSubmittedTranscriptText,
+    cursorEntries: lastSubmittedTranscriptEntries
+  });
   const pendingTranscriptText = getPendingTranscriptTextForCursor({
     transcriptText: transcriptSnapshot,
     transcriptEntries: latestTranscriptEntries,
     cursorText: lastSubmittedTranscriptText,
     cursorEntries: lastSubmittedTranscriptEntries
   });
-  if (transcriptSnapshot && !pendingTranscriptText) {
-    console.error('[ERROR] No new transcript is available for Ctrl+Enter');
-    return;
-  }
 
-  const composerText = getTranscriptPromptText(pendingTranscriptText);
+  const composerText = getTranscriptPromptText(
+    pendingTranscriptText,
+    pendingTranscriptEntries || []
+  );
   if (!composerText.trim()) {
     console.error('[ERROR] No new transcript or prompt text is available for Ctrl+Enter');
     return;
@@ -4525,18 +4652,23 @@ async function submitTranscriptToAssistant() {
 
 async function copyTranscriptPromptToClipboard() {
   const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
+  const pendingTranscriptEntries = getPendingTranscriptEntriesForCursor({
+    transcriptText: transcriptSnapshot,
+    transcriptEntries: latestTranscriptEntries,
+    cursorText: lastClipboardTranscriptText,
+    cursorEntries: lastClipboardTranscriptEntries
+  });
   const pendingTranscriptText = getPendingTranscriptTextForCursor({
     transcriptText: transcriptSnapshot,
     transcriptEntries: latestTranscriptEntries,
     cursorText: lastClipboardTranscriptText,
     cursorEntries: lastClipboardTranscriptEntries
   });
-  if (transcriptSnapshot && !pendingTranscriptText) {
-    console.error('[ERROR] No new transcript is available for Alt+Enter');
-    return;
-  }
 
-  const clipboardText = getTranscriptPromptText(pendingTranscriptText);
+  const clipboardText = getTranscriptPromptText(
+    pendingTranscriptText,
+    pendingTranscriptEntries || []
+  );
   if (!clipboardText.trim()) {
     console.error('[ERROR] No new transcript or prompt text is available for Alt+Enter');
     return;
@@ -5061,6 +5193,7 @@ ipcMain.handle('clear-transcript', async (event) => {
   latestTranscriptText = '';
   latestTranscriptEntries = [];
   resetTranscriptCursors();
+  resetTranscriptMetadata();
   sendCaptionUpdate(translationManager.reset(''));
 
   if (captionSync && typeof captionSync.clearTranscript === 'function') {
@@ -5193,10 +5326,13 @@ translationManager.on('updated', (payload) => {
   latestTranscriptText = typeof payload?.fullText === 'string'
     ? normalizeTranscriptTextForPrompt(payload.fullText)
     : getTranscriptTextFromEntries(latestTranscriptEntries);
+  if (!latestTranscriptText && latestTranscriptEntries.length === 0) {
+    resetTranscriptMetadata();
+  }
   sendCaptionUpdate({
     ...payload,
     fullText: latestTranscriptText,
-    entries: payload?.entries || latestTranscriptEntries
+    entries: latestTranscriptEntries
   });
 });
 
@@ -5210,7 +5346,14 @@ if (captionSync) {
     const payload = translationManager.update(liveCaptionText);
     latestTranscriptText = payload.fullText;
     latestTranscriptEntries = normalizeTranscriptEntriesForPrompt(payload.entries);
-    sendCaptionUpdate(payload);
+    if (!latestTranscriptText && latestTranscriptEntries.length === 0) {
+      resetTranscriptMetadata();
+    }
+    sendCaptionUpdate({
+      ...payload,
+      fullText: latestTranscriptText,
+      entries: latestTranscriptEntries
+    });
   });
 
   captionSync.on('error', (error) => {
@@ -5218,6 +5361,7 @@ if (captionSync) {
     latestTranscriptText = '';
     latestTranscriptEntries = [];
     resetTranscriptCursors();
+    resetTranscriptMetadata();
     translationManager.reset('');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('caption-error', error.message || String(error));
