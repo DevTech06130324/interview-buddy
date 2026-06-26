@@ -28,6 +28,14 @@ if (process.platform === 'win32') {
 // Screen capture integration
 const screenCapture = require('./src/screenCapture');
 const translationManager = require('./src/translationManager');
+const {
+  DEFAULT_ASSISTANT_URLS,
+  ASSISTANT_COMPOSER_SELECTORS,
+  ASSISTANT_SEND_BUTTON_SELECTORS,
+  ASSISTANT_FILE_INPUT_SELECTORS,
+  ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS,
+  isSupportedAssistantUrl: isSupportedAssistantTargetUrl
+} = require('./src/assistantTargets');
 
 // Constants
 const BORDER_WIDTH = 3;
@@ -64,18 +72,12 @@ const DEFAULT_SWITCH_ACTIVE_VIEW = 'transcript';
 const DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO = 0.2;
 const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0.3;
 const SWITCH_VIEW_TABS_HEIGHT = 38;
-const DEFAULT_TAB_URLS = [
-  'https://chatgpt.com/',
-  'https://chat.deepseek.com/'
-];
+const DEFAULT_TAB_URLS = DEFAULT_ASSISTANT_URLS;
 const ALLOWED_NAVIGATION_PROTOCOLS = new Set(['http:', 'https:']);
-const SUPPORTED_ASSISTANT_HOSTS = new Set([
-  'chatgpt.com',
-  'chat.openai.com',
-  'chat.deepseek.com',
-  'deepseek.com',
-  'www.deepseek.com'
-]);
+const ASSISTANT_COMPOSER_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_COMPOSER_SELECTORS);
+const ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_SEND_BUTTON_SELECTORS);
+const ASSISTANT_FILE_INPUT_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_FILE_INPUT_SELECTORS);
+const ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS);
 
 function getWindowIconOptions() {
   return fs.existsSync(APP_ICON_PATH) ? { icon: APP_ICON_PATH } : {};
@@ -2906,12 +2908,7 @@ function sendCaptionUpdate(payload = translationManager.getPayload()) {
 }
 
 function isSupportedAssistantUrl(url) {
-  try {
-    const { hostname } = new URL(url);
-    return SUPPORTED_ASSISTANT_HOSTS.has(hostname);
-  } catch (error) {
-    return false;
-  }
+  return isSupportedAssistantTargetUrl(url);
 }
 
 function ensureSupportedAssistantTab(webContents, actionName) {
@@ -2997,14 +2994,7 @@ async function clearCurrentComposer(webContents) {
   try {
     return await webContents.executeJavaScript(`
       (() => {
-        const selectors = [
-          '#prompt-textarea',
-          'textarea[data-id="root"]',
-          'textarea[placeholder*="Message"]',
-          'textarea',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          '[contenteditable="true"]'
-        ];
+        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
 
         for (const selector of selectors) {
           const element = document.querySelector(selector);
@@ -3057,14 +3047,7 @@ async function getCurrentComposerText(webContents) {
   try {
     return await webContents.executeJavaScript(`
       (() => {
-        const selectors = [
-          '#prompt-textarea',
-          'textarea[data-id="root"]',
-          'textarea[placeholder*="Message"]',
-          'textarea',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          '[contenteditable="true"]'
-        ];
+        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
 
         function isUsableComposer(element) {
           if (!element) return false;
@@ -3188,14 +3171,7 @@ async function pasteTextIntoComposer(webContents, text) {
     return await webContents.executeJavaScript(`
       (() => {
         const nextValue = ${JSON.stringify(String(text || ''))};
-        const selectors = [
-          '#prompt-textarea',
-          'textarea[data-id="root"]',
-          'textarea[placeholder*="Message"]',
-          'textarea',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          '[contenteditable="true"]'
-        ];
+        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
 
         for (const selector of selectors) {
           const element = document.querySelector(selector);
@@ -3277,32 +3253,9 @@ async function markImageUploadInput(webContents, markerId) {
     return await webContents.executeJavaScript(`
       (async () => {
         const markerId = ${JSON.stringify(markerId)};
-        const composerSelectors = [
-          '#prompt-textarea',
-          'textarea[data-id="root"]',
-          'textarea[placeholder*="Message"]',
-          'textarea',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          '[contenteditable="true"]'
-        ];
-        const fileInputSelectors = [
-          'input[type="file"][accept*="image"]',
-          'input[type="file"][accept*="png"]',
-          'input[type="file"]'
-        ];
-        const revealButtonSelectors = [
-          'button[aria-label*="Attach"]',
-          'button[aria-label*="attach"]',
-          'button[aria-label*="Upload"]',
-          'button[aria-label*="upload"]',
-          'button[aria-label*="Photo"]',
-          'button[aria-label*="photo"]',
-          'button[aria-label*="Image"]',
-          'button[aria-label*="image"]',
-          '[data-testid*="attach"]',
-          '[data-testid*="upload"]',
-          '[data-testid*="plus"]'
-        ];
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        const fileInputSelectors = ${ASSISTANT_FILE_INPUT_SELECTORS_SCRIPT};
+        const revealButtonSelectors = ${ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS_SCRIPT};
 
         const sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
 
@@ -3525,14 +3478,7 @@ async function getAssistantImageAttachmentState(webContents, markerId = '') {
     return await webContents.executeJavaScript(`
       (() => {
         const markerId = ${JSON.stringify(String(markerId || ''))};
-        const selectors = [
-          '#prompt-textarea',
-          'textarea[data-id="root"]',
-          'textarea[placeholder*="Message"]',
-          'textarea',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          '[contenteditable="true"]'
-        ];
+        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
 
         function getComposer() {
           for (const selector of selectors) {
@@ -3704,14 +3650,7 @@ async function pasteImageIntoComposer(webContents, image) {
     const syntheticHandled = await webContents.executeJavaScript(`
       (() => {
         const imageBase64 = ${JSON.stringify(imageBase64)};
-        const selectors = [
-          '#prompt-textarea',
-          'textarea[data-id="root"]',
-          'textarea[placeholder*="Message"]',
-          'textarea',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          '[contenteditable="true"]'
-        ];
+        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         function buildFileFromBase64() {
           const binary = atob(imageBase64);
           const bytes = new Uint8Array(binary.length);
@@ -3889,23 +3828,8 @@ async function clickComposerSendButton(webContents) {
   try {
     return await webContents.executeJavaScript(`
       (() => {
-        const composerSelectors = [
-          '#prompt-textarea',
-          'textarea[data-id="root"]',
-          'textarea[placeholder*="Message"]',
-          'textarea',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          '[contenteditable="true"]'
-        ];
-
-        const buttonSelectors = [
-          'button[data-testid="send-button"]',
-          'button[aria-label="Send prompt"]',
-          'button[aria-label="Send message"]',
-          'button[aria-label="Send"]',
-          'button[aria-label*="Send"]',
-          'button[type="submit"]'
-        ];
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
 
         function isComposerReady(element) {
           if (!element) return false;
@@ -4016,23 +3940,8 @@ async function waitForSendButtonReady(webContents, attempts = 12, delayMs = 100)
   try {
     const checkScript = `
       (() => {
-        const composerSelectors = [
-          '#prompt-textarea',
-          'textarea[data-id="root"]',
-          'textarea[placeholder*="Message"]',
-          'textarea',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          '[contenteditable="true"]'
-        ];
-
-        const buttonSelectors = [
-          'button[data-testid="send-button"]',
-          'button[aria-label="Send prompt"]',
-          'button[aria-label="Send message"]',
-          'button[aria-label="Send"]',
-          'button[aria-label*="Send"]',
-          'button[type="submit"]'
-        ];
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
 
         function findComposer() {
           for (const selector of composerSelectors) {
@@ -4111,23 +4020,8 @@ async function submitComposerViaDom(webContents) {
   try {
     return await webContents.executeJavaScript(`
       (() => {
-        const composerSelectors = [
-          '#prompt-textarea',
-          'textarea[data-id="root"]',
-          'textarea[placeholder*="Message"]',
-          'textarea',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          '[contenteditable="true"]'
-        ];
-
-        const buttonSelectors = [
-          'button[data-testid="send-button"]',
-          'button[aria-label="Send prompt"]',
-          'button[aria-label="Send message"]',
-          'button[aria-label="Send"]',
-          'button[aria-label*="Send"]',
-          'button[type="submit"]'
-        ];
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
 
         function isButtonReady(button) {
           if (!button) return false;

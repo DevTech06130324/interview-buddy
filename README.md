@@ -14,6 +14,7 @@ On startup it opens:
 
 - `https://chatgpt.com/`
 - `https://chat.deepseek.com/`
+- `https://claude.ai/`
 
 Assistant automation is designed for the active tab when that tab is one of these supported hosts:
 
@@ -22,6 +23,8 @@ Assistant automation is designed for the active tab when that tab is one of thes
 - `chat.deepseek.com`
 - `deepseek.com`
 - `www.deepseek.com`
+- `claude.ai`
+- `www.claude.ai`
 
 ## Features
 
@@ -78,8 +81,8 @@ These work while the app is running.
 - `Ctrl+Shift+Right`: move window right
 - `Alt+Z`: capture a user-selected area on the current display to the clipboard
 - `Alt+M`: mute or unmute all browser tabs
-- `Ctrl+Enter`: inject the transcript and current mode prompt into the active ChatGPT or DeepSeek tab and submit it
-- `Ctrl+Shift+Enter`: capture the current display and attach the screenshot to the active ChatGPT or DeepSeek tab
+- `Ctrl+Enter`: inject the transcript and current mode prompt into the active assistant tab and submit it
+- `Ctrl+Shift+Enter`: capture the current display and attach the screenshot to the active assistant tab
 - each mode can also have its own global hotkey that switches the current mode immediately
 
 ## In-App Shortcuts
@@ -146,4 +149,4 @@ dist-packaged\Notepadd++-win32-x64
 
 - Live Captions integration is Windows-only.
 - If the native addon is missing, the app still runs but transcript syncing will not work.
-- `Ctrl+Enter` and `Ctrl+Shift+Enter` require the active tab to be a supported ChatGPT or DeepSeek page.
+- `Ctrl+Enter` and `Ctrl+Shift+Enter` require the active tab to be a supported ChatGPT, DeepSeek, or Claude page.
