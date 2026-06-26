@@ -376,21 +376,10 @@ body {
 
 .transcript-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-
-.transcript-content.is-translation-hidden .transcript-row {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.transcript-cell-source {
-  border-right: 1px solid #333333;
-}
-
-.transcript-content.is-translation-hidden .transcript-cell-source {
-  border-right: none;
-}
-
+.transcript-content.is-translation-disabled .transcript-cell-translation,
 .transcript-content.is-translation-hidden .transcript-cell-translation {
   display: none;
 }
@@ -430,6 +419,7 @@ body {
 }
 
 .transcript-cell-translation {
+  border-top: 1px solid #252525;
   color: #dfe9f7;
 }
 
@@ -1282,7 +1272,7 @@ body {
 }
 
 .transcript-row,
-.transcript-cell-source {
+.transcript-cell-translation {
   border-color: var(--border);
 }
 

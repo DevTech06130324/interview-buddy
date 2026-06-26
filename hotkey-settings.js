@@ -1,12 +1,33 @@
 const closeHotkeyDialogBtn = document.getElementById('closeHotkeyDialogBtn');
 const hotkeyList = document.getElementById('hotkeyList');
+const translationEnabledToggle = document.getElementById('translationEnabledToggle');
 
 let globalHotkeys = [];
+let translationEnabled = true;
 const globalHotkeyFeedbackTimers = new Map();
 const HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+}
+
+function updateTranslationEnabledToggle(isEnabled) {
+  translationEnabled = isEnabled !== false;
+
+  if (translationEnabledToggle) {
+    translationEnabledToggle.checked = translationEnabled;
+    translationEnabledToggle.disabled = false;
+  }
+}
+
+function applyAppPreferences(preferences = {}) {
+  applyTheme(preferences?.theme);
+
+  if (typeof preferences?.translationEnabled === 'boolean') {
+    updateTranslationEnabledToggle(preferences.translationEnabled);
+  } else {
+    updateTranslationEnabledToggle(true);
+  }
 }
 
 function formatHotkeyPartForDisplay(part) {
@@ -320,14 +341,33 @@ if (closeHotkeyDialogBtn) {
   };
 }
 
+async function applyTranslationEnabled(isEnabled) {
+  const previousEnabled = translationEnabled;
+  updateTranslationEnabledToggle(isEnabled);
+
+  try {
+    const preferences = await window.electronAPI.setTranslationEnabled(Boolean(isEnabled));
+    applyAppPreferences(preferences);
+  } catch (error) {
+    updateTranslationEnabledToggle(previousEnabled);
+    console.error('[ERROR] Failed to update translation setting:', error);
+  }
+}
+
+if (translationEnabledToggle) {
+  translationEnabledToggle.addEventListener('change', (event) => {
+    void applyTranslationEnabled(event.currentTarget.checked);
+  });
+}
+
 window.electronAPI.getAppPreferences().then((preferences) => {
-  applyTheme(preferences?.theme);
+  applyAppPreferences(preferences);
 }).catch((error) => {
   console.error('[ERROR] Failed to load app preferences:', error);
 });
 
 window.electronAPI.onAppPreferencesUpdated((preferences) => {
-  applyTheme(preferences?.theme);
+  applyAppPreferences(preferences);
 });
 
 void refreshGlobalHotkeySettings();

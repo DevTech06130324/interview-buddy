@@ -35,8 +35,10 @@ test('builds conversation prompt with bracketed metadata and prompt suffix', () 
   assert.equal(TRANSCRIPT_PROMPT_HEADER, 'Conversations so far like this');
   assert.equal(text, [
     'Conversations so far like this',
+    '"""',
     '[00:12:34 | Them] Can you walk me through your last project?',
     '[00:13:02 | Them] What tradeoffs did you make?',
+    '"""',
     '',
     'What should I say?'
   ].join('\n'));

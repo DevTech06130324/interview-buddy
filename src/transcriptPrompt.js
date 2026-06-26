@@ -86,7 +86,7 @@ function buildTranscriptPromptText({
 
   const sections = [];
   if (fallbackTranscriptLines.length > 0) {
-    sections.push(TRANSCRIPT_PROMPT_HEADER, ...fallbackTranscriptLines);
+    sections.push(TRANSCRIPT_PROMPT_HEADER, '"""', ...fallbackTranscriptLines, '"""');
   }
 
   if (normalizedPromptText) {

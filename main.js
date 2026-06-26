@@ -77,6 +77,7 @@ const DEFAULT_PROMPT_MODE_NAME = 'Default';
 const DEFAULT_THEME = 'dark';
 const DEFAULT_LAYOUT_MODE = 'vertical';
 const DEFAULT_SWITCH_ACTIVE_VIEW = 'transcript';
+const DEFAULT_TRANSLATION_ENABLED = true;
 const DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO = 0.2;
 const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0.3;
 const SWITCH_VIEW_TABS_HEIGHT = 38;
@@ -195,6 +196,7 @@ let horizontalTranscriptPanelRatio = DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
 let isTranscriptPanelCollapsed = true;
 let isModePanelCollapsed = true;
 let translationsVisible = false;
+let translationEnabled = DEFAULT_TRANSLATION_ENABLED;
 let liveCaptionsWindowVisible = true;
 let captureOverlayState = null;
 const shortcutCooldowns = new Map();
@@ -531,6 +533,7 @@ function getAppPreferenceStateSnapshot() {
     transcriptPanelCollapsed: layoutMode === 'horizontal' ? false : isTranscriptPanelCollapsed,
     modePanelCollapsed: isModePanelCollapsed,
     translationsVisible,
+    translationEnabled,
     liveCaptionsWindowVisible
   };
 }
@@ -593,6 +596,7 @@ function loadAppPreferences() {
     isTranscriptPanelCollapsed = normalizeBoolean(parsed?.transcriptPanelCollapsed, true);
     isModePanelCollapsed = normalizeBoolean(parsed?.modePanelCollapsed, true);
     translationsVisible = normalizeBoolean(parsed?.translationsVisible, false);
+    translationEnabled = normalizeBoolean(parsed?.translationEnabled, DEFAULT_TRANSLATION_ENABLED);
     liveCaptionsWindowVisible = normalizeBoolean(parsed?.liveCaptionsWindowVisible, true);
   } catch (error) {
     currentTheme = DEFAULT_THEME;
@@ -609,8 +613,11 @@ function loadAppPreferences() {
     isTranscriptPanelCollapsed = true;
     isModePanelCollapsed = true;
     translationsVisible = false;
+    translationEnabled = DEFAULT_TRANSLATION_ENABLED;
     liveCaptionsWindowVisible = true;
   }
+
+  translationManager.setTranslationEnabled(translationEnabled);
 
   if (layoutMode === 'horizontal') {
     isTranscriptPanelCollapsed = false;
@@ -719,6 +726,14 @@ function toggleSwitchActiveView() {
 
 function setTranslationVisible(isVisible) {
   translationsVisible = Boolean(isVisible);
+  scheduleAppPreferencesPersist();
+  broadcastAppPreferences();
+  return getAppPreferenceStateSnapshot();
+}
+
+function setTranslationEnabled(isEnabled) {
+  translationEnabled = Boolean(isEnabled);
+  translationManager.setTranslationEnabled(translationEnabled);
   scheduleAppPreferencesPersist();
   broadcastAppPreferences();
   return getAppPreferenceStateSnapshot();
@@ -2688,7 +2703,7 @@ function normalizeTranscriptEntryForPrompt(entry, index = 0) {
   }
 
   const id = typeof entry.id === 'string' && entry.id ? entry.id : `caption-${index}`;
-  const status = ['pending', 'translated', 'error'].includes(entry.status)
+  const status = ['pending', 'translated', 'error', 'disabled'].includes(entry.status)
     ? entry.status
     : 'pending';
   const metadata = getTranscriptEntryMetadata(id, entry);
@@ -5110,6 +5125,14 @@ ipcMain.handle('set-translation-visible', (event, isVisible) => {
   }
 
   return setTranslationVisible(isVisible);
+});
+
+ipcMain.handle('set-translation-enabled', (event, isEnabled) => {
+  if (!isMainOrHotkeySettingsSender(event)) {
+    return rejectUnauthorizedIpc('set-translation-enabled', getAppPreferenceStateSnapshot());
+  }
+
+  return setTranslationEnabled(isEnabled);
 });
 
 ipcMain.handle('add-prompt-mode', (event) => {

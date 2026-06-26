@@ -43,6 +43,7 @@ let isUserScrolling = false;
 let scrollTimeout = null;
 let liveCaptionsWindowVisible = true;
 let translationsVisible = false;
+let translationEnabled = true;
 let isTranscriptPanelCollapsed = true;
 let currentTheme = 'dark';
 let currentLayoutMode = 'vertical';
@@ -284,7 +285,7 @@ function normalizeTranscriptEntries(data) {
     return data.entries
       .filter((entry) => entry && typeof entry.sourceText === 'string' && entry.sourceText.trim())
       .map((entry, index) => {
-        const status = ['pending', 'translated', 'error'].includes(entry.status)
+        const status = ['pending', 'translated', 'error', 'disabled'].includes(entry.status)
           ? entry.status
           : 'pending';
 
@@ -390,7 +391,10 @@ function updateTranscriptRow(row, entry) {
 
   translatedCell.className = 'transcript-cell transcript-cell-translation';
 
-  if (entry.status === 'pending' && !entry.translatedText) {
+  if (entry.status === 'disabled') {
+    translatedCell.classList.add('is-placeholder');
+    translatedCell.textContent = '';
+  } else if (entry.status === 'pending' && !entry.translatedText) {
     translatedCell.classList.add('is-placeholder');
     translatedCell.textContent = 'Translating...';
   } else {
@@ -455,6 +459,14 @@ function setTranslationVisibility(isVisible) {
       translationsVisible ? 'Hide translations' : 'Show translations'
     );
     toggleTranslationBtn.setAttribute('aria-pressed', String(!translationsVisible));
+  }
+}
+
+function setTranslationEnabled(isEnabled) {
+  translationEnabled = Boolean(isEnabled);
+
+  if (transcriptEl) {
+    transcriptEl.classList.toggle('is-translation-disabled', !translationEnabled);
   }
 }
 
@@ -561,6 +573,10 @@ function applyAppPreferences(preferences = {}) {
 
   if (typeof preferences.translationsVisible === 'boolean') {
     setTranslationVisibility(preferences.translationsVisible);
+  }
+
+  if (typeof preferences.translationEnabled === 'boolean') {
+    setTranslationEnabled(preferences.translationEnabled);
   }
 
   if (typeof preferences.liveCaptionsWindowVisible === 'boolean') {

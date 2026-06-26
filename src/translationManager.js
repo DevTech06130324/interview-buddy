@@ -235,11 +235,13 @@ class TranslationManager extends EventEmitter {
     this.translationCache = new Map();
     this.translationQueue = [];
     this.activeTranslationCount = 0;
+    this.translationEnabled = true;
   }
 
   getPayload() {
     return {
       fullText: this.getSessionTranscriptText(),
+      translationEnabled: this.translationEnabled,
       entries: this.entries.map((entry) => ({
         id: entry.id,
         sourceText: entry.sourceText,
@@ -296,13 +298,46 @@ class TranslationManager extends EventEmitter {
       panelFullTextBefore: this.getSessionTranscriptText()
     });
     this.reconcileEntries(segments);
-    this.queueTranslations();
+    if (this.translationEnabled) {
+      this.queueTranslations();
+    } else {
+      this.markEntriesTranslationDisabled();
+    }
     logTranscriptEvent('translation-manager-update-completed', {
       sessionGeneration: this.sessionGeneration,
       entriesAfter: getEntrySnapshots(this.entries),
       panelFullTextAfter: this.getSessionTranscriptText()
     });
     return this.getPayload();
+  }
+
+  setTranslationEnabled(isEnabled) {
+    const nextEnabled = Boolean(isEnabled);
+    if (this.translationEnabled === nextEnabled) {
+      return this.getPayload();
+    }
+
+    this.translationEnabled = nextEnabled;
+    if (!this.translationEnabled) {
+      this.markEntriesTranslationDisabled();
+    } else {
+      for (const entry of this.entries) {
+        if (!entry?.sourceText || entry.status !== 'disabled') {
+          continue;
+        }
+
+        entry.translatedText = '';
+        entry.status = 'pending';
+        entry.lastQueuedText = '';
+        entry.queuedTranslationText = '';
+      }
+
+      this.queueTranslations();
+    }
+
+    const payload = this.getPayload();
+    this.emit('updated', payload);
+    return payload;
   }
 
   getSessionTranscriptText() {
@@ -314,7 +349,7 @@ class TranslationManager extends EventEmitter {
       id: `caption-${this.sessionGeneration}-${this.entryCounter++}`,
       sourceText: segment.sourceText,
       translatedText: previousPartial?.translatedText || '',
-      status: 'pending',
+      status: this.translationEnabled ? 'pending' : 'disabled',
       isFinal: segment.isFinal,
       version: (previousPartial?.version || 0) + 1,
       lastQueuedText: '',
@@ -328,7 +363,7 @@ class TranslationManager extends EventEmitter {
     this.abortEntryTranslation(entry);
     entry.sourceText = segment.sourceText;
     entry.isFinal = segment.isFinal;
-    entry.status = 'pending';
+    entry.status = this.translationEnabled ? 'pending' : 'disabled';
     entry.version += 1;
     entry.lastQueuedText = '';
     entry.queuedTranslationText = '';
@@ -624,6 +659,11 @@ class TranslationManager extends EventEmitter {
   queueTranslations() {
     this.clearPartialIdleTimer();
 
+    if (!this.translationEnabled) {
+      this.markEntriesTranslationDisabled();
+      return;
+    }
+
     for (const entry of this.entries) {
       if (entry.isFinal) {
         this.queueEntryTranslation(entry);
@@ -657,6 +697,7 @@ class TranslationManager extends EventEmitter {
       const latestPartialEntry = this.entries[this.entries.length - 1];
       if (
         latestPartialEntry
+        && this.translationEnabled
         && !latestPartialEntry.isFinal
         && getByteLength(latestPartialEntry.sourceText) >= PARTIAL_MIN_LENGTH
       ) {
@@ -670,6 +711,16 @@ class TranslationManager extends EventEmitter {
   }
 
   queueEntryTranslation(entry) {
+    if (!this.translationEnabled) {
+      this.markEntryTranslationDisabled(entry);
+      logTranscriptEvent('translation-queue-skipped', {
+        sessionGeneration: this.sessionGeneration,
+        reason: 'translation-disabled',
+        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
+      });
+      return;
+    }
+
     const hasActiveRequest = Boolean(entry?.controller && !entry.controller.signal.aborted);
     const hasQueuedRequest = Boolean(entry?.queuedTranslationText && entry.queuedTranslationText === entry.sourceText);
     const hasUsableTranslation = Boolean(getUsableTranslationText(entry?.translatedText));
@@ -741,6 +792,11 @@ class TranslationManager extends EventEmitter {
   }
 
   processTranslationQueue() {
+    if (!this.translationEnabled) {
+      this.translationQueue = [];
+      return;
+    }
+
     while (
       this.activeTranslationCount < TRANSLATION_MAX_CONCURRENT_REQUESTS
       && this.translationQueue.length > 0
@@ -838,7 +894,8 @@ class TranslationManager extends EventEmitter {
   }
 
   isCurrentTranslation(entry, entryVersion, sessionGeneration) {
-    return this.sessionGeneration === sessionGeneration
+    return this.translationEnabled
+      && this.sessionGeneration === sessionGeneration
       && this.entries.includes(entry)
       && entry.version === entryVersion;
   }
@@ -862,6 +919,27 @@ class TranslationManager extends EventEmitter {
     if (this.partialIdleTimer) {
       clearTimeout(this.partialIdleTimer);
       this.partialIdleTimer = null;
+    }
+  }
+
+  markEntryTranslationDisabled(entry) {
+    if (!entry) {
+      return;
+    }
+
+    this.abortEntryTranslation(entry);
+    entry.translatedText = '';
+    entry.status = 'disabled';
+    entry.lastQueuedText = '';
+    entry.queuedTranslationText = '';
+  }
+
+  markEntriesTranslationDisabled() {
+    this.clearPartialIdleTimer();
+    this.translationQueue = [];
+
+    for (const entry of this.entries) {
+      this.markEntryTranslationDisabled(entry);
     }
   }
 

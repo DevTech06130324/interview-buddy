@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setSwitchActiveView: (view) => ipcRenderer.invoke('set-switch-active-view', view),
   toggleSwitchActiveView: () => ipcRenderer.invoke('toggle-switch-active-view'),
   setTranslationVisible: (isVisible) => ipcRenderer.invoke('set-translation-visible', isVisible),
+  setTranslationEnabled: (isEnabled) => ipcRenderer.invoke('set-translation-enabled', isEnabled),
   addPromptMode: () => ipcRenderer.invoke('add-prompt-mode'),
   selectPromptMode: (modeId) => ipcRenderer.invoke('select-prompt-mode', modeId),
   deletePromptMode: (modeId) => ipcRenderer.invoke('delete-prompt-mode', modeId),

@@ -122,6 +122,84 @@ body {
   pointer-events: none;
 }
 
+.settings-section {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--dialog-bg);
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+}
+
+.setting-name {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.setting-description {
+  margin-top: 3px;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.setting-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+}
+
+.setting-switch-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.setting-switch-track {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--control-bg);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.setting-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: background 0.15s, transform 0.15s;
+}
+
+.setting-switch-input:checked + .setting-switch-track {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 28%, var(--control-bg));
+}
+
+.setting-switch-input:checked + .setting-switch-track .setting-switch-thumb {
+  background: var(--text);
+  transform: translateX(16px);
+}
+
+.setting-switch-input:focus-visible + .setting-switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .hotkey-list {
   flex: 1 1 auto;
   overflow-y: auto;
