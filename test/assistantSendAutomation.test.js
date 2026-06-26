@@ -34,10 +34,19 @@ test('current composer submit waits for the send button before clicking it', () 
   assert.ok(waitIndex < clickIndex);
 });
 
-test('primary send click uses Electron input events at the visible button center', () => {
+test('primary send click uses debugger mouse events without focusing the app window', () => {
   const source = getFunctionSource('clickComposerSendButton');
 
   assert.match(source, /getBoundingClientRect\(\)/);
-  assert.match(source, /sendInputEvent\(\{\s*type: 'mouseDown'/);
-  assert.match(source, /sendInputEvent\(\{\s*type: 'mouseUp'/);
+  assert.match(source, /dispatchMouseClickWithoutWindowFocus\(webContents, clickTarget\)/);
+  assert.doesNotMatch(source, /webContents\.focus\(/);
+  assert.doesNotMatch(source, /sendInputEvent/);
+});
+
+test('assistant page mouse clicks are dispatched without activating the window', () => {
+  const source = getFunctionSource('dispatchMouseClickWithoutWindowFocus');
+
+  assert.match(source, /Input\.dispatchMouseEvent/);
+  assert.doesNotMatch(source, /webContents\.focus\(/);
+  assert.doesNotMatch(source, /sendInputEvent/);
 });

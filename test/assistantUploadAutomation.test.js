@@ -32,6 +32,7 @@ test('screenshot upload gives Claude a real composer focus before attaching file
   assert.ok(focusIndex < markerIndex);
 
   const focusSource = getFunctionSource('focusAssistantComposerForUpload');
-  assert.match(focusSource, /sendInputEvent\(\{\s*type: 'mouseDown'/);
-  assert.match(focusSource, /sendInputEvent\(\{\s*type: 'mouseUp'/);
+  assert.match(focusSource, /dispatchMouseClickWithoutWindowFocus\(webContents, clickTarget\)/);
+  assert.doesNotMatch(focusSource, /webContents\.focus\(/);
+  assert.doesNotMatch(focusSource, /sendInputEvent/);
 });

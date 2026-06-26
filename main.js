@@ -3248,6 +3248,63 @@ function clearTemporaryUploadCleanupTimers() {
   temporaryUploadCleanupTimers.clear();
 }
 
+async function dispatchMouseClickWithoutWindowFocus(webContents, clickTarget) {
+  const x = Math.round(Number(clickTarget?.x));
+  const y = Math.round(Number(clickTarget?.y));
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return false;
+  }
+
+  const debuggerSession = webContents?.debugger;
+  if (!debuggerSession) {
+    return false;
+  }
+
+  let attachedHere = false;
+
+  try {
+    if (!debuggerSession.isAttached()) {
+      debuggerSession.attach('1.3');
+      attachedHere = true;
+    }
+
+    await debuggerSession.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x,
+      y
+    });
+    await debuggerSession.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1
+    });
+    await sleep(20);
+    await debuggerSession.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1
+    });
+
+    return true;
+  } catch (error) {
+    console.error('[ERROR] Failed to dispatch assistant mouse click without focusing the app:', error);
+    return false;
+  } finally {
+    if (attachedHere && debuggerSession.isAttached()) {
+      try {
+        debuggerSession.detach();
+      } catch (error) {
+        // Ignore detach failures.
+      }
+    }
+  }
+}
+
 async function focusAssistantComposerForUpload(webContents) {
   try {
     const clickTarget = await webContents.executeJavaScript(`
@@ -3330,26 +3387,11 @@ async function focusAssistantComposerForUpload(webContents) {
       })();
     `, true);
 
-    if (
-      !clickTarget
-      || !Number.isFinite(clickTarget.x)
-      || !Number.isFinite(clickTarget.y)
-      || typeof webContents.sendInputEvent !== 'function'
-    ) {
+    const clicked = await dispatchMouseClickWithoutWindowFocus(webContents, clickTarget);
+    if (!clicked) {
       return false;
     }
 
-    const x = Math.round(clickTarget.x);
-    const y = Math.round(clickTarget.y);
-
-    if (typeof webContents.focus === 'function') {
-      webContents.focus();
-    }
-
-    webContents.sendInputEvent({ type: 'mouseMove', x, y });
-    webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
-    await sleep(20);
-    webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
     await sleep(100);
     return true;
   } catch (error) {
@@ -4113,27 +4155,7 @@ async function clickComposerSendButton(webContents) {
       })();
     `, true);
 
-    if (
-      !clickTarget
-      || !Number.isFinite(clickTarget.x)
-      || !Number.isFinite(clickTarget.y)
-      || typeof webContents.sendInputEvent !== 'function'
-    ) {
-      return false;
-    }
-
-    const x = Math.round(clickTarget.x);
-    const y = Math.round(clickTarget.y);
-
-    if (typeof webContents.focus === 'function') {
-      webContents.focus();
-    }
-
-    webContents.sendInputEvent({ type: 'mouseMove', x, y });
-    webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
-    await sleep(20);
-    webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
-    return true;
+    return await dispatchMouseClickWithoutWindowFocus(webContents, clickTarget);
   } catch (error) {
     console.error('[ERROR] Failed to click assistant send button:', error);
     return false;
