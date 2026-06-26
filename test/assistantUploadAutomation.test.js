@@ -21,3 +21,17 @@ test('screenshot upload marker search does not require the assistant input to be
   assert.match(source, /function isUsableComposer/);
   assert.doesNotMatch(source, /if \(!composer\) \{\s*return false;\s*\}/);
 });
+
+test('screenshot upload gives Claude a real composer focus before attaching files', () => {
+  const pasteSource = getFunctionSource('pasteImageIntoComposer');
+  const focusIndex = pasteSource.indexOf('await focusAssistantComposerForUpload(webContents)');
+  const markerIndex = pasteSource.indexOf('markImageUploadInput(webContents, uploadMarkerId)');
+
+  assert.notEqual(focusIndex, -1);
+  assert.notEqual(markerIndex, -1);
+  assert.ok(focusIndex < markerIndex);
+
+  const focusSource = getFunctionSource('focusAssistantComposerForUpload');
+  assert.match(focusSource, /sendInputEvent\(\{\s*type: 'mouseDown'/);
+  assert.match(focusSource, /sendInputEvent\(\{\s*type: 'mouseUp'/);
+});

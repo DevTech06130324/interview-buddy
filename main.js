@@ -3248,6 +3248,116 @@ function clearTemporaryUploadCleanupTimers() {
   temporaryUploadCleanupTimers.clear();
 }
 
+async function focusAssistantComposerForUpload(webContents) {
+  try {
+    const clickTarget = await webContents.executeJavaScript(`
+      (() => {
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+
+        function isVisibleElement(element) {
+          if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return false;
+          }
+
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          const isHidden = style.display === 'none'
+            || style.visibility === 'hidden'
+            || style.opacity === '0'
+            || element.getAttribute('aria-hidden') === 'true'
+            || rect.width === 0
+            || rect.height === 0;
+
+          return !isHidden;
+        }
+
+        function isUsableComposer(element) {
+          if (!element) return false;
+          if ('disabled' in element && element.disabled) return false;
+          if ('readOnly' in element && element.readOnly) return false;
+          return isVisibleElement(element);
+        }
+
+        function elementMatchesComposer(element) {
+          return Boolean(
+            element
+            && typeof element.matches === 'function'
+            && composerSelectors.some((selector) => element.matches(selector))
+          );
+        }
+
+        function findComposer() {
+          const activeElement = document.activeElement;
+          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
+            return activeElement;
+          }
+
+          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
+          if (isUsableComposer(activeComposer)) {
+            return activeComposer;
+          }
+
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
+            }
+          }
+
+          return null;
+        }
+
+        function getComposerClickPoint(composer) {
+          if (!isUsableComposer(composer)) {
+            return null;
+          }
+
+          composer.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+          const rect = composer.getBoundingClientRect();
+          const x = Math.min(Math.max(rect.left + Math.min(rect.width / 2, 24), 0), window.innerWidth - 1);
+          const y = Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1);
+
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return null;
+          }
+
+          return { x, y };
+        }
+
+        return getComposerClickPoint(findComposer());
+      })();
+    `, true);
+
+    if (
+      !clickTarget
+      || !Number.isFinite(clickTarget.x)
+      || !Number.isFinite(clickTarget.y)
+      || typeof webContents.sendInputEvent !== 'function'
+    ) {
+      return false;
+    }
+
+    const x = Math.round(clickTarget.x);
+    const y = Math.round(clickTarget.y);
+
+    if (typeof webContents.focus === 'function') {
+      webContents.focus();
+    }
+
+    webContents.sendInputEvent({ type: 'mouseMove', x, y });
+    webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+    await sleep(20);
+    webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    await sleep(100);
+    return true;
+  } catch (error) {
+    console.error('[ERROR] Failed to focus assistant composer before image upload:', error);
+    return false;
+  }
+}
+
 async function markImageUploadInput(webContents, markerId) {
   try {
     return await webContents.executeJavaScript(`
@@ -3677,6 +3787,8 @@ async function pasteImageIntoComposer(webContents, image) {
   try {
     await fs.promises.writeFile(temporaryUploadPath, imagePng);
     scheduleTemporaryFileCleanup(temporaryUploadPath);
+
+    await focusAssistantComposerForUpload(webContents);
 
     const markedInput = await markImageUploadInput(webContents, uploadMarkerId);
     if (markedInput) {
