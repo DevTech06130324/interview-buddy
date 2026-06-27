@@ -32,6 +32,7 @@ const ASSISTANT_COMPOSER_SELECTORS = [
 
 const ASSISTANT_SEND_BUTTON_SELECTORS = [
   'button[data-testid="send-button"]',
+  'button[data-testid="composer-submit-button"]',
   'button[aria-label="Send prompt"]',
   'button[aria-label="Send message"]',
   'button[aria-label="Send"]',
@@ -39,8 +40,12 @@ const ASSISTANT_SEND_BUTTON_SELECTORS = [
   'button[aria-label*="Send Message"]',
   'button[aria-label*="send message"]',
   'button[aria-label*="Send"]',
+  'button[aria-label*="Submit"]',
+  'button[aria-label*="submit"]',
   'button[data-testid*="send"]',
   '[data-testid*="send"] button',
+  'button[data-testid*="submit"]',
+  '[data-testid*="submit"] button',
   'button[type="submit"]'
 ];
 

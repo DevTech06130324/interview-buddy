@@ -32,6 +32,16 @@ test('assistant DOM selectors include Claude composer and attachment controls', 
   assert.ok(ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS.includes('button[aria-label*="Attach files"]'));
 });
 
+test('assistant send selectors include current ChatGPT composer submit controls', () => {
+  const exactComposerSubmitIndex = ASSISTANT_SEND_BUTTON_SELECTORS.indexOf('button[data-testid="composer-submit-button"]');
+  const genericSubmitIndex = ASSISTANT_SEND_BUTTON_SELECTORS.indexOf('button[type="submit"]');
+
+  assert.notEqual(exactComposerSubmitIndex, -1);
+  assert.ok(exactComposerSubmitIndex < genericSubmitIndex);
+  assert.ok(ASSISTANT_SEND_BUTTON_SELECTORS.includes('button[aria-label*="Submit"]'));
+  assert.ok(ASSISTANT_SEND_BUTTON_SELECTORS.includes('button[data-testid*="submit"]'));
+});
+
 test('Claude support copy is current in errors and documentation', () => {
   const main = readRepoFile('main.js');
   const readme = readRepoFile('README.md');
