@@ -15,6 +15,22 @@ const SUPPORTED_ASSISTANT_HOSTS = new Set([
 ]);
 
 const ASSISTANT_COMPOSER_SELECTORS = [
+  '#prompt-textarea',
+  'textarea[placeholder*="Ask anything" i]',
+  'input[placeholder*="Ask anything" i]',
+  '[contenteditable="true"][aria-label*="Ask anything" i]',
+  '[contenteditable="true"][data-placeholder*="Ask anything" i]',
+  '[contenteditable="true"][placeholder*="Ask anything" i]',
+  'textarea[placeholder*="Message DeepSeek" i]',
+  'input[placeholder*="Message DeepSeek" i]',
+  '[contenteditable="true"][aria-label*="Message DeepSeek" i]',
+  '[contenteditable="true"][data-placeholder*="Message DeepSeek" i]',
+  '[contenteditable="true"][placeholder*="Message DeepSeek" i]',
+  'textarea[placeholder*="Write a message" i]',
+  'input[placeholder*="Write a message" i]',
+  '[contenteditable="true"][aria-label*="Write a message" i]',
+  '[contenteditable="true"][data-placeholder*="Write a message" i]',
+  '[contenteditable="true"][placeholder*="Write a message" i]',
   '[contenteditable="true"][aria-label*="Claude"]',
   '[contenteditable="true"][aria-label*="Message Claude"]',
   '[contenteditable="true"][aria-label*="Talk to Claude"]',
@@ -22,9 +38,8 @@ const ASSISTANT_COMPOSER_SELECTORS = [
   '[data-testid="chat-input"] textarea',
   '[data-testid="chat-input"] [contenteditable="true"]',
   '.ProseMirror[contenteditable="true"]',
-  '#prompt-textarea',
   'textarea[data-id="root"]',
-  'textarea[placeholder*="Message"]',
+  'textarea[placeholder*="Message" i]',
   'textarea',
   '[contenteditable="true"][data-lexical-editor="true"]',
   '[contenteditable="true"]'

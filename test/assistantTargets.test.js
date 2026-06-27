@@ -32,6 +32,33 @@ test('assistant DOM selectors include Claude composer and attachment controls', 
   assert.ok(ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS.includes('button[aria-label*="Attach files"]'));
 });
 
+test('assistant composer selectors prefer current provider placeholders before generic editables', () => {
+  const genericTextareaIndex = ASSISTANT_COMPOSER_SELECTORS.indexOf('textarea');
+  const genericContentEditableIndex = ASSISTANT_COMPOSER_SELECTORS.indexOf('[contenteditable="true"]');
+  const placeholderSelectors = [
+    'textarea[placeholder*="Ask anything" i]',
+    '[contenteditable="true"][data-placeholder*="Ask anything" i]',
+    'textarea[placeholder*="Message DeepSeek" i]',
+    '[contenteditable="true"][data-placeholder*="Message DeepSeek" i]',
+    'textarea[placeholder*="Write a message" i]',
+    '[contenteditable="true"][data-placeholder*="Write a message" i]'
+  ];
+
+  assert.notEqual(genericTextareaIndex, -1);
+  assert.notEqual(genericContentEditableIndex, -1);
+
+  for (const selector of placeholderSelectors) {
+    const selectorIndex = ASSISTANT_COMPOSER_SELECTORS.indexOf(selector);
+
+    assert.notEqual(selectorIndex, -1, `Expected composer selector: ${selector}`);
+    assert.ok(selectorIndex < genericTextareaIndex, `${selector} should be checked before textarea`);
+    assert.ok(
+      selectorIndex < genericContentEditableIndex,
+      `${selector} should be checked before generic contenteditable`
+    );
+  }
+});
+
 test('assistant send selectors include current ChatGPT composer submit controls', () => {
   const exactComposerSubmitIndex = ASSISTANT_SEND_BUTTON_SELECTORS.indexOf('button[data-testid="composer-submit-button"]');
   const genericSubmitIndex = ASSISTANT_SEND_BUTTON_SELECTORS.indexOf('button[type="submit"]');

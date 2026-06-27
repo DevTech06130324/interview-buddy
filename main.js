@@ -3131,44 +3131,96 @@ async function clearCurrentComposer(webContents) {
   try {
     return await webContents.executeJavaScript(`
       (() => {
-        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
 
-        for (const selector of selectors) {
-          const element = document.querySelector(selector);
-          if (!element) continue;
-          if ('disabled' in element && element.disabled) continue;
-          if ('readOnly' in element && element.readOnly) continue;
+        function isVisibleElement(element) {
+          if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return false;
+          }
 
-          const inputType = 'deleteContentBackward';
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          const isHidden = style.display === 'none'
+            || style.visibility === 'hidden'
+            || style.opacity === '0'
+            || element.getAttribute('aria-hidden') === 'true'
+            || rect.width === 0
+            || rect.height === 0;
 
-          if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
-            const prototype = Object.getPrototypeOf(element);
-            const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
-            if (descriptor && typeof descriptor.set === 'function') {
-              descriptor.set.call(element, '');
-            } else {
-              element.value = '';
+          return !isHidden;
+        }
+
+        function isUsableComposer(element) {
+          if (!element) return false;
+          if ('disabled' in element && element.disabled) return false;
+          if ('readOnly' in element && element.readOnly) return false;
+          return isVisibleElement(element);
+        }
+
+        function elementMatchesComposer(element) {
+          return Boolean(
+            element
+            && typeof element.matches === 'function'
+            && composerSelectors.some((selector) => element.matches(selector))
+          );
+        }
+
+        function findComposer() {
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
             }
-
-            element.dispatchEvent(new InputEvent('input', {
-              bubbles: true,
-              data: null,
-              inputType
-            }));
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
           }
 
-          if (element.isContentEditable) {
-            element.textContent = '';
-
-            element.dispatchEvent(new InputEvent('input', {
-              bubbles: true,
-              data: null,
-              inputType
-            }));
-            return true;
+          const activeElement = document.activeElement;
+          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
+            return activeElement;
           }
+
+          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
+          if (isUsableComposer(activeComposer)) {
+            return activeComposer;
+          }
+
+          return null;
+        }
+
+        const element = findComposer();
+        if (!element) {
+          return false;
+        }
+
+        const inputType = 'deleteContentBackward';
+
+        if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+          const prototype = Object.getPrototypeOf(element);
+          const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+          if (descriptor && typeof descriptor.set === 'function') {
+            descriptor.set.call(element, '');
+          } else {
+            element.value = '';
+          }
+
+          element.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            data: null,
+            inputType
+          }));
+          element.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+
+        if (element.isContentEditable) {
+          element.textContent = '';
+
+          element.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            data: null,
+            inputType
+          }));
+          return true;
         }
 
         return false;
@@ -3184,13 +3236,30 @@ async function getCurrentComposerText(webContents) {
   try {
     return await webContents.executeJavaScript(`
       (() => {
-        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+
+        function isVisibleElement(element) {
+          if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return false;
+          }
+
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          const isHidden = style.display === 'none'
+            || style.visibility === 'hidden'
+            || style.opacity === '0'
+            || element.getAttribute('aria-hidden') === 'true'
+            || rect.width === 0
+            || rect.height === 0;
+
+          return !isHidden;
+        }
 
         function isUsableComposer(element) {
           if (!element) return false;
           if ('disabled' in element && element.disabled) return false;
           if ('readOnly' in element && element.readOnly) return false;
-          return true;
+          return isVisibleElement(element);
         }
 
         function readComposerText(element) {
@@ -3207,22 +3276,39 @@ async function getCurrentComposerText(webContents) {
           return '';
         }
 
-        const activeElement = document.activeElement;
-        if (
-          activeElement
-          && typeof activeElement.matches === 'function'
-          && selectors.some((selector) => activeElement.matches(selector))
-          && isUsableComposer(activeElement)
-        ) {
-          return readComposerText(activeElement);
+        function elementMatchesComposer(element) {
+          return Boolean(
+            element
+            && typeof element.matches === 'function'
+            && composerSelectors.some((selector) => element.matches(selector))
+          );
         }
 
-        for (const selector of selectors) {
-          const element = document.querySelector(selector);
-          if (!element) continue;
-          if (!isUsableComposer(element)) continue;
+        function findComposer() {
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
+            }
+          }
 
-          return readComposerText(element);
+          const activeElement = document.activeElement;
+          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
+            return activeElement;
+          }
+
+          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
+          if (isUsableComposer(activeComposer)) {
+            return activeComposer;
+          }
+
+          return null;
+        }
+
+        const composer = findComposer();
+        if (composer) {
+          return readComposerText(composer);
         }
 
         return '';
@@ -3308,43 +3394,95 @@ async function pasteTextIntoComposer(webContents, text) {
     return await webContents.executeJavaScript(`
       (() => {
         const nextValue = ${JSON.stringify(String(text || ''))};
-        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
 
-        for (const selector of selectors) {
-          const element = document.querySelector(selector);
-          if (!element) continue;
-          if ('disabled' in element && element.disabled) continue;
-          if ('readOnly' in element && element.readOnly) continue;
+        function isVisibleElement(element) {
+          if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return false;
+          }
 
-          const inputType = nextValue ? 'insertText' : 'deleteContentBackward';
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          const isHidden = style.display === 'none'
+            || style.visibility === 'hidden'
+            || style.opacity === '0'
+            || element.getAttribute('aria-hidden') === 'true'
+            || rect.width === 0
+            || rect.height === 0;
 
-          if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
-            const prototype = Object.getPrototypeOf(element);
-            const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
-            if (descriptor && typeof descriptor.set === 'function') {
-              descriptor.set.call(element, nextValue);
-            } else {
-              element.value = nextValue;
+          return !isHidden;
+        }
+
+        function isUsableComposer(element) {
+          if (!element) return false;
+          if ('disabled' in element && element.disabled) return false;
+          if ('readOnly' in element && element.readOnly) return false;
+          return isVisibleElement(element);
+        }
+
+        function elementMatchesComposer(element) {
+          return Boolean(
+            element
+            && typeof element.matches === 'function'
+            && composerSelectors.some((selector) => element.matches(selector))
+          );
+        }
+
+        function findComposer() {
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
             }
-
-            element.dispatchEvent(new InputEvent('input', {
-              bubbles: true,
-              data: nextValue || null,
-              inputType
-            }));
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
           }
 
-          if (element.isContentEditable) {
-            element.textContent = nextValue;
-            element.dispatchEvent(new InputEvent('input', {
-              bubbles: true,
-              data: nextValue || null,
-              inputType
-            }));
-            return true;
+          const activeElement = document.activeElement;
+          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
+            return activeElement;
           }
+
+          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
+          if (isUsableComposer(activeComposer)) {
+            return activeComposer;
+          }
+
+          return null;
+        }
+
+        const element = findComposer();
+        if (!element) {
+          return false;
+        }
+
+        const inputType = nextValue ? 'insertText' : 'deleteContentBackward';
+
+        if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+          const prototype = Object.getPrototypeOf(element);
+          const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+          if (descriptor && typeof descriptor.set === 'function') {
+            descriptor.set.call(element, nextValue);
+          } else {
+            element.value = nextValue;
+          }
+
+          element.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            data: nextValue || null,
+            inputType
+          }));
+          element.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+
+        if (element.isContentEditable) {
+          element.textContent = nextValue;
+          element.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            data: nextValue || null,
+            inputType
+          }));
+          return true;
         }
 
         return false;
@@ -3481,6 +3619,14 @@ async function focusAssistantComposerForUpload(webContents) {
         }
 
         function findComposer() {
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
+            }
+          }
+
           const activeElement = document.activeElement;
           if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
             return activeElement;
@@ -3489,14 +3635,6 @@ async function focusAssistantComposerForUpload(webContents) {
           const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
           if (isUsableComposer(activeComposer)) {
             return activeComposer;
-          }
-
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
           }
 
           return null;
@@ -3583,6 +3721,14 @@ async function markImageUploadInput(webContents, markerId) {
         }
 
         function findComposer() {
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
+            }
+          }
+
           const activeElement = document.activeElement;
           if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
             return activeElement;
@@ -3591,14 +3737,6 @@ async function markImageUploadInput(webContents, markerId) {
           const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
           if (isUsableComposer(activeComposer)) {
             return activeComposer;
-          }
-
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
           }
 
           return null;
@@ -4206,6 +4344,14 @@ async function clickComposerSendButton(webContents) {
         }
 
         function findComposer() {
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
+            }
+          }
+
           const activeElement = document.activeElement;
           if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
             return activeElement;
@@ -4214,14 +4360,6 @@ async function clickComposerSendButton(webContents) {
           const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
           if (isUsableComposer(activeComposer)) {
             return activeComposer;
-          }
-
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
           }
 
           return null;
@@ -4419,6 +4557,14 @@ async function submitComposerViaDom(webContents) {
         }
 
         function findComposer() {
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
+            }
+          }
+
           const activeElement = document.activeElement;
           if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
             return activeElement;
@@ -4427,14 +4573,6 @@ async function submitComposerViaDom(webContents) {
           const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
           if (isUsableComposer(activeComposer)) {
             return activeComposer;
-          }
-
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
           }
 
           return null;

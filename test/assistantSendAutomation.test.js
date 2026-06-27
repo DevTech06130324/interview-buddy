@@ -34,6 +34,29 @@ test('current composer submit waits for the send button before clicking it', () 
   assert.ok(waitIndex < clickIndex);
 });
 
+test('assistant composer discovery prefers selector matches before focused generic editables', () => {
+  const functions = [
+    'getCurrentComposerText',
+    'focusAssistantComposerForUpload',
+    'markImageUploadInput',
+    'clickComposerSendButton',
+    'submitComposerViaDom'
+  ];
+
+  for (const functionName of functions) {
+    const source = getFunctionSource(functionName);
+    const selectorScanIndex = source.indexOf('for (const selector of composerSelectors)');
+    const activeElementIndex = source.indexOf('document.activeElement');
+
+    assert.notEqual(selectorScanIndex, -1, `Expected ${functionName} to scan composer selectors`);
+    assert.notEqual(activeElementIndex, -1, `Expected ${functionName} to keep an active-element fallback`);
+    assert.ok(
+      selectorScanIndex < activeElementIndex,
+      `${functionName} should prefer provider composer selectors before activeElement`
+    );
+  }
+});
+
 test('primary send click uses debugger mouse events without focusing the app window', () => {
   const source = getFunctionSource('clickComposerSendButton');
 
