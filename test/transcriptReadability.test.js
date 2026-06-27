@@ -45,6 +45,23 @@ test('transcript panel defaults leave enough room for paragraph-length reading',
   assert.match(renderer, /const MIN_TRANSCRIPT_PANEL_WIDTH = 280;/);
 });
 
+test('first-run transcript panel starts expanded while saved collapse state is still respected', () => {
+  const html = readRepoFile('index.html');
+  const main = readRepoFile('main.js');
+  const renderer = readRepoFile('renderer.js');
+
+  assert.match(main, /let isTranscriptPanelCollapsed = false;/);
+  assert.match(main, /normalizeBoolean\(parsed\?\.transcriptPanelCollapsed,\s*false\)/);
+  assert.match(main, /isTranscriptPanelCollapsed = false;/);
+  assert.match(renderer, /let isTranscriptPanelCollapsed = false;/);
+
+  assert.match(html, /<div class="left-panel">/);
+  assert.match(html, /id="toggleTranscriptPanelBtn"[\s\S]*?data-protected-tooltip="Collapse transcript panel"/);
+  assert.match(html, /id="toggleTranscriptPanelBtn"[\s\S]*?aria-label="Collapse transcript panel"/);
+  assert.match(html, /id="toggleTranscriptPanelBtn"[\s\S]*?aria-expanded="true"/);
+  assert.doesNotMatch(html, /<div class="left-panel is-collapsed">/);
+});
+
 test('transcript rows use readable paragraph typography without heavy controls', () => {
   const css = readRepoFile('styles.css');
   const renderer = readRepoFile('renderer.js');

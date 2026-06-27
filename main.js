@@ -193,7 +193,7 @@ let layoutMode = DEFAULT_LAYOUT_MODE;
 let switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
 let verticalTranscriptPanelRatio = DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO;
 let horizontalTranscriptPanelRatio = DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
-let isTranscriptPanelCollapsed = true;
+let isTranscriptPanelCollapsed = false;
 let isModePanelCollapsed = true;
 let translationsVisible = false;
 let translationEnabled = DEFAULT_TRANSLATION_ENABLED;
@@ -593,7 +593,7 @@ function loadAppPreferences() {
     appWindowBounds = normalizeWindowBounds(parsed?.windowBounds) || appWindowBounds;
     currentOpacity = normalizeOpacity(parsed?.opacity);
     isMuted = normalizeBoolean(parsed?.isMuted, false);
-    isTranscriptPanelCollapsed = normalizeBoolean(parsed?.transcriptPanelCollapsed, true);
+    isTranscriptPanelCollapsed = normalizeBoolean(parsed?.transcriptPanelCollapsed, false);
     isModePanelCollapsed = normalizeBoolean(parsed?.modePanelCollapsed, true);
     translationsVisible = normalizeBoolean(parsed?.translationsVisible, false);
     translationEnabled = normalizeBoolean(parsed?.translationEnabled, DEFAULT_TRANSLATION_ENABLED);
@@ -610,7 +610,7 @@ function loadAppPreferences() {
     };
     currentOpacity = DEFAULT_OPACITY;
     isMuted = false;
-    isTranscriptPanelCollapsed = true;
+    isTranscriptPanelCollapsed = false;
     isModePanelCollapsed = true;
     translationsVisible = false;
     translationEnabled = DEFAULT_TRANSLATION_ENABLED;
