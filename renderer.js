@@ -7,6 +7,7 @@ const reloadBtn = document.getElementById('reloadBtn');
 const loadingIndicator = document.getElementById('loadingIndicator');
 const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
+const newTranscriptIndicator = document.getElementById('newTranscriptIndicator');
 const clearTranscriptBtn = document.getElementById('clearTranscriptBtn');
 const closeAppBtn = document.getElementById('closeAppBtn');
 const toggleThemeBtn = document.getElementById('toggleThemeBtn');
@@ -41,6 +42,7 @@ let transcriptHistory = '';
 let transcriptEntriesSignature = '';
 let isUserScrolling = false;
 let scrollTimeout = null;
+let hasNewTranscriptBelow = false;
 let liveCaptionsWindowVisible = true;
 let translationsVisible = false;
 let translationEnabled = true;
@@ -257,6 +259,27 @@ function checkIfAtBottom() {
   return (scrollHeight - scrollTop - clientHeight) <= threshold;
 }
 
+function setNewTranscriptIndicatorVisible(isVisible) {
+  hasNewTranscriptBelow = Boolean(isVisible);
+
+  if (newTranscriptIndicator) {
+    newTranscriptIndicator.hidden = !hasNewTranscriptBelow;
+  }
+
+  if (transcriptEl) {
+    transcriptEl.classList.toggle('has-new-transcript-below', hasNewTranscriptBelow);
+  }
+}
+
+function scrollTranscriptToBottom() {
+  if (!transcriptEl) {
+    return;
+  }
+
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  setNewTranscriptIndicatorVisible(false);
+}
+
 function normalizeTranscriptTimestampLabel(label) {
   const value = String(label || '').trim();
   const match = value.match(/^(\d{1,}):([0-5]\d):([0-5]\d)$/);
@@ -428,14 +451,18 @@ function renderTranscriptEntries(entries) {
     existingRows.set(row.dataset.captionId, row);
   }
 
+  let expectedNextRow = transcriptRowsEl.firstElementChild;
+
   for (const entry of entries) {
     const row = existingRows.get(entry.id) || createTranscriptRow(entry);
     updateTranscriptRow(row, entry);
     existingRows.delete(entry.id);
 
-    if (row.parentElement !== transcriptRowsEl || row !== transcriptRowsEl.lastElementChild) {
-      transcriptRowsEl.appendChild(row);
+    if (row !== expectedNextRow) {
+      transcriptRowsEl.insertBefore(row, expectedNextRow);
     }
+
+    expectedNextRow = row.nextElementSibling;
   }
 
   for (const staleRow of existingRows.values()) {
@@ -472,7 +499,7 @@ function updateTranslationToggleButtonState() {
       'aria-label',
       translationsVisible ? 'Hide translations' : 'Show translations'
     );
-    toggleTranslationBtn.setAttribute('aria-pressed', String(!translationsVisible));
+    toggleTranslationBtn.setAttribute('aria-pressed', String(translationsVisible));
   }
 }
 
@@ -1811,6 +1838,12 @@ if (toggleTranslationBtn) {
   setTranslationVisibility(translationsVisible);
 }
 
+if (newTranscriptIndicator) {
+  newTranscriptIndicator.onclick = () => {
+    scrollTranscriptToBottom();
+  };
+}
+
 if (toggleTranscriptPanelBtn) {
   updateTranscriptPanelCollapsed(isTranscriptPanelCollapsed);
 
@@ -2174,9 +2207,16 @@ if (transcriptEl) {
       clearTimeout(scrollTimeout);
     }
 
+    if (checkIfAtBottom()) {
+      setNewTranscriptIndicatorVisible(false);
+    }
+
     isUserScrolling = true;
     scrollTimeout = setTimeout(() => {
       isUserScrolling = false;
+      if (checkIfAtBottom()) {
+        setNewTranscriptIndicatorVisible(false);
+      }
     }, 150);
   });
 }
@@ -2203,10 +2243,14 @@ window.electronAPI.onCaptionUpdate((data) => {
   renderTranscriptEntries(nextEntries);
 
   setTimeout(() => {
-    if (wasAtBottom && !isUserScrolling) {
-      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    const hasTranscriptContent = nextEntries.length > 0 || nextTranscript.trim().length > 0;
+    if (!hasTranscriptContent) {
+      setNewTranscriptIndicatorVisible(false);
+    } else if (wasAtBottom && !isUserScrolling) {
+      scrollTranscriptToBottom();
     } else {
       transcriptEl.scrollTop = previousScrollTop;
+      setNewTranscriptIndicatorVisible(true);
     }
   }, 0);
 });
@@ -2218,6 +2262,7 @@ window.electronAPI.onCaptionError((error) => {
 
   transcriptHistory = '';
   transcriptEntriesSignature = '';
+  setNewTranscriptIndicatorVisible(false);
   const errorText = String(error || '');
   const isMissingNativeAddon =
     errorText.includes('Live Captions native addon was not found')

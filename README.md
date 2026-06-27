@@ -1,6 +1,6 @@
 # Notepad++
 
-Windows-focused Electron overlay that combines a transcript panel, an embedded browser, and prompt modes for ChatGPT and DeepSeek.
+Windows-focused Electron overlay that combines a transcript panel, an embedded browser, and prompt modes for ChatGPT, DeepSeek, and Claude.
 
 ## Overview
 
@@ -41,8 +41,8 @@ Assistant automation is designed for the active tab when that tab is one of thes
   - expanded state lets you pick a mode, edit its prompt, and set a per-mode global hotkey
   - prompt changes auto-save
   - dropdown supports add mode, double-click rename, and delete
-- Transcript-to-assistant automation for ChatGPT and DeepSeek
-- Screenshot-to-assistant attachment automation for ChatGPT and DeepSeek
+- Transcript-to-assistant automation for ChatGPT, DeepSeek, and Claude
+- Screenshot-to-assistant attachment automation for ChatGPT, DeepSeek, and Claude
 - Selected-area screen capture to the clipboard
 - Global mute toggle for all tabs
 - Global window movement and opacity controls
@@ -54,9 +54,9 @@ Each mode stores its own prompt. The currently selected mode controls what is ap
 When transcript text exists, the app sends:
 
 ```text
-Interviewer said like this
+Conversations so far like this
 """
-<transcript>
+[00:12:34] <transcript line>
 """
 
 <current mode prompt>

@@ -3054,7 +3054,7 @@ function ensureSupportedAssistantTab(webContents, actionName) {
     return true;
   }
 
-  console.error(`[ERROR] ${actionName} requires the active tab to be ChatGPT or DeepSeek. Current URL: ${currentUrl || 'about:blank'}`);
+  console.error(`[ERROR] ${actionName} requires the active tab to be ChatGPT, DeepSeek, or Claude. Current URL: ${currentUrl || 'about:blank'}`);
   return false;
 }
 

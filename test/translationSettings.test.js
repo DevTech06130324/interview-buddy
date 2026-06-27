@@ -58,3 +58,10 @@ test('show/hide translation button is disabled when translation is disabled', ()
   assert.match(renderer, /aria-disabled',\s*String\(!translationEnabled\)/);
   assert.match(renderer, /if\s*\(!translationEnabled\)\s*\{\s*return;\s*\}/);
 });
+
+test('show/hide translation button pressed state matches translation visibility', () => {
+  const renderer = readRepoFile('renderer.js');
+
+  assert.match(renderer, /aria-pressed',\s*String\(translationsVisible\)/);
+  assert.doesNotMatch(renderer, /aria-pressed',\s*String\(!translationsVisible\)/);
+});

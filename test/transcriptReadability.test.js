@@ -60,3 +60,20 @@ test('transcript rows use readable paragraph typography without heavy controls',
   assert.doesNotMatch(updateSourceCell, /createElement\('button'\)/);
   assert.doesNotMatch(createTranscriptRow, /addEventListener\('click'/);
 });
+
+test('transcript rendering keeps stable row order and shows a new transcript indicator', () => {
+  const html = readRepoFile('index.html');
+  const css = readRepoFile('styles.css');
+  const renderer = readRepoFile('renderer.js');
+  const renderTranscriptEntries = getFunctionSource(renderer, 'renderTranscriptEntries');
+
+  assert.match(renderTranscriptEntries, /expectedNextRow/);
+  assert.match(renderTranscriptEntries, /insertBefore\(row,\s*expectedNextRow\)/);
+  assert.doesNotMatch(renderTranscriptEntries, /row !== transcriptRowsEl\.lastElementChild/);
+
+  assert.match(html, /id="newTranscriptIndicator"/);
+  assert.match(css, /\.new-transcript-indicator/);
+  assert.match(renderer, /const newTranscriptIndicator = document\.getElementById\('newTranscriptIndicator'\)/);
+  assert.match(renderer, /function setNewTranscriptIndicatorVisible/);
+  assert.match(renderer, /setNewTranscriptIndicatorVisible\(true\)/);
+});
