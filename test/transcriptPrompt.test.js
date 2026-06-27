@@ -3,7 +3,6 @@ const assert = require('node:assert/strict');
 
 const {
   TRANSCRIPT_PROMPT_HEADER,
-  TRANSCRIPT_SPEAKER_TAG,
   buildTranscriptPromptText,
   formatTranscriptElapsedTimestamp,
   formatTranscriptEntryMarker
@@ -15,11 +14,10 @@ test('formats transcript timestamps as elapsed HH:MM:SS values', () => {
   assert.equal(formatTranscriptElapsedTimestamp(3723000), '01:02:03');
 });
 
-test('formats transcript entry marker with timestamp and Them tag', () => {
-  assert.equal(TRANSCRIPT_SPEAKER_TAG, 'Them');
+test('formats transcript entry marker with timestamp only', () => {
   assert.equal(
     formatTranscriptEntryMarker({ timestampLabel: '00:12:34', speakerTag: 'Them' }),
-    '[00:12:34 | Them]'
+    '[00:12:34]'
   );
 });
 
@@ -36,8 +34,8 @@ test('builds conversation prompt with bracketed metadata and prompt suffix', () 
   assert.equal(text, [
     'Conversations so far like this',
     '"""',
-    '[00:12:34 | Them] Can you walk me through your last project?',
-    '[00:13:02 | Them] What tradeoffs did you make?',
+    '[00:12:34] Can you walk me through your last project?',
+    '[00:13:02] What tradeoffs did you make?',
     '"""',
     '',
     'What should I say?'

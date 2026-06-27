@@ -50,3 +50,11 @@ test('transcript UI stacks translation below each source sentence', () => {
   assert.match(renderer, /'disabled'/);
   assert.match(renderer, /is-translation-disabled/);
 });
+
+test('show/hide translation button is disabled when translation is disabled', () => {
+  const renderer = readRepoFile('renderer.js');
+
+  assert.match(renderer, /toggleTranslationBtn\.disabled\s*=\s*!translationEnabled/);
+  assert.match(renderer, /aria-disabled',\s*String\(!translationEnabled\)/);
+  assert.match(renderer, /if\s*\(!translationEnabled\)\s*\{\s*return;\s*\}/);
+});

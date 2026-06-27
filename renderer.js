@@ -275,9 +275,8 @@ function normalizeTranscriptSpeakerTag(speakerTag) {
 function formatTranscriptEntryMarker(entry = {}) {
   const timestampLabel = normalizeTranscriptTimestampLabel(entry.timestampLabel)
     || DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL;
-  const speakerTag = normalizeTranscriptSpeakerTag(entry.speakerTag);
 
-  return `[${timestampLabel} | ${speakerTag}]`;
+  return `[${timestampLabel}]`;
 }
 
 function normalizeTranscriptEntries(data) {
@@ -451,7 +450,22 @@ function setTranslationVisibility(isVisible) {
     transcriptEl.classList.toggle('is-translation-hidden', !translationsVisible);
   }
 
+  updateTranslationToggleButtonState();
+}
+
+function updateTranslationToggleButtonState() {
   if (toggleTranslationBtn) {
+    toggleTranslationBtn.disabled = !translationEnabled;
+    toggleTranslationBtn.setAttribute('aria-disabled', String(!translationEnabled));
+
+    if (!translationEnabled) {
+      toggleTranslationBtn.classList.add('is-hidden-state');
+      setProtectedTooltip(toggleTranslationBtn, 'Translation is disabled in settings');
+      toggleTranslationBtn.setAttribute('aria-label', 'Translation is disabled in settings');
+      toggleTranslationBtn.setAttribute('aria-pressed', 'false');
+      return;
+    }
+
     toggleTranslationBtn.classList.toggle('is-hidden-state', !translationsVisible);
     setProtectedTooltip(toggleTranslationBtn, translationsVisible ? 'Hide translations' : 'Show translations');
     toggleTranslationBtn.setAttribute(
@@ -468,6 +482,8 @@ function setTranslationEnabled(isEnabled) {
   if (transcriptEl) {
     transcriptEl.classList.toggle('is-translation-disabled', !translationEnabled);
   }
+
+  updateTranslationToggleButtonState();
 }
 
 function renderTranscriptError(errorMessage) {
@@ -1775,6 +1791,10 @@ if (toggleTranslationBtn) {
   setTranslationVisibility(translationsVisible);
 
   toggleTranslationBtn.onclick = async () => {
+    if (!translationEnabled) {
+      return;
+    }
+
     const previousVisible = translationsVisible;
     const nextVisible = !translationsVisible;
     setTranslationVisibility(nextVisible);

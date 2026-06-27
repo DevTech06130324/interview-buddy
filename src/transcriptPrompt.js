@@ -41,9 +41,8 @@ function normalizeTranscriptSpeakerTag(speakerTag) {
 function formatTranscriptEntryMarker(entry = {}) {
   const timestampLabel = normalizeTranscriptTimestampLabel(entry.timestampLabel)
     || DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL;
-  const speakerTag = normalizeTranscriptSpeakerTag(entry.speakerTag);
 
-  return `[${timestampLabel} | ${speakerTag}]`;
+  return `[${timestampLabel}]`;
 }
 
 function formatTranscriptEntryPromptLine(entry = {}) {
