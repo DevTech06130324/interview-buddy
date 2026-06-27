@@ -14,11 +14,24 @@ function getFunctionSource(name) {
   return mainSource.slice(startIndex, nextFunctionIndex);
 }
 
+function getComposerHelpersSource() {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const startMarker = 'const COMPOSER_HELPERS_SCRIPT = `';
+  const startIndex = mainSource.indexOf(startMarker);
+  assert.notEqual(startIndex, -1, 'Expected to find shared composer helpers in main.js');
+
+  const endIndex = mainSource.indexOf('`;', startIndex + startMarker.length);
+  assert.notEqual(endIndex, -1, 'Expected to find the end of shared composer helpers');
+  return mainSource.slice(startIndex, endIndex);
+}
+
 test('screenshot upload marker search does not require the assistant input to be focused', () => {
   const source = getFunctionSource('markImageUploadInput');
+  const helperSource = getComposerHelpersSource();
 
-  assert.match(source, /document\.activeElement/);
-  assert.match(source, /function isUsableComposer/);
+  assert.match(source, /\$\{COMPOSER_HELPERS_SCRIPT\}/);
+  assert.match(helperSource, /document\.activeElement/);
+  assert.match(helperSource, /function isUsableComposer/);
   assert.doesNotMatch(source, /if \(!composer\) \{\s*return false;\s*\}/);
 });
 

@@ -77,7 +77,7 @@ const DEFAULT_PROMPT_MODE_NAME = 'Default';
 const DEFAULT_THEME = 'dark';
 const DEFAULT_LAYOUT_MODE = 'vertical';
 const DEFAULT_SWITCH_ACTIVE_VIEW = 'transcript';
-const DEFAULT_TRANSLATION_ENABLED = true;
+const DEFAULT_TRANSLATION_ENABLED = false;
 const DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO = 0.35;
 const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0.4;
 const SWITCH_VIEW_TABS_HEIGHT = 38;
@@ -87,6 +87,61 @@ const ASSISTANT_COMPOSER_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_COMPOSER_SE
 const ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_SEND_BUTTON_SELECTORS);
 const ASSISTANT_FILE_INPUT_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_FILE_INPUT_SELECTORS);
 const ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS);
+const COMPOSER_HELPERS_SCRIPT = `
+        function isVisibleElement(element) {
+          if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return false;
+          }
+
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          const isHidden = style.display === 'none'
+            || style.visibility === 'hidden'
+            || style.opacity === '0'
+            || element.getAttribute('aria-hidden') === 'true'
+            || rect.width === 0
+            || rect.height === 0;
+
+          return !isHidden;
+        }
+
+        function isUsableComposer(element) {
+          if (!element) return false;
+          if ('disabled' in element && element.disabled) return false;
+          if ('readOnly' in element && element.readOnly) return false;
+          return isVisibleElement(element);
+        }
+
+        function elementMatchesComposer(element) {
+          return Boolean(
+            element
+            && typeof element.matches === 'function'
+            && composerSelectors.some((selector) => element.matches(selector))
+          );
+        }
+
+        function findComposer() {
+          for (const selector of composerSelectors) {
+            for (const element of document.querySelectorAll(selector)) {
+              if (isUsableComposer(element)) {
+                return element;
+              }
+            }
+          }
+
+          const activeElement = document.activeElement;
+          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
+            return activeElement;
+          }
+
+          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
+          if (isUsableComposer(activeComposer)) {
+            return activeComposer;
+          }
+
+          return null;
+        }
+`;
 
 function getWindowIconOptions() {
   return fs.existsSync(APP_ICON_PATH) ? { icon: APP_ICON_PATH } : {};
@@ -3132,60 +3187,7 @@ async function clearCurrentComposer(webContents) {
     return await webContents.executeJavaScript(`
       (() => {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
-
-        function isVisibleElement(element) {
-          if (!element || typeof element.getBoundingClientRect !== 'function') {
-            return false;
-          }
-
-          const style = window.getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          const isHidden = style.display === 'none'
-            || style.visibility === 'hidden'
-            || style.opacity === '0'
-            || element.getAttribute('aria-hidden') === 'true'
-            || rect.width === 0
-            || rect.height === 0;
-
-          return !isHidden;
-        }
-
-        function isUsableComposer(element) {
-          if (!element) return false;
-          if ('disabled' in element && element.disabled) return false;
-          if ('readOnly' in element && element.readOnly) return false;
-          return isVisibleElement(element);
-        }
-
-        function elementMatchesComposer(element) {
-          return Boolean(
-            element
-            && typeof element.matches === 'function'
-            && composerSelectors.some((selector) => element.matches(selector))
-          );
-        }
-
-        function findComposer() {
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
-          }
-
-          const activeElement = document.activeElement;
-          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
-            return activeElement;
-          }
-
-          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
-          if (isUsableComposer(activeComposer)) {
-            return activeComposer;
-          }
-
-          return null;
-        }
+        ${COMPOSER_HELPERS_SCRIPT}
 
         const element = findComposer();
         if (!element) {
@@ -3237,30 +3239,7 @@ async function getCurrentComposerText(webContents) {
     return await webContents.executeJavaScript(`
       (() => {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
-
-        function isVisibleElement(element) {
-          if (!element || typeof element.getBoundingClientRect !== 'function') {
-            return false;
-          }
-
-          const style = window.getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          const isHidden = style.display === 'none'
-            || style.visibility === 'hidden'
-            || style.opacity === '0'
-            || element.getAttribute('aria-hidden') === 'true'
-            || rect.width === 0
-            || rect.height === 0;
-
-          return !isHidden;
-        }
-
-        function isUsableComposer(element) {
-          if (!element) return false;
-          if ('disabled' in element && element.disabled) return false;
-          if ('readOnly' in element && element.readOnly) return false;
-          return isVisibleElement(element);
-        }
+        ${COMPOSER_HELPERS_SCRIPT}
 
         function readComposerText(element) {
           if (!element) return '';
@@ -3274,36 +3253,6 @@ async function getCurrentComposerText(webContents) {
           }
 
           return '';
-        }
-
-        function elementMatchesComposer(element) {
-          return Boolean(
-            element
-            && typeof element.matches === 'function'
-            && composerSelectors.some((selector) => element.matches(selector))
-          );
-        }
-
-        function findComposer() {
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
-          }
-
-          const activeElement = document.activeElement;
-          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
-            return activeElement;
-          }
-
-          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
-          if (isUsableComposer(activeComposer)) {
-            return activeComposer;
-          }
-
-          return null;
         }
 
         const composer = findComposer();
@@ -3395,60 +3344,7 @@ async function pasteTextIntoComposer(webContents, text) {
       (() => {
         const nextValue = ${JSON.stringify(String(text || ''))};
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
-
-        function isVisibleElement(element) {
-          if (!element || typeof element.getBoundingClientRect !== 'function') {
-            return false;
-          }
-
-          const style = window.getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          const isHidden = style.display === 'none'
-            || style.visibility === 'hidden'
-            || style.opacity === '0'
-            || element.getAttribute('aria-hidden') === 'true'
-            || rect.width === 0
-            || rect.height === 0;
-
-          return !isHidden;
-        }
-
-        function isUsableComposer(element) {
-          if (!element) return false;
-          if ('disabled' in element && element.disabled) return false;
-          if ('readOnly' in element && element.readOnly) return false;
-          return isVisibleElement(element);
-        }
-
-        function elementMatchesComposer(element) {
-          return Boolean(
-            element
-            && typeof element.matches === 'function'
-            && composerSelectors.some((selector) => element.matches(selector))
-          );
-        }
-
-        function findComposer() {
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
-          }
-
-          const activeElement = document.activeElement;
-          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
-            return activeElement;
-          }
-
-          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
-          if (isUsableComposer(activeComposer)) {
-            return activeComposer;
-          }
-
-          return null;
-        }
+        ${COMPOSER_HELPERS_SCRIPT}
 
         const element = findComposer();
         if (!element) {
@@ -3585,60 +3481,7 @@ async function focusAssistantComposerForUpload(webContents) {
     const clickTarget = await webContents.executeJavaScript(`
       (() => {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
-
-        function isVisibleElement(element) {
-          if (!element || typeof element.getBoundingClientRect !== 'function') {
-            return false;
-          }
-
-          const style = window.getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          const isHidden = style.display === 'none'
-            || style.visibility === 'hidden'
-            || style.opacity === '0'
-            || element.getAttribute('aria-hidden') === 'true'
-            || rect.width === 0
-            || rect.height === 0;
-
-          return !isHidden;
-        }
-
-        function isUsableComposer(element) {
-          if (!element) return false;
-          if ('disabled' in element && element.disabled) return false;
-          if ('readOnly' in element && element.readOnly) return false;
-          return isVisibleElement(element);
-        }
-
-        function elementMatchesComposer(element) {
-          return Boolean(
-            element
-            && typeof element.matches === 'function'
-            && composerSelectors.some((selector) => element.matches(selector))
-          );
-        }
-
-        function findComposer() {
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
-          }
-
-          const activeElement = document.activeElement;
-          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
-            return activeElement;
-          }
-
-          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
-          if (isUsableComposer(activeComposer)) {
-            return activeComposer;
-          }
-
-          return null;
-        }
+        ${COMPOSER_HELPERS_SCRIPT}
 
         function getComposerClickPoint(composer) {
           if (!isUsableComposer(composer)) {
@@ -3685,62 +3528,7 @@ async function markImageUploadInput(webContents, markerId) {
         const revealButtonSelectors = ${ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS_SCRIPT};
 
         const sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
-
-        function isVisibleElement(element) {
-          if (!element || typeof element.getBoundingClientRect !== 'function') {
-            return false;
-          }
-
-          const style = window.getComputedStyle(element);
-          if (
-            style.display === 'none'
-            || style.visibility === 'hidden'
-            || style.opacity === '0'
-            || element.getAttribute('aria-hidden') === 'true'
-          ) {
-            return false;
-          }
-
-          const rect = element.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
-        }
-
-        function isUsableComposer(element) {
-          if (!element) return false;
-          if ('disabled' in element && element.disabled) return false;
-          if ('readOnly' in element && element.readOnly) return false;
-          return isVisibleElement(element);
-        }
-
-        function elementMatchesComposer(element) {
-          return Boolean(
-            element
-            && typeof element.matches === 'function'
-            && composerSelectors.some((selector) => element.matches(selector))
-          );
-        }
-
-        function findComposer() {
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
-          }
-
-          const activeElement = document.activeElement;
-          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
-            return activeElement;
-          }
-
-          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
-          if (isUsableComposer(activeComposer)) {
-            return activeComposer;
-          }
-
-          return null;
-        }
+        ${COMPOSER_HELPERS_SCRIPT}
 
         function getSearchScopes(composer) {
           const scopes = [
@@ -3956,19 +3744,8 @@ async function getAssistantImageAttachmentState(webContents, markerId = '') {
     return await webContents.executeJavaScript(`
       (() => {
         const markerId = ${JSON.stringify(String(markerId || ''))};
-        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
-
-        function getComposer() {
-          for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (!element) continue;
-            if ('disabled' in element && element.disabled) continue;
-            if ('readOnly' in element && element.readOnly) continue;
-            return element;
-          }
-
-          return null;
-        }
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        ${COMPOSER_HELPERS_SCRIPT}
 
         function getScopes(composer) {
           return [
@@ -3995,7 +3772,7 @@ async function getAssistantImageAttachmentState(webContents, markerId = '') {
             || value.includes('image-chip');
         }
 
-        const composer = getComposer();
+        const composer = findComposer();
         if (!composer) {
           return null;
         }
@@ -4130,7 +3907,9 @@ async function pasteImageIntoComposer(webContents, image) {
     const syntheticHandled = await webContents.executeJavaScript(`
       (() => {
         const imageBase64 = ${JSON.stringify(imageBase64)};
-        const selectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        ${COMPOSER_HELPERS_SCRIPT}
+
         function buildFileFromBase64() {
           const binary = atob(imageBase64);
           const bytes = new Uint8Array(binary.length);
@@ -4145,18 +3924,6 @@ async function pasteImageIntoComposer(webContents, image) {
         const file = buildFileFromBase64();
         const dataTransfer = new DataTransfer();
         dataTransfer.items.add(file);
-
-        function getComposer() {
-          for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (!element) continue;
-            if ('disabled' in element && element.disabled) continue;
-            if ('readOnly' in element && element.readOnly) continue;
-            return element;
-          }
-
-          return null;
-        }
 
         function getScopes(composer) {
           return [
@@ -4231,7 +3998,7 @@ async function pasteImageIntoComposer(webContents, image) {
           }
         }
 
-        const composer = getComposer();
+        const composer = findComposer();
         if (!composer) {
           return false;
         }
@@ -4310,60 +4077,7 @@ async function clickComposerSendButton(webContents) {
       (() => {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
-
-        function isVisibleElement(element) {
-          if (!element || typeof element.getBoundingClientRect !== 'function') {
-            return false;
-          }
-
-          const style = window.getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          const isHidden = style.display === 'none'
-            || style.visibility === 'hidden'
-            || style.opacity === '0'
-            || element.getAttribute('aria-hidden') === 'true'
-            || rect.width === 0
-            || rect.height === 0;
-
-          return !isHidden;
-        }
-
-        function isUsableComposer(element) {
-          if (!element) return false;
-          if ('disabled' in element && element.disabled) return false;
-          if ('readOnly' in element && element.readOnly) return false;
-          return isVisibleElement(element);
-        }
-
-        function elementMatchesComposer(element) {
-          return Boolean(
-            element
-            && typeof element.matches === 'function'
-            && composerSelectors.some((selector) => element.matches(selector))
-          );
-        }
-
-        function findComposer() {
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
-          }
-
-          const activeElement = document.activeElement;
-          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
-            return activeElement;
-          }
-
-          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
-          if (isUsableComposer(activeComposer)) {
-            return activeComposer;
-          }
-
-          return null;
-        }
+        ${COMPOSER_HELPERS_SCRIPT}
 
         function isButtonReady(button) {
           if (!button) return false;
@@ -4443,18 +4157,7 @@ async function waitForSendButtonReady(webContents, attempts = 12, delayMs = 100)
       (() => {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
-
-        function findComposer() {
-          for (const selector of composerSelectors) {
-            const element = document.querySelector(selector);
-            if (!element) continue;
-            if ('disabled' in element && element.disabled) continue;
-            if ('readOnly' in element && element.readOnly) continue;
-            return element;
-          }
-
-          return null;
-        }
+        ${COMPOSER_HELPERS_SCRIPT}
 
         function isButtonReady(button) {
           if (!button) return false;
@@ -4523,60 +4226,7 @@ async function submitComposerViaDom(webContents) {
       (() => {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
-
-        function isVisibleElement(element) {
-          if (!element || typeof element.getBoundingClientRect !== 'function') {
-            return false;
-          }
-
-          const style = window.getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          const isHidden = style.display === 'none'
-            || style.visibility === 'hidden'
-            || style.opacity === '0'
-            || element.getAttribute('aria-hidden') === 'true'
-            || rect.width === 0
-            || rect.height === 0;
-
-          return !isHidden;
-        }
-
-        function isUsableComposer(element) {
-          if (!element) return false;
-          if ('disabled' in element && element.disabled) return false;
-          if ('readOnly' in element && element.readOnly) return false;
-          return isVisibleElement(element);
-        }
-
-        function elementMatchesComposer(element) {
-          return Boolean(
-            element
-            && typeof element.matches === 'function'
-            && composerSelectors.some((selector) => element.matches(selector))
-          );
-        }
-
-        function findComposer() {
-          for (const selector of composerSelectors) {
-            for (const element of document.querySelectorAll(selector)) {
-              if (isUsableComposer(element)) {
-                return element;
-              }
-            }
-          }
-
-          const activeElement = document.activeElement;
-          if (isUsableComposer(activeElement) && elementMatchesComposer(activeElement)) {
-            return activeElement;
-          }
-
-          const activeComposer = activeElement?.closest?.(composerSelectors.join(', '));
-          if (isUsableComposer(activeComposer)) {
-            return activeComposer;
-          }
-
-          return null;
-        }
+        ${COMPOSER_HELPERS_SCRIPT}
 
         function isButtonReady(button) {
           if (!button) return false;

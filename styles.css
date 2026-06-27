@@ -250,10 +250,30 @@ body {
   transition: background 0.15s ease, height 0.15s ease;
 }
 
+.panel-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 3px;
+  border-radius: 2px;
+  background: #4a4a4a;
+  opacity: 0.5;
+  transform: translate(-50%, -50%);
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
 .panel-divider:hover::before,
 .browser-container.is-resizing .panel-divider::before {
   height: 2px;
   background: #4a9eff;
+}
+
+.panel-divider:hover::after,
+.browser-container.is-resizing .panel-divider::after {
+  background: #4a9eff;
+  opacity: 1;
 }
 
 .transcript-panel {
@@ -316,6 +336,7 @@ body {
   transition: background 0.15s, border-color 0.15s, color 0.15s;
   font-size: 12px;
   font-weight: 600;
+  position: relative;
   -webkit-app-region: no-drag;
 }
 
@@ -360,6 +381,32 @@ body {
 .transcript-action-btn:disabled {
   opacity: 0.55;
   cursor: wait;
+}
+
+.transcript-icon-btn.is-translation-disabled {
+  color: #a9a9a9;
+  border-color: #3a3a3a;
+  background: #202020;
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+
+.transcript-icon-btn.is-translation-disabled .transcript-icon-visible,
+.transcript-icon-btn.is-translation-disabled .transcript-icon-hidden {
+  opacity: 0.45;
+}
+
+.transcript-icon-btn.is-translation-disabled::after {
+  content: '';
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 8px;
+  height: 6px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  background: var(--control-bg, #202020);
+  box-shadow: 0 -5px 0 -3px currentColor;
 }
 
 .transcript-content {
@@ -1369,9 +1416,21 @@ body {
   background: var(--border);
 }
 
+.panel-divider::after {
+  background: var(--border-strong);
+}
+
 .panel-divider:hover::before,
-.browser-container.is-resizing .panel-divider::before {
+.browser-container.is-resizing .panel-divider::before,
+.panel-divider:hover::after,
+.browser-container.is-resizing .panel-divider::after {
   background: var(--accent);
+}
+
+.transcript-icon-btn.is-translation-disabled {
+  background: var(--control-bg);
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 
 .loading-indicator {
@@ -1551,6 +1610,11 @@ body[data-layout-mode="horizontal"] .panel-divider::before {
   width: 1px;
   height: auto;
   transform: translateX(-50%);
+}
+
+body[data-layout-mode="horizontal"] .panel-divider::after {
+  width: 3px;
+  height: 24px;
 }
 
 body[data-layout-mode="horizontal"] .panel-divider:hover::before,

@@ -26,6 +26,23 @@ test('translation manager can disable translation work while keeping source entr
   translationManager.setTranslationEnabled(true);
 });
 
+test('translation manager payload version changes only for new caption text', () => {
+  const translationManager = require('../src/translationManager');
+
+  translationManager.reset('');
+  translationManager.setTranslationEnabled(false);
+
+  const firstPayload = translationManager.update('Hello there.');
+  const duplicatePayload = translationManager.update('Hello there.');
+  const changedPayload = translationManager.update('Hello there. New detail.');
+
+  assert.equal(duplicatePayload.payloadVersion, firstPayload.payloadVersion);
+  assert.ok(changedPayload.payloadVersion > duplicatePayload.payloadVersion);
+
+  translationManager.reset('');
+  translationManager.setTranslationEnabled(true);
+});
+
 test('settings window exposes a translation enable toggle', () => {
   const html = readRepoFile('hotkey-settings.html');
   const js = readRepoFile('hotkey-settings.js');
@@ -38,6 +55,19 @@ test('settings window exposes a translation enable toggle', () => {
   assert.match(preload, /setTranslationEnabled/);
   assert.match(main, /set-translation-enabled/);
   assert.match(main, /translationManager\.setTranslationEnabled/);
+});
+
+test('translation starts opt-in so speech is not sent to translation by default', () => {
+  const main = readRepoFile('main.js');
+  const renderer = readRepoFile('renderer.js');
+  const manager = readRepoFile('src/translationManager.js');
+  const settings = readRepoFile('hotkey-settings.js');
+
+  assert.match(main, /const DEFAULT_TRANSLATION_ENABLED = false;/);
+  assert.match(renderer, /let translationEnabled = false;/);
+  assert.match(manager, /this\.translationEnabled = false;/);
+  assert.match(settings, /let translationEnabled = false;/);
+  assert.match(settings, /updateTranslationEnabledToggle\(false\)/);
 });
 
 test('transcript UI stacks translation below each source sentence', () => {
@@ -56,7 +86,17 @@ test('show/hide translation button is disabled when translation is disabled', ()
 
   assert.match(renderer, /toggleTranslationBtn\.disabled\s*=\s*!translationEnabled/);
   assert.match(renderer, /aria-disabled',\s*String\(!translationEnabled\)/);
+  assert.match(renderer, /classList\.toggle\('is-translation-disabled', !translationEnabled\)/);
   assert.match(renderer, /if\s*\(!translationEnabled\)\s*\{\s*return;\s*\}/);
+});
+
+test('disabled translation button has a distinct visual state and clear tooltip copy', () => {
+  const renderer = readRepoFile('renderer.js');
+  const css = readRepoFile('styles.css');
+
+  assert.match(renderer, /Enable translation in settings/);
+  assert.match(css, /\.transcript-icon-btn\.is-translation-disabled/);
+  assert.match(css, /\.transcript-icon-btn\.is-translation-disabled::after/);
 });
 
 test('show/hide translation button pressed state matches translation visibility', () => {

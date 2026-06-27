@@ -119,12 +119,14 @@
                   </svg>
                 </button>
                 <button
-                  class="transcript-action-btn transcript-icon-btn is-hidden-state"
+                  class="transcript-action-btn transcript-icon-btn is-hidden-state is-translation-disabled"
                   id="toggleTranslationBtn"
                   type="button"
-                  data-protected-tooltip="Show translations"
-                  aria-label="Show translations"
-                  aria-pressed="true"
+                  data-protected-tooltip="Enable translation in settings"
+                  aria-label="Enable translation in settings"
+                  aria-disabled="true"
+                  aria-pressed="false"
+                  disabled
                 >
                   <svg class="transcript-icon transcript-icon-visible" viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="4" y="5" width="16" height="14" rx="1.5"></rect>

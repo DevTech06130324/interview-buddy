@@ -3,7 +3,7 @@ const hotkeyList = document.getElementById('hotkeyList');
 const translationEnabledToggle = document.getElementById('translationEnabledToggle');
 
 let globalHotkeys = [];
-let translationEnabled = true;
+let translationEnabled = false;
 const globalHotkeyFeedbackTimers = new Map();
 const HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 
@@ -26,7 +26,7 @@ function applyAppPreferences(preferences = {}) {
   if (typeof preferences?.translationEnabled === 'boolean') {
     updateTranslationEnabledToggle(preferences.translationEnabled);
   } else {
-    updateTranslationEnabledToggle(true);
+    updateTranslationEnabledToggle(false);
   }
 }
 

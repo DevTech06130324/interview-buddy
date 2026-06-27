@@ -94,3 +94,11 @@ test('transcript rendering keeps stable row order and shows a new transcript ind
   assert.match(renderer, /function setNewTranscriptIndicatorVisible/);
   assert.match(renderer, /setNewTranscriptIndicatorVisible\(true\)/);
 });
+
+test('panel divider has a visible default grip affordance', () => {
+  const css = readRepoFile('styles.css');
+
+  assert.match(css, /\.panel-divider::after\s*\{/);
+  assert.match(css, /\.panel-divider:hover::after,/);
+  assert.match(css, /body\[data-layout-mode="horizontal"\] \.panel-divider::after/);
+});

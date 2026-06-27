@@ -39,13 +39,13 @@ const modeSuffixInput = document.getElementById('modeSuffixInput');
 const tabs = new Map();
 let activeTabId = null;
 let transcriptHistory = '';
-let transcriptEntriesSignature = '';
+let lastCaptionPayloadVersion = null;
 let isUserScrolling = false;
 let scrollTimeout = null;
 let hasNewTranscriptBelow = false;
 let liveCaptionsWindowVisible = true;
 let translationsVisible = false;
-let translationEnabled = true;
+let translationEnabled = false;
 let isTranscriptPanelCollapsed = false;
 let currentTheme = 'dark';
 let currentLayoutMode = 'vertical';
@@ -61,10 +61,10 @@ let activeModeDropdownToggle = null;
 let modeDropdownOpenRequestId = 0;
 let isModeEditorDirty = false;
 let editingPromptModeId = null;
+let modeDropdownRenderSignature = '';
 let modeHotkeyStatus = 'idle';
 let modeHotkeyDisplayOverride = null;
 let modeHotkeyFeedbackTimer = null;
-let pendingModeSelectionTimer = null;
 let promptModeAutosaveTimer = null;
 let promptModeAutosaveRequest = Promise.resolve();
 let promptModeStateSyncRequest = Promise.resolve();
@@ -77,7 +77,6 @@ const MIN_TRANSCRIPT_PANEL_HEIGHT = 180;
 const MIN_BROWSER_PANEL_HEIGHT = 190;
 const MIN_TRANSCRIPT_PANEL_WIDTH = 280;
 const MIN_BROWSER_PANEL_WIDTH = 220;
-const MODE_SELECTION_DELAY_MS = 320;
 const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 const TRANSCRIPT_SPEAKER_TAG = 'Them';
@@ -346,18 +345,6 @@ function normalizeTranscriptEntries(data) {
   }];
 }
 
-function getTranscriptEntriesSignature(entries) {
-  return JSON.stringify(entries.map((entry) => ({
-    id: entry.id,
-    sourceText: entry.sourceText,
-    translatedText: entry.translatedText,
-    status: entry.status,
-    isFinal: entry.isFinal,
-    timestampLabel: entry.timestampLabel,
-    speakerTag: entry.speakerTag
-  })));
-}
-
 function getTranscriptEntrySignature(entry, options = {}) {
   return JSON.stringify({
     sourceText: entry.sourceText,
@@ -499,11 +486,12 @@ function updateTranslationToggleButtonState() {
   if (toggleTranslationBtn) {
     toggleTranslationBtn.disabled = !translationEnabled;
     toggleTranslationBtn.setAttribute('aria-disabled', String(!translationEnabled));
+    toggleTranslationBtn.classList.toggle('is-translation-disabled', !translationEnabled);
 
     if (!translationEnabled) {
       toggleTranslationBtn.classList.add('is-hidden-state');
-      setProtectedTooltip(toggleTranslationBtn, 'Translation is disabled in settings');
-      toggleTranslationBtn.setAttribute('aria-label', 'Translation is disabled in settings');
+      setProtectedTooltip(toggleTranslationBtn, 'Enable translation in settings');
+      toggleTranslationBtn.setAttribute('aria-label', 'Enable translation in settings');
       toggleTranslationBtn.setAttribute('aria-pressed', 'false');
       return;
     }
@@ -1192,7 +1180,6 @@ async function setModeDropdownOpen(isOpen, options = {}) {
   if (!isModeDropdownOpen) {
     editingPromptModeId = null;
     activeModeDropdownToggle = null;
-    clearPendingModeSelection();
   }
 
   for (const dropdownContainer of getModeDropdownContainers()) {
@@ -1227,13 +1214,6 @@ async function setModeDropdownOpen(isOpen, options = {}) {
   } else {
     closeModeMenuWindow();
     return true;
-  }
-}
-
-function clearPendingModeSelection() {
-  if (pendingModeSelectionTimer !== null) {
-    window.clearTimeout(pendingModeSelectionTimer);
-    pendingModeSelectionTimer = null;
   }
 }
 
@@ -1332,7 +1312,6 @@ async function commitPromptModeRename(modeId, nextName) {
 }
 
 function startPromptModeRename(modeId, sourceMenuElement = null) {
-  clearPendingModeSelection();
   editingPromptModeId = modeId;
   renderModeDropdownMenu();
 
@@ -1360,7 +1339,6 @@ async function selectPromptModeFromMenu(modeId) {
 }
 
 async function deletePromptModeFromMenu(modeId) {
-  clearPendingModeSelection();
   editingPromptModeId = null;
 
   try {
@@ -1381,6 +1359,19 @@ async function addPromptModeFromMenu() {
   } catch (error) {
     console.error('[ERROR] Failed to add prompt mode:', error);
   }
+}
+
+function getModeDropdownRenderSignature() {
+  return JSON.stringify({
+    selectedPromptModeId,
+    editingPromptModeId,
+    canDeleteModes: promptModes.length > 1,
+    modes: getSortedPromptModes().map((mode) => ({
+      id: mode.id,
+      name: mode.name,
+      hotkey: mode.hotkey || ''
+    }))
+  });
 }
 
 function populateModeDropdownMenu(menuElement) {
@@ -1493,26 +1484,18 @@ function populateModeDropdownMenu(menuElement) {
 
     item.appendChild(deleteButton);
 
-    item.onclick = (event) => {
+    item.onclick = async (event) => {
       if (event.detail > 1) {
         return;
       }
 
-      clearPendingModeSelection();
-      pendingModeSelectionTimer = window.setTimeout(async () => {
-        pendingModeSelectionTimer = null;
-        await selectPromptModeFromMenu(mode.id);
-      }, MODE_SELECTION_DELAY_MS);
+      await selectPromptModeFromMenu(mode.id);
     };
 
-    item.onkeydown = (event) => {
+    item.onkeydown = async (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        clearPendingModeSelection();
-        pendingModeSelectionTimer = window.setTimeout(async () => {
-          pendingModeSelectionTimer = null;
-          await selectPromptModeFromMenu(mode.id);
-        }, MODE_SELECTION_DELAY_MS);
+        await selectPromptModeFromMenu(mode.id);
       }
     };
 
@@ -1542,6 +1525,13 @@ function populateModeDropdownMenu(menuElement) {
 }
 
 function renderModeDropdownMenu() {
+  const nextSignature = getModeDropdownRenderSignature();
+  if (nextSignature === modeDropdownRenderSignature) {
+    return;
+  }
+
+  modeDropdownRenderSignature = nextSignature;
+
   for (const menuElement of getModeDropdownMenus()) {
     populateModeDropdownMenu(menuElement);
   }
@@ -2245,8 +2235,11 @@ window.electronAPI.onCaptionUpdate((data) => {
   const nextTranscript = typeof data.fullText === 'string'
     ? data.fullText
     : nextEntries.map((entry) => entry.sourceText).join('\n');
-  const nextEntriesSignature = getTranscriptEntriesSignature(nextEntries);
-  if (nextTranscript === transcriptHistory && transcriptEntriesSignature === nextEntriesSignature) {
+  const nextPayloadVersion = typeof data.payloadVersion === 'number'
+    ? data.payloadVersion
+    : null;
+
+  if (nextPayloadVersion !== null && nextPayloadVersion === lastCaptionPayloadVersion) {
     return;
   }
 
@@ -2254,7 +2247,7 @@ window.electronAPI.onCaptionUpdate((data) => {
   const previousScrollTop = transcriptEl.scrollTop;
 
   transcriptHistory = nextTranscript;
-  transcriptEntriesSignature = nextEntriesSignature;
+  lastCaptionPayloadVersion = nextPayloadVersion;
   renderTranscriptEntries(nextEntries);
 
   setTimeout(() => {
@@ -2270,13 +2263,13 @@ window.electronAPI.onCaptionUpdate((data) => {
   }, 0);
 });
 
-window.electronAPI.onCaptionError((error) => {
+  window.electronAPI.onCaptionError((error) => {
   if (!transcriptEl) {
     return;
   }
 
-  transcriptHistory = '';
-  transcriptEntriesSignature = '';
+    transcriptHistory = '';
+    lastCaptionPayloadVersion = null;
   setNewTranscriptIndicatorVisible(false);
   const errorText = String(error || '');
   const isMissingNativeAddon =

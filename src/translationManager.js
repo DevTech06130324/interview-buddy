@@ -235,11 +235,17 @@ class TranslationManager extends EventEmitter {
     this.translationCache = new Map();
     this.translationQueue = [];
     this.activeTranslationCount = 0;
-    this.translationEnabled = true;
+    this.translationEnabled = false;
+    this.payloadVersion = 0;
+  }
+
+  bumpPayloadVersion() {
+    this.payloadVersion += 1;
   }
 
   getPayload() {
     return {
+      payloadVersion: this.payloadVersion,
       fullText: this.getSessionTranscriptText(),
       translationEnabled: this.translationEnabled,
       entries: this.entries.map((entry) => ({
@@ -273,6 +279,7 @@ class TranslationManager extends EventEmitter {
 
     this.translationQueue = [];
     this.entries = [];
+    this.bumpPayloadVersion();
     logTranscriptEvent('translation-manager-reset-completed', {
       sessionGeneration: this.sessionGeneration,
       payload: this.getPayload()
@@ -282,17 +289,23 @@ class TranslationManager extends EventEmitter {
 
   update(fullText) {
     const rawLiveCaptionText = String(fullText || '');
-    this.liveCaptionText = sanitizeCaptionText(rawLiveCaptionText);
+    const nextLiveCaptionText = sanitizeCaptionText(rawLiveCaptionText);
 
-    if (!this.liveCaptionText.trim()) {
+    if (nextLiveCaptionText === this.liveCaptionText) {
+      return this.getPayload();
+    }
+
+    this.liveCaptionText = nextLiveCaptionText;
+
+    if (!nextLiveCaptionText.trim()) {
       return this.reset('');
     }
 
-    const segments = parseCaptionSegments(this.liveCaptionText);
+    const segments = parseCaptionSegments(nextLiveCaptionText);
     logTranscriptEvent('translation-manager-update-started', {
       sessionGeneration: this.sessionGeneration,
       rawLiveCaptionText,
-      liveCaptionText: this.liveCaptionText,
+      liveCaptionText: nextLiveCaptionText,
       parsedSegments: getSegmentSnapshots(segments),
       entriesBefore: getEntrySnapshots(this.entries),
       panelFullTextBefore: this.getSessionTranscriptText()
@@ -303,6 +316,7 @@ class TranslationManager extends EventEmitter {
     } else {
       this.markEntriesTranslationDisabled();
     }
+    this.bumpPayloadVersion();
     logTranscriptEvent('translation-manager-update-completed', {
       sessionGeneration: this.sessionGeneration,
       entriesAfter: getEntrySnapshots(this.entries),
@@ -335,6 +349,7 @@ class TranslationManager extends EventEmitter {
       this.queueTranslations();
     }
 
+    this.bumpPayloadVersion();
     const payload = this.getPayload();
     this.emit('updated', payload);
     return payload;
@@ -410,8 +425,9 @@ class TranslationManager extends EventEmitter {
     }
 
     let bestMatch = null;
+    const searchStartIndex = Math.max(0, fallbackStartIndex - (RECONCILE_EXTRA_LOOKBACK * 2));
 
-    for (let entryStartIndex = 0; entryStartIndex < this.entries.length; entryStartIndex += 1) {
+    for (let entryStartIndex = searchStartIndex; entryStartIndex < this.entries.length; entryStartIndex += 1) {
       let score = 0;
       let matchedCount = 0;
 
@@ -469,6 +485,7 @@ class TranslationManager extends EventEmitter {
         fallbackStartIndex,
         reason: bestMatch ? 'low-confidence' : 'no-match',
         bestMatch,
+        searchStartIndex,
         segmentCount: segments.length,
         entryCount: this.entries.length
       });
@@ -481,6 +498,7 @@ class TranslationManager extends EventEmitter {
       fallbackStartIndex,
       reason: 'anchored-window',
       bestMatch,
+      searchStartIndex,
       segmentCount: segments.length,
       entryCount: this.entries.length
     });
@@ -753,6 +771,7 @@ class TranslationManager extends EventEmitter {
       entry.lastQueuedText = entry.sourceText;
       entry.queuedTranslationText = '';
       entry.controller = null;
+      this.bumpPayloadVersion();
       logTranscriptEvent('translation-cache-hit', {
         sessionGeneration: this.sessionGeneration,
         entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
@@ -848,6 +867,7 @@ class TranslationManager extends EventEmitter {
       entry.status = 'translated';
       entry.controller = null;
       entry.queuedTranslationText = '';
+      this.bumpPayloadVersion();
       logTranscriptEvent('translation-succeeded', {
         sessionGeneration,
         entryVersion,
@@ -882,6 +902,7 @@ class TranslationManager extends EventEmitter {
       entry.status = 'error';
       entry.controller = null;
       entry.queuedTranslationText = '';
+      this.bumpPayloadVersion();
       logTranscriptEvent('translation-failed', {
         sessionGeneration,
         entryVersion,
