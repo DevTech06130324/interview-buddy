@@ -56,7 +56,8 @@ When transcript text exists, the app sends:
 ```text
 Conversations so far like this
 """
-[00:12:34] <transcript line>
+[00:12:34 | Them] <first transcript line>
+[00:12:40] <later transcript line>
 """
 
 <current mode prompt>

@@ -14,10 +14,20 @@ test('formats transcript timestamps as elapsed HH:MM:SS values', () => {
   assert.equal(formatTranscriptElapsedTimestamp(3723000), '01:02:03');
 });
 
-test('formats transcript entry marker with timestamp only', () => {
+test('formats transcript entry marker with timestamp only by default', () => {
   assert.equal(
     formatTranscriptEntryMarker({ timestampLabel: '00:12:34', speakerTag: 'Them' }),
     '[00:12:34]'
+  );
+});
+
+test('formats the first transcript entry marker with the speaker tag', () => {
+  assert.equal(
+    formatTranscriptEntryMarker(
+      { timestampLabel: '00:12:34', speakerTag: 'Them' },
+      { includeSpeaker: true }
+    ),
+    '[00:12:34 | Them]'
   );
 });
 
@@ -34,7 +44,7 @@ test('builds conversation prompt with bracketed metadata and prompt suffix', () 
   assert.equal(text, [
     'Conversations so far like this',
     '"""',
-    '[00:12:34] Can you walk me through your last project?',
+    '[00:12:34 | Them] Can you walk me through your last project?',
     '[00:13:02] What tradeoffs did you make?',
     '"""',
     '',

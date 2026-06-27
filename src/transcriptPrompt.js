@@ -38,20 +38,26 @@ function normalizeTranscriptSpeakerTag(speakerTag) {
   return value || TRANSCRIPT_SPEAKER_TAG;
 }
 
-function formatTranscriptEntryMarker(entry = {}) {
+function formatTranscriptEntryMarker(entry = {}, options = {}) {
   const timestampLabel = normalizeTranscriptTimestampLabel(entry.timestampLabel)
     || DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL;
+  const includeSpeaker = Boolean(options.includeSpeaker);
+
+  if (includeSpeaker) {
+    const speakerTag = normalizeTranscriptSpeakerTag(entry.speakerTag);
+    return `[${timestampLabel} | ${speakerTag}]`;
+  }
 
   return `[${timestampLabel}]`;
 }
 
-function formatTranscriptEntryPromptLine(entry = {}) {
+function formatTranscriptEntryPromptLine(entry = {}, options = {}) {
   const sourceText = normalizeTranscriptPromptText(entry.sourceText);
   if (!sourceText) {
     return '';
   }
 
-  return `${formatTranscriptEntryMarker(entry)} ${sourceText}`;
+  return `${formatTranscriptEntryMarker(entry, options)} ${sourceText}`;
 }
 
 function getTranscriptEntryPromptLines(transcriptEntries = []) {
@@ -60,7 +66,9 @@ function getTranscriptEntryPromptLines(transcriptEntries = []) {
   }
 
   return transcriptEntries
-    .map((entry) => formatTranscriptEntryPromptLine(entry))
+    .map((entry, index) => formatTranscriptEntryPromptLine(entry, {
+      includeSpeaker: index === 0
+    }))
     .filter(Boolean);
 }
 
@@ -69,7 +77,10 @@ function getFallbackTranscriptPromptLines(transcriptText) {
     .split('\n')
     .map((line) => normalizeTranscriptPromptText(line))
     .filter(Boolean)
-    .map((sourceText) => formatTranscriptEntryPromptLine({ sourceText }));
+    .map((sourceText, index) => formatTranscriptEntryPromptLine(
+      { sourceText },
+      { includeSpeaker: index === 0 }
+    ));
 }
 
 function buildTranscriptPromptText({

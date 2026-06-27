@@ -33,10 +33,12 @@ test('caption updates send normalized entries with transcript metadata to the re
   assert.match(source, /entries:\s*latestTranscriptEntries/);
 });
 
-test('renderer transcript rows display the bracketed timestamp and speaker marker', () => {
+test('renderer transcript rows display the speaker marker only on the first row', () => {
   const source = readRepoFile('renderer.js');
 
   assert.match(source, /formatTranscriptEntryMarker/);
+  assert.match(source, /includeSpeaker:\s*index === 0/);
+  assert.match(source, /timestampLabel \+ ' \| ' \+ speakerTag/);
   assert.match(source, /transcript-entry-marker/);
   assert.match(source, /sourceCell\.replaceChildren/);
 });

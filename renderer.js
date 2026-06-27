@@ -295,9 +295,15 @@ function normalizeTranscriptSpeakerTag(speakerTag) {
   return value || TRANSCRIPT_SPEAKER_TAG;
 }
 
-function formatTranscriptEntryMarker(entry = {}) {
+function formatTranscriptEntryMarker(entry = {}, options = {}) {
   const timestampLabel = normalizeTranscriptTimestampLabel(entry.timestampLabel)
     || DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL;
+  const includeSpeaker = Boolean(options.includeSpeaker);
+
+  if (includeSpeaker) {
+    const speakerTag = normalizeTranscriptSpeakerTag(entry.speakerTag);
+    return '[' + timestampLabel + ' | ' + speakerTag + ']';
+  }
 
   return `[${timestampLabel}]`;
 }
@@ -352,21 +358,24 @@ function getTranscriptEntriesSignature(entries) {
   })));
 }
 
-function getTranscriptEntrySignature(entry) {
+function getTranscriptEntrySignature(entry, options = {}) {
   return JSON.stringify({
     sourceText: entry.sourceText,
     translatedText: entry.translatedText,
     status: entry.status,
     isFinal: entry.isFinal,
     timestampLabel: entry.timestampLabel,
-    speakerTag: entry.speakerTag
+    speakerTag: entry.speakerTag,
+    includeSpeaker: Boolean(options.includeSpeaker)
   });
 }
 
-function updateTranscriptSourceCell(sourceCell, entry) {
+function updateTranscriptSourceCell(sourceCell, entry, index = 0) {
   const marker = document.createElement('span');
   marker.className = 'transcript-entry-marker';
-  marker.textContent = formatTranscriptEntryMarker(entry);
+  marker.textContent = formatTranscriptEntryMarker(entry, {
+    includeSpeaker: index === 0
+  });
 
   const sourceText = document.createElement('span');
   sourceText.className = 'transcript-entry-text';
@@ -375,7 +384,7 @@ function updateTranscriptSourceCell(sourceCell, entry) {
   sourceCell.replaceChildren(marker, document.createTextNode(' '), sourceText);
 }
 
-function createTranscriptRow(entry) {
+function createTranscriptRow(entry, index = 0) {
   const row = document.createElement('div');
   row.dataset.captionId = entry.id;
 
@@ -387,12 +396,15 @@ function createTranscriptRow(entry) {
 
   row.appendChild(sourceCell);
   row.appendChild(translatedCell);
-  updateTranscriptRow(row, entry);
+  updateTranscriptRow(row, entry, index);
   return row;
 }
 
-function updateTranscriptRow(row, entry) {
-  const signature = getTranscriptEntrySignature(entry);
+function updateTranscriptRow(row, entry, index = 0) {
+  const markerOptions = {
+    includeSpeaker: index === 0
+  };
+  const signature = getTranscriptEntrySignature(entry, markerOptions);
   if (row.dataset.entrySignature === signature) {
     return;
   }
@@ -403,7 +415,7 @@ function updateTranscriptRow(row, entry) {
 
   const sourceCell = row.querySelector('.transcript-cell-source');
   if (sourceCell) {
-    updateTranscriptSourceCell(sourceCell, entry);
+    updateTranscriptSourceCell(sourceCell, entry, index);
   }
 
   const translatedCell = row.querySelector('.transcript-cell-translation');
@@ -437,7 +449,9 @@ function renderTranscriptEntries(entries) {
 
   if (!transcriptRowsEl) {
     transcriptEl.textContent = entries
-      .map((entry) => `${formatTranscriptEntryMarker(entry)} ${entry.sourceText}`)
+      .map((entry, index) => `${formatTranscriptEntryMarker(entry, {
+        includeSpeaker: index === 0
+      })} ${entry.sourceText}`)
       .join('\n');
     return;
   }
@@ -453,9 +467,10 @@ function renderTranscriptEntries(entries) {
 
   let expectedNextRow = transcriptRowsEl.firstElementChild;
 
-  for (const entry of entries) {
-    const row = existingRows.get(entry.id) || createTranscriptRow(entry);
-    updateTranscriptRow(row, entry);
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const row = existingRows.get(entry.id) || createTranscriptRow(entry, index);
+    updateTranscriptRow(row, entry, index);
     existingRows.delete(entry.id);
 
     if (row !== expectedNextRow) {
