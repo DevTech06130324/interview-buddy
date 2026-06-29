@@ -27,6 +27,7 @@ test('assistant injected composer helpers are shared instead of copy-pasted per 
     'focusAssistantComposerForUpload',
     'markImageUploadInput',
     'getAssistantImageAttachmentState',
+    'submitComposerViaForm',
     'clickComposerSendButton',
     'waitForSendButtonReady',
     'submitComposerViaDom'
@@ -67,6 +68,19 @@ test('current composer submit waits for the send button before clicking it', () 
   assert.ok(waitIndex < clickIndex);
 });
 
+test('current composer submit tries form submission before mouse fallback for ChatGPT', () => {
+  const source = getFunctionSource('submitCurrentComposer');
+  const formSubmitIndex = source.indexOf('submitComposerViaForm(webContents)');
+  const clickIndex = source.indexOf('clickComposerSendButton(webContents)');
+  const formSource = getFunctionSource('submitComposerViaForm');
+
+  assert.notEqual(formSubmitIndex, -1);
+  assert.notEqual(clickIndex, -1);
+  assert.ok(formSubmitIndex < clickIndex);
+  assert.match(formSource, /form\.requestSubmit/);
+  assert.match(formSource, /\$\{COMPOSER_HELPERS_SCRIPT\}/);
+});
+
 test('assistant composer discovery prefers selector matches before focused generic editables', () => {
   const mainSource = getMainSource();
   const startIndex = mainSource.indexOf('const COMPOSER_HELPERS_SCRIPT = `');
@@ -95,4 +109,10 @@ test('assistant page mouse clicks are dispatched without activating the window',
   assert.match(source, /Input\.dispatchMouseEvent/);
   assert.doesNotMatch(source, /webContents\.focus\(/);
   assert.doesNotMatch(source, /sendInputEvent/);
+});
+
+test('DOM submit fallback does not focus the assistant send button', () => {
+  const source = getFunctionSource('submitComposerViaDom');
+
+  assert.doesNotMatch(source, /button\.focus/);
 });

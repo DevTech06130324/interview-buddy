@@ -4071,6 +4071,121 @@ async function waitForComposerTextChange(webContents, previousText = '', attempt
   return false;
 }
 
+async function submitComposerViaForm(webContents) {
+  try {
+    return await webContents.executeJavaScript(`
+      (() => {
+        const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
+        const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
+        ${COMPOSER_HELPERS_SCRIPT}
+
+        function isButtonReady(button) {
+          if (!button) return false;
+
+          const isDisabled = button.disabled
+            || button.getAttribute('aria-disabled') === 'true'
+            || button.matches('[disabled]');
+
+          return !isDisabled && isVisibleElement(button);
+        }
+
+        function findSendButton(composer) {
+          const candidates = [];
+          const seen = new Set();
+
+          const addButtonsFromRoot = (root) => {
+            if (!root || typeof root.querySelectorAll !== 'function') return;
+
+            for (const selector of buttonSelectors) {
+              for (const button of root.querySelectorAll(selector)) {
+                if (!button || seen.has(button)) continue;
+                seen.add(button);
+                candidates.push(button);
+              }
+            }
+          };
+
+          const form = composer?.closest('form');
+          addButtonsFromRoot(form);
+          addButtonsFromRoot(composer?.parentElement);
+          addButtonsFromRoot(composer?.closest('[data-testid], section, main, div'));
+          addButtonsFromRoot(document);
+
+          for (const button of candidates) {
+            if (isButtonReady(button)) {
+              return button;
+            }
+          }
+
+          return null;
+        }
+
+        function getComposerForm(composer, button) {
+          const composerForm = composer?.closest?.('form') || null;
+          const buttonForm = button?.form || button?.closest?.('form') || null;
+
+          if (composerForm) {
+            return composerForm;
+          }
+
+          if (buttonForm && (!composer || buttonForm.contains(composer))) {
+            return buttonForm;
+          }
+
+          return null;
+        }
+
+        function createSubmitEvent(button, form) {
+          const submitter = button && button.form === form ? button : null;
+
+          if (typeof SubmitEvent === 'function') {
+            return new SubmitEvent('submit', {
+              bubbles: true,
+              cancelable: true,
+              submitter
+            });
+          }
+
+          return new Event('submit', {
+            bubbles: true,
+            cancelable: true
+          });
+        }
+
+        const composer = findComposer();
+        if (!composer) {
+          return false;
+        }
+
+        const button = findSendButton(composer);
+        const form = getComposerForm(composer, button);
+        if (!form) {
+          return false;
+        }
+
+        if (typeof form.requestSubmit === 'function') {
+          try {
+            if (button && button.form === form) {
+              form.requestSubmit(button);
+            } else {
+              form.requestSubmit();
+            }
+            return true;
+          } catch (error) {
+            // Fall through to a submit event for custom composer forms.
+          }
+        }
+
+        form.dispatchEvent(createSubmitEvent(button, form));
+        return true;
+      })();
+    `, true);
+  } catch (error) {
+    console.error('[ERROR] Failed to submit assistant composer form:', error);
+    return false;
+  }
+}
+
 async function clickComposerSendButton(webContents) {
   try {
     const clickTarget = await webContents.executeJavaScript(`
@@ -4284,12 +4399,6 @@ async function submitComposerViaDom(webContents) {
 
           button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
-          try {
-            button.focus({ preventScroll: true });
-          } catch (error) {
-            // Ignore buttons that cannot be focused.
-          }
-
           const downEventInit = {
             bubbles: true,
             cancelable: true,
@@ -4363,6 +4472,11 @@ async function submitComposerViaDom(webContents) {
 
 async function submitCurrentComposer(webContents, expectedText) {
   await waitForSendButtonReady(webContents, 12, 100);
+
+  const formSubmitted = await submitComposerViaForm(webContents);
+  if (formSubmitted && await waitForComposerTextChange(webContents, expectedText, 8, 100)) {
+    return true;
+  }
 
   const clickSubmitted = await clickComposerSendButton(webContents);
   if (clickSubmitted && await waitForComposerTextChange(webContents, expectedText, 30, 200)) {
