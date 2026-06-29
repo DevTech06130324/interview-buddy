@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   goBack: () => ipcRenderer.invoke('go-back'),
   goForward: () => ipcRenderer.invoke('go-forward'),
   reload: () => ipcRenderer.invoke('reload'),
+  saveTranscript: () => ipcRenderer.invoke('save-transcript'),
   clearTranscript: () => ipcRenderer.invoke('clear-transcript'),
   toggleLiveCaptionsWindow: () => ipcRenderer.invoke('toggle-live-captions-window'),
   getLiveCaptionsWindowVisibility: () => ipcRenderer.invoke('get-live-captions-window-visibility'),

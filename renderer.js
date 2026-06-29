@@ -8,6 +8,7 @@ const loadingIndicator = document.getElementById('loadingIndicator');
 const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
 const newTranscriptIndicator = document.getElementById('newTranscriptIndicator');
+const saveTranscriptBtn = document.getElementById('saveTranscriptBtn');
 const clearTranscriptBtn = document.getElementById('clearTranscriptBtn');
 const closeAppBtn = document.getElementById('closeAppBtn');
 const openHotkeySettingsBtn = document.getElementById('openHotkeySettingsBtn');
@@ -1616,6 +1617,23 @@ forwardBtn.onclick = () => {
 reloadBtn.onclick = () => {
   window.electronAPI.reload();
 };
+
+if (saveTranscriptBtn) {
+  saveTranscriptBtn.onclick = async () => {
+    setButtonBusy(saveTranscriptBtn, true);
+
+    try {
+      const result = await window.electronAPI.saveTranscript();
+      if (result && result.success === false && !result.canceled && result.reason !== 'empty') {
+        console.error('[ERROR] Failed to save transcript:', result.error || result.reason);
+      }
+    } catch (error) {
+      console.error('[ERROR] Failed to save transcript:', error);
+    } finally {
+      setButtonBusy(saveTranscriptBtn, false);
+    }
+  };
+}
 
 if (clearTranscriptBtn) {
   clearTranscriptBtn.onclick = async () => {

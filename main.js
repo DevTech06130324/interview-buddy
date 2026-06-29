@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, ipcMain, globalShortcut, screen, clipboard, nativeTheme } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, globalShortcut, screen, clipboard, nativeTheme, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -41,6 +41,7 @@ const {
   TRANSCRIPT_SPEAKER_TAG,
   buildTranscriptPromptText,
   formatTranscriptElapsedTimestamp,
+  formatTranscriptEntryPromptLine,
   normalizeTranscriptPromptText,
   normalizeTranscriptSpeakerTag,
   normalizeTranscriptTimestampLabel
@@ -72,6 +73,7 @@ const GLOBAL_HOTKEY_STORE_FILE = 'global-hotkeys.json';
 const APP_PREFERENCES_STORE_FILE = 'app-preferences.json';
 const TEMP_UPLOAD_DIR_NAME = 'assistant-temp-uploads';
 const DEFAULT_PROMPT_MODE_NAME = 'Default';
+const TRANSCRIPT_SAVE_DEFAULT_BASENAME = 'company name-meeting name';
 const DEFAULT_TRANSLATION_ENABLED = false;
 const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0.4;
 const DEFAULT_TAB_URLS = DEFAULT_ASSISTANT_URLS;
@@ -2622,6 +2624,71 @@ function getTranscriptTextFromEntries(entries) {
     .trim();
 }
 
+function formatTranscriptSaveDate(date = new Date()) {
+  const candidateDate = date instanceof Date ? date : new Date(date);
+  const safeDate = Number.isNaN(candidateDate.getTime()) ? new Date() : candidateDate;
+  const year = String(safeDate.getFullYear());
+  const month = String(safeDate.getMonth() + 1).padStart(2, '0');
+  const day = String(safeDate.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+function getTranscriptSaveDefaultFilename(date = new Date()) {
+  return `${TRANSCRIPT_SAVE_DEFAULT_BASENAME}-${formatTranscriptSaveDate(date)}.txt`;
+}
+
+function getSavedTranscriptText() {
+  const normalizedTranscriptEntries = normalizeTranscriptEntriesForPrompt(latestTranscriptEntries);
+  if (normalizedTranscriptEntries.length > 0) {
+    return normalizedTranscriptEntries
+      .map((entry, index) => formatTranscriptEntryPromptLine(entry, {
+        includeSpeaker: index === 0
+      }))
+      .join('\n')
+      .trim();
+  }
+
+  return normalizeTranscriptTextForPrompt(latestTranscriptText);
+}
+
+async function saveTranscriptToFile() {
+  const transcriptFileText = getSavedTranscriptText();
+  if (!transcriptFileText) {
+    return {
+      success: false,
+      canceled: false,
+      reason: 'empty'
+    };
+  }
+
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save transcript',
+    defaultPath: path.join(
+      app.getPath('documents'),
+      getTranscriptSaveDefaultFilename()
+    ),
+    filters: [
+      { name: 'Text files', extensions: ['txt'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  });
+
+  if (canceled || !filePath) {
+    return {
+      success: false,
+      canceled: true
+    };
+  }
+
+  await fs.promises.writeFile(filePath, transcriptFileText, 'utf8');
+  return {
+    success: true,
+    canceled: false,
+    filePath
+  };
+}
+
 function getComparableTranscriptText(text) {
   return normalizeTranscriptTextForPrompt(text)
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
@@ -4717,6 +4784,28 @@ ipcMain.handle('set-global-hotkey', (event, payload) => {
   }
 
   return setGlobalHotkey(payload?.id, payload?.accelerator);
+});
+
+ipcMain.handle('save-transcript', async (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('save-transcript', {
+      success: false,
+      canceled: false,
+      reason: 'unauthorized'
+    });
+  }
+
+  try {
+    return await saveTranscriptToFile();
+  } catch (error) {
+    console.error('[ERROR] Failed to save transcript:', error);
+    return {
+      success: false,
+      canceled: false,
+      reason: 'error',
+      error: error?.message || String(error)
+    };
+  }
 });
 
 ipcMain.handle('clear-transcript', async (event) => {
