@@ -1,64 +1,15 @@
 const modeMenu = document.getElementById('modeMenu');
+const {
+  formatHotkeyForDisplay
+} = window.hotkeyHelpers;
+const {
+  getSortedPromptModes
+} = window.promptModeHelpers;
+const setProtectedTooltip = window.protectedTooltips?.setTooltip || (() => {});
 
 let promptModes = [];
 let selectedPromptModeId = null;
 let editingModeId = null;
-
-function setProtectedTooltip(element, text) {
-  if (!element) {
-    return;
-  }
-
-  if (window.protectedTooltips && typeof window.protectedTooltips.setTooltip === 'function') {
-    window.protectedTooltips.setTooltip(element, text);
-    return;
-  }
-
-  const tooltipText = String(text || '').trim();
-  element.removeAttribute('title');
-  if (tooltipText) {
-    element.setAttribute('data-protected-tooltip', tooltipText);
-  } else {
-    element.removeAttribute('data-protected-tooltip');
-  }
-}
-
-function formatHotkeyPartForDisplay(part) {
-  switch (part) {
-    case 'CommandOrControl':
-      return 'Ctrl';
-    case 'Super':
-      return 'Win';
-    case 'Escape':
-      return 'Esc';
-    case 'PageUp':
-      return 'PgUp';
-    case 'PageDown':
-      return 'PgDn';
-    default:
-      return part;
-  }
-}
-
-function formatHotkeyForDisplay(hotkey) {
-  if (typeof hotkey !== 'string' || !hotkey.trim()) {
-    return '';
-  }
-
-  return hotkey
-    .split('+')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map(formatHotkeyPartForDisplay)
-    .join(' + ');
-}
-
-function getSortedPromptModes() {
-  return [...promptModes].sort((left, right) => left.name.localeCompare(right.name, undefined, {
-    sensitivity: 'base',
-    numeric: true
-  }));
-}
 
 async function sendModeMenuAction(action) {
   if (!window.electronAPI?.modeMenuAction) {
@@ -183,7 +134,10 @@ function createModeItem(mode) {
   itemLabel.textContent = mode.name;
   itemCopy.appendChild(itemLabel);
 
-  const formattedHotkey = formatHotkeyForDisplay(mode.hotkey);
+  const formattedHotkey = formatHotkeyForDisplay(mode.hotkey, {
+    separator: ' + ',
+    trimParts: true
+  });
   if (formattedHotkey) {
     const hotkeyLabel = document.createElement('span');
     hotkeyLabel.className = 'mode-menu-item-hotkey';
@@ -248,7 +202,7 @@ function renderModeMenu() {
 
   modeMenu.textContent = '';
 
-  for (const mode of getSortedPromptModes()) {
+  for (const mode of getSortedPromptModes(promptModes)) {
     modeMenu.appendChild(mode.id === editingModeId
       ? createEditingItem(mode)
       : createModeItem(mode));

@@ -25,6 +25,10 @@ function getComposerHelpersSource() {
   return mainSource.slice(startIndex, endIndex);
 }
 
+function readMainSource() {
+  return fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+}
+
 test('screenshot upload marker search does not require the assistant input to be focused', () => {
   const source = getFunctionSource('markImageUploadInput');
   const helperSource = getComposerHelpersSource();
@@ -48,4 +52,17 @@ test('screenshot upload gives Claude a real composer focus before attaching file
   assert.match(focusSource, /dispatchMouseClickWithoutWindowFocus\(webContents, clickTarget\)/);
   assert.doesNotMatch(focusSource, /webContents\.focus\(/);
   assert.doesNotMatch(focusSource, /sendInputEvent/);
+});
+
+test('screenshot upload reuses shared injected composer scope helpers', () => {
+  const mainSource = readMainSource();
+  const attachmentSource = getFunctionSource('getAssistantImageAttachmentState');
+  const pasteSource = getFunctionSource('pasteImageIntoComposer');
+
+  assert.match(mainSource, /const COMPOSER_SCOPE_HELPERS_SCRIPT = `/);
+  assert.equal((mainSource.match(/function getComposerScopes\(composer\)/g) || []).length, 1);
+  assert.match(attachmentSource, /\$\{COMPOSER_SCOPE_HELPERS_SCRIPT\}/);
+  assert.match(pasteSource, /\$\{COMPOSER_SCOPE_HELPERS_SCRIPT\}/);
+  assert.doesNotMatch(attachmentSource, /function getScopes\(composer\)/);
+  assert.doesNotMatch(pasteSource, /function getScopes\(composer\)/);
 });

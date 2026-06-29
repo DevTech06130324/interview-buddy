@@ -30,6 +30,14 @@ const collapsedModeDropdownMenu = document.getElementById('collapsedModeDropdown
 const modePromptPreview = document.getElementById('modePromptPreview');
 const modeHotkeyInput = document.getElementById('modeHotkeyInput');
 const modeSuffixInput = document.getElementById('modeSuffixInput');
+const {
+  formatHotkeyForDisplay,
+  getHotkeyCaptureFromEvent
+} = window.hotkeyHelpers;
+const {
+  getSortedPromptModes
+} = window.promptModeHelpers;
+const setProtectedTooltip = window.protectedTooltips?.setTooltip || (() => {});
 
 const tabs = new Map();
 let activeTabId = null;
@@ -66,30 +74,16 @@ const MIN_TRANSCRIPT_PANEL_WIDTH = 280;
 const MIN_BROWSER_PANEL_WIDTH = 220;
 const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
-const TRANSCRIPT_SPEAKER_TAG = 'Them';
-const DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL = '00:00:00';
+const {
+  DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
+  TRANSCRIPT_SPEAKER_TAG,
+  formatTranscriptEntryMarker,
+  normalizeTranscriptSpeakerTag,
+  normalizeTranscriptTimestampLabel
+} = window.transcriptPrompt;
 const createTranscriptDisplayGroups = typeof window.transcriptDisplayGroups?.createTranscriptDisplayGroups === 'function'
   ? window.transcriptDisplayGroups.createTranscriptDisplayGroups
   : (entries) => entries;
-
-function setProtectedTooltip(element, text) {
-  if (!element) {
-    return;
-  }
-
-  if (window.protectedTooltips && typeof window.protectedTooltips.setTooltip === 'function') {
-    window.protectedTooltips.setTooltip(element, text);
-    return;
-  }
-
-  const tooltipText = String(text || '').trim();
-  element.removeAttribute('title');
-  if (tooltipText) {
-    element.setAttribute('data-protected-tooltip', tooltipText);
-  } else {
-    element.removeAttribute('data-protected-tooltip');
-  }
-}
 
 function formatUrl(input) {
   if (!input || input.trim() === '') {
@@ -266,34 +260,6 @@ function scrollTranscriptToBottom() {
 
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
   setNewTranscriptIndicatorVisible(false);
-}
-
-function normalizeTranscriptTimestampLabel(label) {
-  const value = String(label || '').trim();
-  const match = value.match(/^(\d{1,}):([0-5]\d):([0-5]\d)$/);
-  if (!match) {
-    return '';
-  }
-
-  return `${match[1].padStart(2, '0')}:${match[2]}:${match[3]}`;
-}
-
-function normalizeTranscriptSpeakerTag(speakerTag) {
-  const value = String(speakerTag || '').trim();
-  return value || TRANSCRIPT_SPEAKER_TAG;
-}
-
-function formatTranscriptEntryMarker(entry = {}, options = {}) {
-  const timestampLabel = normalizeTranscriptTimestampLabel(entry.timestampLabel)
-    || DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL;
-  const includeSpeaker = Boolean(options.includeSpeaker);
-
-  if (includeSpeaker) {
-    const speakerTag = normalizeTranscriptSpeakerTag(entry.speakerTag);
-    return '[' + timestampLabel + ' | ' + speakerTag + ']';
-  }
-
-  return `[${timestampLabel}]`;
 }
 
 function normalizeTranscriptEntries(data) {
@@ -746,13 +712,6 @@ function getSelectedPromptMode() {
   return promptModes.find((mode) => mode.id === selectedPromptModeId) || null;
 }
 
-function getSortedPromptModes() {
-  return [...promptModes].sort((left, right) => left.name.localeCompare(right.name, undefined, {
-    sensitivity: 'base',
-    numeric: true
-  }));
-}
-
 function getModeDropdownMenus() {
   return [modeDropdownMenu, collapsedModeDropdownMenu].filter(Boolean);
 }
@@ -829,34 +788,6 @@ function setModeHotkeyStatus(status) {
   modeHotkeyInput.classList.toggle('is-error', status === 'error');
 }
 
-function formatHotkeyPartForDisplay(part) {
-  switch (part) {
-    case 'CommandOrControl':
-      return 'Ctrl';
-    case 'Super':
-      return 'Win';
-    case 'Escape':
-      return 'Esc';
-    case 'PageUp':
-      return 'PgUp';
-    case 'PageDown':
-      return 'PgDn';
-    default:
-      return part;
-  }
-}
-
-function formatHotkeyForDisplay(hotkey) {
-  if (typeof hotkey !== 'string' || !hotkey.trim()) {
-    return '';
-  }
-
-  return hotkey
-    .split('+')
-    .map((part) => formatHotkeyPartForDisplay(part))
-    .join('+');
-}
-
 function updateModeHotkeyInput() {
   if (!modeHotkeyInput) {
     return;
@@ -901,109 +832,6 @@ function showModeHotkeyFailure(displayValue = '') {
     setModeHotkeyStatus('idle');
     updateModeHotkeyInput();
   }, MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS);
-}
-
-function getHotkeyKeyFromEvent(event) {
-  const code = typeof event.code === 'string' ? event.code : '';
-  const key = typeof event.key === 'string' ? event.key : '';
-  const upperKey = key.toUpperCase();
-
-  if (/^Key[A-Z]$/.test(code)) {
-    return code.slice(3);
-  }
-
-  if (/^Digit[0-9]$/.test(code)) {
-    return code.slice(5);
-  }
-
-  if (/^Numpad[0-9]$/.test(code)) {
-    return `num${code.slice(6)}`;
-  }
-
-  if (code === 'Backquote' || key === '`') {
-    return '`';
-  }
-
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(upperKey)) {
-    return upperKey;
-  }
-
-  switch (key) {
-    case 'ArrowUp':
-      return 'Up';
-    case 'ArrowDown':
-      return 'Down';
-    case 'ArrowLeft':
-      return 'Left';
-    case 'ArrowRight':
-      return 'Right';
-    case ' ':
-    case 'Spacebar':
-      return 'Space';
-    case 'Enter':
-      return 'Enter';
-    case 'Tab':
-      return 'Tab';
-    case 'Escape':
-    case 'Esc':
-      return 'Escape';
-    case 'Backspace':
-      return 'Backspace';
-    case 'Delete':
-    case 'Del':
-      return 'Delete';
-    case 'Insert':
-      return 'Insert';
-    case 'Home':
-      return 'Home';
-    case 'End':
-      return 'End';
-    case 'PageUp':
-      return 'PageUp';
-    case 'PageDown':
-      return 'PageDown';
-    default:
-      return '';
-  }
-}
-
-function getHotkeyCaptureFromEvent(event) {
-  const key = getHotkeyKeyFromEvent(event);
-  if (!key) {
-    return null;
-  }
-
-  const acceleratorParts = [];
-  const displayParts = [];
-
-  if (event.ctrlKey) {
-    acceleratorParts.push('CommandOrControl');
-    displayParts.push('Ctrl');
-  }
-
-  if (event.altKey) {
-    acceleratorParts.push('Alt');
-    displayParts.push('Alt');
-  }
-
-  if (event.shiftKey) {
-    acceleratorParts.push('Shift');
-    displayParts.push('Shift');
-  }
-
-  if (event.metaKey) {
-    acceleratorParts.push('Super');
-    displayParts.push('Win');
-  }
-
-  acceleratorParts.push(key);
-  displayParts.push(formatHotkeyPartForDisplay(key));
-
-  return {
-    accelerator: acceleratorParts.join('+'),
-    displayValue: displayParts.join('+'),
-    isValid: displayParts.length > 1 || /^F([1-9]|1[0-9]|2[0-4])$/.test(key)
-  };
 }
 
 async function applyPromptModeHotkey(modeId, hotkey, displayValue) {
@@ -1247,7 +1075,7 @@ function getModeDropdownRenderSignature() {
     selectedPromptModeId,
     editingPromptModeId,
     canDeleteModes: promptModes.length > 1,
-    modes: getSortedPromptModes().map((mode) => ({
+    modes: getSortedPromptModes(promptModes).map((mode) => ({
       id: mode.id,
       name: mode.name,
       hotkey: mode.hotkey || ''
@@ -1261,7 +1089,7 @@ function populateModeDropdownMenu(menuElement) {
   }
 
   menuElement.textContent = '';
-  const sortedPromptModes = getSortedPromptModes();
+  const sortedPromptModes = getSortedPromptModes(promptModes);
 
   for (const mode of sortedPromptModes) {
     if (mode.id === editingPromptModeId) {

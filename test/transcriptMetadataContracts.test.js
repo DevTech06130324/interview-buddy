@@ -35,10 +35,11 @@ test('caption updates send normalized entries with transcript metadata to the re
 
 test('renderer transcript rows display the speaker marker only on the first row', () => {
   const source = readRepoFile('renderer.js');
+  const promptHelpers = readRepoFile('src/transcriptPrompt.js');
 
   assert.match(source, /formatTranscriptEntryMarker/);
   assert.match(source, /includeSpeaker:\s*index === 0/);
-  assert.match(source, /timestampLabel \+ ' \| ' \+ speakerTag/);
+  assert.match(promptHelpers, /return `\[\$\{timestampLabel\} \| \$\{speakerTag\}\]`;/);
   assert.match(source, /transcript-entry-marker/);
   assert.match(source, /sourceCell\.replaceChildren/);
 });

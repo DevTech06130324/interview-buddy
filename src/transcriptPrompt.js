@@ -1,3 +1,11 @@
+(function initTranscriptPrompt(root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory();
+    return;
+  }
+
+  root.transcriptPrompt = factory();
+}(typeof globalThis !== 'undefined' ? globalThis : this, function createTranscriptPromptModule() {
 const TRANSCRIPT_PROMPT_HEADER = 'Conversations so far like this';
 const TRANSCRIPT_SPEAKER_TAG = 'Them';
 const DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL = '00:00:00';
@@ -109,7 +117,7 @@ function buildTranscriptPromptText({
   return sections.join('\n');
 }
 
-module.exports = {
+return {
   TRANSCRIPT_PROMPT_HEADER,
   TRANSCRIPT_SPEAKER_TAG,
   DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
@@ -121,3 +129,4 @@ module.exports = {
   normalizeTranscriptSpeakerTag,
   normalizeTranscriptTimestampLabel
 };
+}));

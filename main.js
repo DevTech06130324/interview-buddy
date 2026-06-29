@@ -137,6 +137,18 @@ const COMPOSER_HELPERS_SCRIPT = `
           return null;
         }
 `;
+const COMPOSER_SCOPE_HELPERS_SCRIPT = `
+        function getComposerScopes(composer) {
+          return [
+            composer,
+            composer?.closest('form'),
+            composer?.parentElement,
+            composer?.closest('[data-testid], section, main, div'),
+            document,
+            document.body
+          ].filter(Boolean);
+        }
+`;
 const SEND_BUTTON_HELPERS_SCRIPT = `
         function isButtonReady(button) {
           if (!button) return false;
@@ -3643,17 +3655,7 @@ async function getAssistantImageAttachmentState(webContents, markerId = '') {
         const markerId = ${JSON.stringify(String(markerId || ''))};
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         ${COMPOSER_HELPERS_SCRIPT}
-
-        function getScopes(composer) {
-          return [
-            composer,
-            composer?.closest('form'),
-            composer?.parentElement,
-            composer?.closest('[data-testid], section, main, div'),
-            document,
-            document.body
-          ].filter(Boolean);
-        }
+        ${COMPOSER_SCOPE_HELPERS_SCRIPT}
 
         function isAttachmentIndicator(element) {
           const value = [
@@ -3676,7 +3678,7 @@ async function getAssistantImageAttachmentState(webContents, markerId = '') {
 
         const uniqueScopes = [];
         const seenScopes = new Set();
-        for (const scope of getScopes(composer)) {
+        for (const scope of getComposerScopes(composer)) {
           if (!scope || seenScopes.has(scope)) continue;
           seenScopes.add(scope);
           uniqueScopes.push(scope);
@@ -3806,6 +3808,7 @@ async function pasteImageIntoComposer(webContents, image) {
         const imageBase64 = ${JSON.stringify(imageBase64)};
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         ${COMPOSER_HELPERS_SCRIPT}
+        ${COMPOSER_SCOPE_HELPERS_SCRIPT}
 
         function buildFileFromBase64() {
           const binary = atob(imageBase64);
@@ -3822,22 +3825,11 @@ async function pasteImageIntoComposer(webContents, image) {
         const dataTransfer = new DataTransfer();
         dataTransfer.items.add(file);
 
-        function getScopes(composer) {
-          return [
-            composer,
-            composer?.closest('form'),
-            composer?.parentElement,
-            composer?.closest('[data-testid], section, main, div'),
-            document,
-            document.body
-          ].filter(Boolean);
-        }
-
         function getComposerTargets(composer) {
           const targets = [];
           const seen = new Set();
 
-          for (const target of getScopes(composer)) {
+          for (const target of getComposerScopes(composer)) {
             if (seen.has(target)) continue;
             seen.add(target);
             targets.push(target);
