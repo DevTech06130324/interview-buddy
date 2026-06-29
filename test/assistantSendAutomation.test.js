@@ -20,7 +20,7 @@ function getFunctionSource(name) {
 
 test('assistant injected composer helpers are shared instead of copy-pasted per script', () => {
   const mainSource = getMainSource();
-  const injectedFunctions = [
+  const composerInjectedFunctions = [
     'clearCurrentComposer',
     'getCurrentComposerText',
     'pasteTextIntoComposer',
@@ -32,18 +32,35 @@ test('assistant injected composer helpers are shared instead of copy-pasted per 
     'waitForSendButtonReady',
     'submitComposerViaDom'
   ];
+  const sendButtonInjectedFunctions = [
+    'submitComposerViaForm',
+    'clickComposerSendButton',
+    'waitForSendButtonReady',
+    'submitComposerViaDom'
+  ];
 
   assert.match(mainSource, /const COMPOSER_HELPERS_SCRIPT = `/);
+  assert.match(mainSource, /const SEND_BUTTON_HELPERS_SCRIPT = `/);
   assert.equal((mainSource.match(/function isVisibleElement\(element\)/g) || []).length, 1);
   assert.equal((mainSource.match(/function isUsableComposer\(element\)/g) || []).length, 1);
   assert.equal((mainSource.match(/function elementMatchesComposer\(element\)/g) || []).length, 1);
   assert.equal((mainSource.match(/function findComposer\(\)/g) || []).length, 1);
+  assert.equal((mainSource.match(/function isButtonReady\(button\)/g) || []).length, 1);
+  assert.equal((mainSource.match(/function findSendButton\(composer\)/g) || []).length, 1);
 
-  for (const functionName of injectedFunctions) {
+  for (const functionName of composerInjectedFunctions) {
     assert.match(
       getFunctionSource(functionName),
       /\$\{COMPOSER_HELPERS_SCRIPT\}/,
       `${functionName} should compose the shared helper script`
+    );
+  }
+
+  for (const functionName of sendButtonInjectedFunctions) {
+    assert.match(
+      getFunctionSource(functionName),
+      /\$\{SEND_BUTTON_HELPERS_SCRIPT\}/,
+      `${functionName} should compose the shared send button helper script`
     );
   }
 });
@@ -51,10 +68,9 @@ test('assistant injected composer helpers are shared instead of copy-pasted per 
 test('DOM submit fallback clicks a ready assistant send button outside forms', () => {
   const source = getFunctionSource('submitComposerViaDom');
 
-  assert.match(source, /function findSendButton/);
-  assert.match(source, /addButtonsFromRoot\(composer\?\.parentElement\)/);
-  assert.match(source, /addButtonsFromRoot\(document\)/);
+  assert.match(source, /\$\{SEND_BUTTON_HELPERS_SCRIPT\}/);
   assert.match(source, /function clickReadySendButton/);
+  assert.match(source, /findSendButton\(element\)/);
   assert.match(source, /button\.click\(\)/);
 });
 

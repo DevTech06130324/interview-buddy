@@ -1,11 +1,8 @@
 const modeMenu = document.getElementById('modeMenu');
 
-const MODE_SELECTION_DELAY_MS = 320;
-
 let promptModes = [];
 let selectedPromptModeId = null;
 let editingModeId = null;
-let pendingModeSelectionTimer = null;
 
 function setProtectedTooltip(element, text) {
   if (!element) {
@@ -23,13 +20,6 @@ function setProtectedTooltip(element, text) {
     element.setAttribute('data-protected-tooltip', tooltipText);
   } else {
     element.removeAttribute('data-protected-tooltip');
-  }
-}
-
-function clearPendingModeSelection() {
-  if (pendingModeSelectionTimer !== null) {
-    window.clearTimeout(pendingModeSelectionTimer);
-    pendingModeSelectionTimer = null;
   }
 }
 
@@ -112,7 +102,6 @@ async function commitModeRename(modeId, nextName) {
 }
 
 function startModeRename(modeId) {
-  clearPendingModeSelection();
   editingModeId = modeId;
   renderModeMenu();
 
@@ -220,7 +209,6 @@ function createModeItem(mode) {
       return;
     }
 
-    clearPendingModeSelection();
     editingModeId = null;
     await sendModeMenuAction({ type: 'delete', modeId: mode.id });
   };
@@ -232,11 +220,7 @@ function createModeItem(mode) {
       return;
     }
 
-    clearPendingModeSelection();
-    pendingModeSelectionTimer = window.setTimeout(async () => {
-      pendingModeSelectionTimer = null;
-      await sendModeMenuAction({ type: 'select', modeId: mode.id });
-    }, MODE_SELECTION_DELAY_MS);
+    void sendModeMenuAction({ type: 'select', modeId: mode.id });
   };
 
   item.onkeydown = (event) => {
@@ -245,11 +229,7 @@ function createModeItem(mode) {
     }
 
     event.preventDefault();
-    clearPendingModeSelection();
-    pendingModeSelectionTimer = window.setTimeout(async () => {
-      pendingModeSelectionTimer = null;
-      await sendModeMenuAction({ type: 'select', modeId: mode.id });
-    }, MODE_SELECTION_DELAY_MS);
+    void sendModeMenuAction({ type: 'select', modeId: mode.id });
   };
 
   item.ondblclick = (event) => {

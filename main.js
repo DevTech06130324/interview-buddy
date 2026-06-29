@@ -143,6 +143,51 @@ const COMPOSER_HELPERS_SCRIPT = `
           return null;
         }
 `;
+const SEND_BUTTON_HELPERS_SCRIPT = `
+        function isButtonReady(button) {
+          if (!button) return false;
+
+          const isDisabled = button.disabled
+            || button.getAttribute('aria-disabled') === 'true'
+            || button.matches('[disabled]');
+
+          return !isDisabled && isVisibleElement(button);
+        }
+
+        function getSendButtonSearchScopes(composer) {
+          return [
+            composer?.closest('form'),
+            composer?.parentElement,
+            composer?.closest('[data-testid], section, main, div'),
+            document
+          ].filter(Boolean);
+        }
+
+        function findSendButton(composer) {
+          const candidates = [];
+          const seen = new Set();
+
+          for (const root of getSendButtonSearchScopes(composer)) {
+            if (!root || typeof root.querySelectorAll !== 'function') continue;
+
+            for (const selector of buttonSelectors) {
+              for (const button of root.querySelectorAll(selector)) {
+                if (!button || seen.has(button)) continue;
+                seen.add(button);
+                candidates.push(button);
+              }
+            }
+          }
+
+          for (const button of candidates) {
+            if (isButtonReady(button)) {
+              return button;
+            }
+          }
+
+          return null;
+        }
+`;
 
 function getWindowIconOptions() {
   return fs.existsSync(APP_ICON_PATH) ? { icon: APP_ICON_PATH } : {};
@@ -4079,47 +4124,7 @@ async function submitComposerViaForm(webContents) {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
         ${COMPOSER_HELPERS_SCRIPT}
-
-        function isButtonReady(button) {
-          if (!button) return false;
-
-          const isDisabled = button.disabled
-            || button.getAttribute('aria-disabled') === 'true'
-            || button.matches('[disabled]');
-
-          return !isDisabled && isVisibleElement(button);
-        }
-
-        function findSendButton(composer) {
-          const candidates = [];
-          const seen = new Set();
-
-          const addButtonsFromRoot = (root) => {
-            if (!root || typeof root.querySelectorAll !== 'function') return;
-
-            for (const selector of buttonSelectors) {
-              for (const button of root.querySelectorAll(selector)) {
-                if (!button || seen.has(button)) continue;
-                seen.add(button);
-                candidates.push(button);
-              }
-            }
-          };
-
-          const form = composer?.closest('form');
-          addButtonsFromRoot(form);
-          addButtonsFromRoot(composer?.parentElement);
-          addButtonsFromRoot(composer?.closest('[data-testid], section, main, div'));
-          addButtonsFromRoot(document);
-
-          for (const button of candidates) {
-            if (isButtonReady(button)) {
-              return button;
-            }
-          }
-
-          return null;
-        }
+        ${SEND_BUTTON_HELPERS_SCRIPT}
 
         function getComposerForm(composer, button) {
           const composerForm = composer?.closest?.('form') || null;
@@ -4194,47 +4199,7 @@ async function clickComposerSendButton(webContents) {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
         ${COMPOSER_HELPERS_SCRIPT}
-
-        function isButtonReady(button) {
-          if (!button) return false;
-
-          const isDisabled = button.disabled
-            || button.getAttribute('aria-disabled') === 'true'
-            || button.matches('[disabled]');
-
-          return !isDisabled && isVisibleElement(button);
-        }
-
-        function findSendButton(composer) {
-          const candidates = [];
-          const seen = new Set();
-
-          const addButtonsFromRoot = (root) => {
-            if (!root || typeof root.querySelectorAll !== 'function') return;
-
-            for (const selector of buttonSelectors) {
-              for (const button of root.querySelectorAll(selector)) {
-                if (!button || seen.has(button)) continue;
-                seen.add(button);
-                candidates.push(button);
-              }
-            }
-          };
-
-          const form = composer?.closest('form');
-          addButtonsFromRoot(form);
-          addButtonsFromRoot(composer?.parentElement);
-          addButtonsFromRoot(composer?.closest('[data-testid], section, main, div'));
-          addButtonsFromRoot(document);
-
-          for (const button of candidates) {
-            if (isButtonReady(button)) {
-              return button;
-            }
-          }
-
-          return null;
-        }
+        ${SEND_BUTTON_HELPERS_SCRIPT}
 
         function getButtonClickPoint(button) {
           if (!isButtonReady(button)) {
@@ -4274,50 +4239,14 @@ async function waitForSendButtonReady(webContents, attempts = 12, delayMs = 100)
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
         ${COMPOSER_HELPERS_SCRIPT}
-
-        function isButtonReady(button) {
-          if (!button) return false;
-
-          const isDisabled = button.disabled
-            || button.getAttribute('aria-disabled') === 'true'
-            || button.matches('[disabled]');
-
-          const style = window.getComputedStyle(button);
-          const rect = button.getBoundingClientRect();
-          const isHidden = style.display === 'none'
-            || style.visibility === 'hidden'
-            || style.opacity === '0'
-            || rect.width === 0
-            || rect.height === 0;
-
-          return !isDisabled && !isHidden;
-        }
+        ${SEND_BUTTON_HELPERS_SCRIPT}
 
         const composer = findComposer();
         if (!composer) {
           return false;
         }
 
-        const form = composer.closest('form');
-        const scopes = [form, composer.parentElement, composer.closest('[data-testid], section, main, div'), document];
-        const seen = new Set();
-
-        for (const scope of scopes) {
-          if (!scope || typeof scope.querySelectorAll !== 'function') continue;
-
-          for (const selector of buttonSelectors) {
-            for (const button of scope.querySelectorAll(selector)) {
-              if (!button || seen.has(button)) continue;
-              seen.add(button);
-
-              if (isButtonReady(button)) {
-                return true;
-              }
-            }
-          }
-        }
-
-        return false;
+        return Boolean(findSendButton(composer));
       })();
     `;
 
@@ -4343,47 +4272,7 @@ async function submitComposerViaDom(webContents) {
         const composerSelectors = ${ASSISTANT_COMPOSER_SELECTORS_SCRIPT};
         const buttonSelectors = ${ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT};
         ${COMPOSER_HELPERS_SCRIPT}
-
-        function isButtonReady(button) {
-          if (!button) return false;
-
-          const isDisabled = button.disabled
-            || button.getAttribute('aria-disabled') === 'true'
-            || button.matches('[disabled]');
-
-          return !isDisabled && isVisibleElement(button);
-        }
-
-        function findSendButton(composer) {
-          const candidates = [];
-          const seen = new Set();
-
-          const addButtonsFromRoot = (root) => {
-            if (!root || typeof root.querySelectorAll !== 'function') return;
-
-            for (const selector of buttonSelectors) {
-              for (const button of root.querySelectorAll(selector)) {
-                if (!button || seen.has(button)) continue;
-                seen.add(button);
-                candidates.push(button);
-              }
-            }
-          };
-
-          const form = composer?.closest('form');
-          addButtonsFromRoot(form);
-          addButtonsFromRoot(composer?.parentElement);
-          addButtonsFromRoot(composer?.closest('[data-testid], section, main, div'));
-          addButtonsFromRoot(document);
-
-          for (const button of candidates) {
-            if (isButtonReady(button)) {
-              return button;
-            }
-          }
-
-          return null;
-        }
+        ${SEND_BUTTON_HELPERS_SCRIPT}
 
         function dispatchPointerEvent(target, type, eventInit) {
           if (typeof PointerEvent !== 'function') {

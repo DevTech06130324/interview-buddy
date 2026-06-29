@@ -29,11 +29,14 @@ test('translation payloads expose a version and reconciliation search is windowe
 
 test('mode dropdown skips unchanged renders and selects without artificial click delay', () => {
   const renderer = readRepoFile('renderer.js');
+  const modeMenu = readRepoFile('mode-menu.js');
 
   assert.match(renderer, /let modeDropdownRenderSignature = '';/);
   assert.match(renderer, /function getModeDropdownRenderSignature\(\)/);
   assert.match(renderer, /if \(nextSignature === modeDropdownRenderSignature\) \{/);
   assert.doesNotMatch(renderer, /const MODE_SELECTION_DELAY_MS = 320;/);
   assert.doesNotMatch(renderer, /window\.setTimeout\(async \(\) => \{[\s\S]*?selectPromptModeFromMenu\(mode\.id\)[\s\S]*?\}, MODE_SELECTION_DELAY_MS\)/);
+  assert.doesNotMatch(modeMenu, /MODE_SELECTION_DELAY_MS/);
+  assert.doesNotMatch(modeMenu, /pendingModeSelectionTimer/);
+  assert.doesNotMatch(modeMenu, /window\.setTimeout\(async \(\) => \{[\s\S]*?\{ type: 'select'/);
 });
-
