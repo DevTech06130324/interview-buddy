@@ -74,11 +74,25 @@ test('current composer submit tries form submission before mouse fallback for Ch
   const clickIndex = source.indexOf('clickComposerSendButton(webContents)');
   const formSource = getFunctionSource('submitComposerViaForm');
 
+  assert.match(source, /getAssistantTargetKind\(webContents\.getURL\(\)\)/);
+  assert.match(source, /targetKind === 'chatgpt'/);
   assert.notEqual(formSubmitIndex, -1);
   assert.notEqual(clickIndex, -1);
   assert.ok(formSubmitIndex < clickIndex);
   assert.match(formSource, /form\.requestSubmit/);
   assert.match(formSource, /\$\{COMPOSER_HELPERS_SCRIPT\}/);
+});
+
+test('DeepSeek submit uses mouse click before form fallback to avoid no-op form delay', () => {
+  const source = getFunctionSource('submitCurrentComposer');
+  const clickIndex = source.indexOf('clickComposerSendButton(webContents)');
+  const nonChatGptBranchIndex = source.indexOf("targetKind !== 'chatgpt'");
+  const fallbackFormIndex = source.indexOf('submitComposerViaForm(webContents)', nonChatGptBranchIndex);
+
+  assert.notEqual(clickIndex, -1);
+  assert.notEqual(nonChatGptBranchIndex, -1);
+  assert.notEqual(fallbackFormIndex, -1);
+  assert.ok(clickIndex < fallbackFormIndex);
 });
 
 test('assistant composer discovery prefers selector matches before focused generic editables', () => {

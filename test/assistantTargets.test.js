@@ -8,6 +8,7 @@ const {
   ASSISTANT_COMPOSER_SELECTORS,
   ASSISTANT_SEND_BUTTON_SELECTORS,
   ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS,
+  getAssistantTargetKind,
   isSupportedAssistantUrl
 } = require('../src/assistantTargets');
 
@@ -19,6 +20,15 @@ test('Claude is a supported assistant target', () => {
   assert.equal(isSupportedAssistantUrl('https://claude.ai/'), true);
   assert.equal(isSupportedAssistantUrl('https://claude.ai/new'), true);
   assert.equal(isSupportedAssistantUrl('https://www.claude.ai/'), true);
+});
+
+test('assistant target kind is detected from supported hosts', () => {
+  assert.equal(getAssistantTargetKind('https://chatgpt.com/'), 'chatgpt');
+  assert.equal(getAssistantTargetKind('https://chat.openai.com/'), 'chatgpt');
+  assert.equal(getAssistantTargetKind('https://chat.deepseek.com/'), 'deepseek');
+  assert.equal(getAssistantTargetKind('https://deepseek.com/'), 'deepseek');
+  assert.equal(getAssistantTargetKind('https://claude.ai/new'), 'claude');
+  assert.equal(getAssistantTargetKind('https://example.com/'), null);
 });
 
 test('Claude opens as one of the default assistant tabs', () => {

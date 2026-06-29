@@ -34,6 +34,7 @@ const {
   ASSISTANT_SEND_BUTTON_SELECTORS,
   ASSISTANT_FILE_INPUT_SELECTORS,
   ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS,
+  getAssistantTargetKind,
   isSupportedAssistantUrl: isSupportedAssistantTargetUrl
 } = require('./src/assistantTargets');
 const {
@@ -4473,14 +4474,25 @@ async function submitComposerViaDom(webContents) {
 async function submitCurrentComposer(webContents, expectedText) {
   await waitForSendButtonReady(webContents, 12, 100);
 
-  const formSubmitted = await submitComposerViaForm(webContents);
-  if (formSubmitted && await waitForComposerTextChange(webContents, expectedText, 8, 100)) {
-    return true;
+  const targetKind = getAssistantTargetKind(webContents.getURL());
+
+  if (targetKind === 'chatgpt') {
+    const formSubmitted = await submitComposerViaForm(webContents);
+    if (formSubmitted && await waitForComposerTextChange(webContents, expectedText, 8, 100)) {
+      return true;
+    }
   }
 
   const clickSubmitted = await clickComposerSendButton(webContents);
-  if (clickSubmitted && await waitForComposerTextChange(webContents, expectedText, 30, 200)) {
+  if (clickSubmitted && await waitForComposerTextChange(webContents, expectedText, 12, 100)) {
     return true;
+  }
+
+  if (targetKind !== 'chatgpt') {
+    const formSubmitted = await submitComposerViaForm(webContents);
+    if (formSubmitted && await waitForComposerTextChange(webContents, expectedText, 4, 100)) {
+      return true;
+    }
   }
 
   const domSubmitted = await submitComposerViaDom(webContents);

@@ -4,15 +4,49 @@ const DEFAULT_ASSISTANT_URLS = [
   'https://claude.ai/'
 ];
 
-const SUPPORTED_ASSISTANT_HOSTS = new Set([
+const CHATGPT_ASSISTANT_HOSTS = new Set([
   'chatgpt.com',
-  'chat.openai.com',
+  'chat.openai.com'
+]);
+
+const DEEPSEEK_ASSISTANT_HOSTS = new Set([
   'chat.deepseek.com',
   'deepseek.com',
-  'www.deepseek.com',
+  'www.deepseek.com'
+]);
+
+const CLAUDE_ASSISTANT_HOSTS = new Set([
   'claude.ai',
   'www.claude.ai'
 ]);
+
+const SUPPORTED_ASSISTANT_HOSTS = new Set([
+  ...CHATGPT_ASSISTANT_HOSTS,
+  ...DEEPSEEK_ASSISTANT_HOSTS,
+  ...CLAUDE_ASSISTANT_HOSTS
+]);
+
+function getAssistantTargetKind(url) {
+  try {
+    const { hostname } = new URL(url);
+
+    if (CHATGPT_ASSISTANT_HOSTS.has(hostname)) {
+      return 'chatgpt';
+    }
+
+    if (DEEPSEEK_ASSISTANT_HOSTS.has(hostname)) {
+      return 'deepseek';
+    }
+
+    if (CLAUDE_ASSISTANT_HOSTS.has(hostname)) {
+      return 'claude';
+    }
+  } catch (error) {
+    return null;
+  }
+
+  return null;
+}
 
 const ASSISTANT_COMPOSER_SELECTORS = [
   '#prompt-textarea',
@@ -89,12 +123,7 @@ const ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS = [
 ];
 
 function isSupportedAssistantUrl(url) {
-  try {
-    const { hostname } = new URL(url);
-    return SUPPORTED_ASSISTANT_HOSTS.has(hostname);
-  } catch (error) {
-    return false;
-  }
+  return getAssistantTargetKind(url) !== null;
 }
 
 module.exports = {
@@ -104,5 +133,6 @@ module.exports = {
   ASSISTANT_SEND_BUTTON_SELECTORS,
   ASSISTANT_FILE_INPUT_SELECTORS,
   ASSISTANT_REVEAL_UPLOAD_BUTTON_SELECTORS,
+  getAssistantTargetKind,
   isSupportedAssistantUrl
 };
