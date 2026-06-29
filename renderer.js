@@ -10,13 +10,7 @@ const transcriptRowsEl = document.getElementById('transcriptRows');
 const newTranscriptIndicator = document.getElementById('newTranscriptIndicator');
 const clearTranscriptBtn = document.getElementById('clearTranscriptBtn');
 const closeAppBtn = document.getElementById('closeAppBtn');
-const toggleThemeBtn = document.getElementById('toggleThemeBtn');
-const cycleLayoutBtn = document.getElementById('cycleLayoutBtn');
 const openHotkeySettingsBtn = document.getElementById('openHotkeySettingsBtn');
-const switchViewTabs = document.getElementById('switchViewTabs');
-const switchTranscriptViewBtn = document.getElementById('switchTranscriptViewBtn');
-const switchWebviewViewBtn = document.getElementById('switchWebviewViewBtn');
-const toggleTranscriptPanelBtn = document.getElementById('toggleTranscriptPanelBtn');
 const toggleLiveCaptionsBtn = document.getElementById('toggleLiveCaptionsBtn');
 const toggleTranslationBtn = document.getElementById('toggleTranslationBtn');
 const browserContainer = document.querySelector('.browser-container');
@@ -46,13 +40,7 @@ let hasNewTranscriptBelow = false;
 let liveCaptionsWindowVisible = true;
 let translationsVisible = false;
 let translationEnabled = false;
-let isTranscriptPanelCollapsed = false;
-let currentTheme = 'dark';
-let currentLayoutMode = 'vertical';
-let currentSwitchActiveView = 'transcript';
-let currentVerticalPanelSplitRatio = 0.35;
-let currentHorizontalPanelSplitRatio = 0.4;
-let currentPanelSplitRatio = currentVerticalPanelSplitRatio;
+let currentPanelSplitRatio = 0.4;
 let isModePanelCollapsed = true;
 let promptModes = [];
 let selectedPromptModeId = null;
@@ -73,8 +61,6 @@ let panelRatioSyncFrame = null;
 let pendingPanelRatioToSync = null;
 
 const PANEL_DIVIDER_WIDTH = 10;
-const MIN_TRANSCRIPT_PANEL_HEIGHT = 180;
-const MIN_BROWSER_PANEL_HEIGHT = 190;
 const MIN_TRANSCRIPT_PANEL_WIDTH = 280;
 const MIN_BROWSER_PANEL_WIDTH = 220;
 const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
@@ -210,7 +196,6 @@ function syncFromSnapshot(snapshot) {
     applyPanelSplitRatio(snapshot.panelSplitRatio);
   }
 
-  updateTranscriptPanelCollapsed(Boolean(snapshot.transcriptPanelCollapsed));
   updateModePanelCollapsed(Boolean(snapshot.modePanelCollapsed));
   updatePromptModeState(snapshot);
 
@@ -541,82 +526,15 @@ function renderTranscriptError(errorMessage) {
   transcriptRowsEl.appendChild(errorRow);
 }
 
-function getCurrentSplitRatio() {
-  return currentLayoutMode === 'horizontal'
-    ? currentHorizontalPanelSplitRatio
-    : currentVerticalPanelSplitRatio;
-}
-
 function setCurrentSplitRatio(ratio) {
   if (!Number.isFinite(ratio)) {
     return;
   }
 
-  if (currentLayoutMode === 'horizontal') {
-    currentHorizontalPanelSplitRatio = ratio;
-  } else {
-    currentVerticalPanelSplitRatio = ratio;
-  }
-
   currentPanelSplitRatio = ratio;
 }
 
-function updateThemeControls() {
-  document.documentElement.dataset.theme = currentTheme;
-  document.body.dataset.theme = currentTheme;
-
-  if (toggleThemeBtn) {
-    const actionLabel = currentTheme === 'dark'
-      ? 'Switch to light theme'
-      : 'Switch to dark theme';
-    setProtectedTooltip(toggleThemeBtn, actionLabel);
-    toggleThemeBtn.setAttribute('aria-label', actionLabel);
-  }
-}
-
-function updateLayoutControls() {
-  document.body.dataset.layoutMode = currentLayoutMode;
-  document.body.dataset.switchActiveView = currentSwitchActiveView;
-
-  if (currentLayoutMode === 'horizontal' && isTranscriptPanelCollapsed) {
-    updateTranscriptPanelCollapsed(false);
-  }
-
-  if (cycleLayoutBtn) {
-    const label = `Switch layout (${currentLayoutMode})`;
-    setProtectedTooltip(cycleLayoutBtn, label);
-    cycleLayoutBtn.setAttribute('aria-label', label);
-  }
-
-  if (panelDivider) {
-    const orientation = currentLayoutMode === 'horizontal' ? 'vertical' : 'horizontal';
-    panelDivider.setAttribute('aria-orientation', orientation);
-  }
-
-  if (switchViewTabs) {
-    switchViewTabs.hidden = currentLayoutMode !== 'switch';
-  }
-
-  const isTranscriptActive = currentSwitchActiveView === 'transcript';
-  switchTranscriptViewBtn?.classList.toggle('is-active', isTranscriptActive);
-  switchTranscriptViewBtn?.setAttribute('aria-selected', String(isTranscriptActive));
-  switchWebviewViewBtn?.classList.toggle('is-active', !isTranscriptActive);
-  switchWebviewViewBtn?.setAttribute('aria-selected', String(!isTranscriptActive));
-}
-
 function applyAppPreferences(preferences = {}) {
-  if (preferences.theme === 'light' || preferences.theme === 'dark') {
-    currentTheme = preferences.theme;
-  }
-
-  if (['horizontal', 'vertical', 'switch'].includes(preferences.layoutMode)) {
-    currentLayoutMode = preferences.layoutMode;
-  }
-
-  if (preferences.switchActiveView === 'webview' || preferences.switchActiveView === 'transcript') {
-    currentSwitchActiveView = preferences.switchActiveView;
-  }
-
   if (typeof preferences.translationsVisible === 'boolean') {
     setTranslationVisibility(preferences.translationsVisible);
   }
@@ -629,22 +547,11 @@ function applyAppPreferences(preferences = {}) {
     updateLiveCaptionsToggleButton(preferences.liveCaptionsWindowVisible);
   }
 
-  if (Number.isFinite(preferences.verticalTranscriptPanelRatio)) {
-    currentVerticalPanelSplitRatio = preferences.verticalTranscriptPanelRatio;
-  }
-
   if (Number.isFinite(preferences.horizontalTranscriptPanelRatio)) {
-    currentHorizontalPanelSplitRatio = preferences.horizontalTranscriptPanelRatio;
+    setCurrentSplitRatio(preferences.horizontalTranscriptPanelRatio);
   }
 
-  currentPanelSplitRatio = getCurrentSplitRatio();
-  updateThemeControls();
-  updateLayoutControls();
-
-  if (leftPanel && currentLayoutMode === 'switch') {
-    leftPanel.style.width = '';
-    leftPanel.style.height = '';
-  } else if (leftPanel) {
+  if (leftPanel) {
     applyPanelSplitRatio(currentPanelSplitRatio);
   }
 }
@@ -654,32 +561,21 @@ function getPanelMetrics() {
     return null;
   }
 
-  if (currentLayoutMode === 'switch') {
-    return {
-      axis: 'none',
-      adjustableSize: 0,
-      minTranscriptSize: 0,
-      maxTranscriptSize: 0
-    };
-  }
-
-  const isHorizontalLayout = currentLayoutMode === 'horizontal';
   const adjustableSize = Math.max(
     0,
-    (isHorizontalLayout ? browserContainer.clientWidth : browserContainer.clientHeight) - PANEL_DIVIDER_WIDTH
+    browserContainer.clientWidth - PANEL_DIVIDER_WIDTH
   );
 
   if (adjustableSize <= 0) {
     return {
-      axis: isHorizontalLayout ? 'width' : 'height',
       adjustableSize: 0,
       minTranscriptSize: 0,
       maxTranscriptSize: 0
     };
   }
 
-  let minTranscriptSize = isHorizontalLayout ? MIN_TRANSCRIPT_PANEL_WIDTH : MIN_TRANSCRIPT_PANEL_HEIGHT;
-  let minBrowserPanelSize = isHorizontalLayout ? MIN_BROWSER_PANEL_WIDTH : MIN_BROWSER_PANEL_HEIGHT;
+  let minTranscriptSize = MIN_TRANSCRIPT_PANEL_WIDTH;
+  let minBrowserPanelSize = MIN_BROWSER_PANEL_WIDTH;
 
   if (adjustableSize < (minTranscriptSize + minBrowserPanelSize)) {
     const fallbackSize = Math.floor(adjustableSize / 2);
@@ -690,7 +586,6 @@ function getPanelMetrics() {
   const maxTranscriptSize = Math.max(minTranscriptSize, adjustableSize - minBrowserPanelSize);
 
   return {
-    axis: isHorizontalLayout ? 'width' : 'height',
     adjustableSize,
     minTranscriptSize,
     maxTranscriptSize
@@ -728,13 +623,8 @@ function applyPanelSplitRatio(ratio) {
   }
 
   const transcriptSize = Math.round(metrics.adjustableSize * currentPanelSplitRatio);
-  if (metrics.axis === 'width') {
-    leftPanel.style.width = `${transcriptSize}px`;
-    leftPanel.style.height = '';
-  } else {
-    leftPanel.style.height = `${transcriptSize}px`;
-    leftPanel.style.width = '';
-  }
+  leftPanel.style.width = `${transcriptSize}px`;
+  leftPanel.style.height = '';
 }
 
 function queuePanelSplitRatioSync(ratio) {
@@ -755,7 +645,7 @@ function queuePanelSplitRatioSync(ratio) {
   });
 }
 
-function updatePanelSplitFromPointer(clientX, clientY) {
+function updatePanelSplitFromPointer(clientX) {
   if (!panelResizeState || !browserContainer) {
     return;
   }
@@ -766,9 +656,7 @@ function updatePanelSplitFromPointer(clientX, clientY) {
     return;
   }
 
-  const rawTranscriptSize = metrics.axis === 'width'
-    ? clientX - rect.left - panelResizeState.pointerOffset
-    : clientY - rect.top - panelResizeState.pointerOffset;
+  const rawTranscriptSize = clientX - rect.left - panelResizeState.pointerOffset;
   const ratio = rawTranscriptSize / metrics.adjustableSize;
   applyPanelSplitRatio(ratio);
   queuePanelSplitRatioSync(currentPanelSplitRatio);
@@ -803,7 +691,7 @@ function handlePanelDividerPointerMove(event) {
   }
 
   event.preventDefault();
-  updatePanelSplitFromPointer(event.clientX, event.clientY);
+  updatePanelSplitFromPointer(event.clientX);
 }
 
 function handlePanelDividerPointerUp(event) {
@@ -818,27 +706,6 @@ function setButtonBusy(button, isBusy) {
 
   button.disabled = isBusy;
   button.setAttribute('aria-busy', isBusy ? 'true' : 'false');
-}
-
-function updateTranscriptPanelCollapsed(isCollapsed) {
-  if (!leftPanel || !toggleTranscriptPanelBtn) {
-    return;
-  }
-
-  isTranscriptPanelCollapsed = Boolean(isCollapsed);
-  leftPanel.classList.toggle('is-collapsed', isTranscriptPanelCollapsed);
-
-  const actionLabel = isTranscriptPanelCollapsed
-    ? 'Expand transcript panel'
-    : 'Collapse transcript panel';
-
-  setProtectedTooltip(toggleTranscriptPanelBtn, actionLabel);
-  toggleTranscriptPanelBtn.setAttribute('aria-label', actionLabel);
-  toggleTranscriptPanelBtn.setAttribute('aria-expanded', String(!isTranscriptPanelCollapsed));
-
-  if (!isTranscriptPanelCollapsed) {
-    applyPanelSplitRatio(currentPanelSplitRatio);
-  }
 }
 
 function updateModePanelCollapsed(isCollapsed) {
@@ -1696,50 +1563,6 @@ if (closeAppBtn) {
   };
 }
 
-if (toggleThemeBtn) {
-  toggleThemeBtn.onclick = async () => {
-    try {
-      const preferences = await window.electronAPI.toggleAppTheme();
-      applyAppPreferences(preferences);
-    } catch (error) {
-      console.error('[ERROR] Failed to toggle app theme:', error);
-    }
-  };
-}
-
-if (cycleLayoutBtn) {
-  cycleLayoutBtn.onclick = async () => {
-    try {
-      const preferences = await window.electronAPI.cycleLayoutMode();
-      applyAppPreferences(preferences);
-    } catch (error) {
-      console.error('[ERROR] Failed to cycle layout mode:', error);
-    }
-  };
-}
-
-if (switchTranscriptViewBtn) {
-  switchTranscriptViewBtn.onclick = async () => {
-    try {
-      const preferences = await window.electronAPI.setSwitchActiveView('transcript');
-      applyAppPreferences(preferences);
-    } catch (error) {
-      console.error('[ERROR] Failed to switch to transcript view:', error);
-    }
-  };
-}
-
-if (switchWebviewViewBtn) {
-  switchWebviewViewBtn.onclick = async () => {
-    try {
-      const preferences = await window.electronAPI.setSwitchActiveView('webview');
-      applyAppPreferences(preferences);
-    } catch (error) {
-      console.error('[ERROR] Failed to switch to webview view:', error);
-    }
-  };
-}
-
 if (openHotkeySettingsBtn) {
   openHotkeySettingsBtn.onclick = async () => {
     try {
@@ -1849,28 +1672,6 @@ if (newTranscriptIndicator) {
   };
 }
 
-if (toggleTranscriptPanelBtn) {
-  updateTranscriptPanelCollapsed(isTranscriptPanelCollapsed);
-
-  toggleTranscriptPanelBtn.onclick = async () => {
-    if (currentLayoutMode === 'horizontal') {
-      updateTranscriptPanelCollapsed(false);
-      return;
-    }
-
-    const nextCollapsed = !isTranscriptPanelCollapsed;
-    updateTranscriptPanelCollapsed(nextCollapsed);
-
-    try {
-      const collapsed = await window.electronAPI.setTranscriptPanelCollapsed(nextCollapsed);
-      updateTranscriptPanelCollapsed(collapsed);
-    } catch (error) {
-      updateTranscriptPanelCollapsed(!nextCollapsed);
-      console.error('[ERROR] Failed to toggle transcript panel collapse state:', error);
-    }
-  };
-}
-
 if (panelDivider && browserContainer) {
   panelDivider.onpointerdown = (event) => {
     if (event.button !== 0) {
@@ -1879,23 +1680,9 @@ if (panelDivider && browserContainer) {
 
     event.preventDefault();
 
-    if (currentLayoutMode === 'switch') {
-      return;
-    }
-
-    if (isTranscriptPanelCollapsed) {
-      updateTranscriptPanelCollapsed(false);
-      window.electronAPI.setTranscriptPanelCollapsed(false).catch((error) => {
-        console.error('[ERROR] Failed to expand transcript panel before resizing:', error);
-      });
-    }
-
     const dividerRect = panelDivider.getBoundingClientRect();
-    const isHorizontalLayout = currentLayoutMode === 'horizontal';
     panelResizeState = {
-      pointerOffset: isHorizontalLayout
-        ? event.clientX - dividerRect.left
-        : event.clientY - dividerRect.top
+      pointerOffset: event.clientX - dividerRect.left
     };
 
     browserContainer.classList.add('is-resizing');
@@ -1909,7 +1696,7 @@ if (panelDivider && browserContainer) {
     document.addEventListener('pointerup', handlePanelDividerPointerUp);
     document.addEventListener('pointercancel', handlePanelDividerPointerUp);
 
-    updatePanelSplitFromPointer(event.clientX, event.clientY);
+    updatePanelSplitFromPointer(event.clientX);
   };
 }
 
@@ -2195,7 +1982,7 @@ window.electronAPI.getTabs().then((snapshot) => {
 updateModeHotkeyInput();
 applyPanelSplitRatio(currentPanelSplitRatio);
 window.addEventListener('resize', () => {
-  applyPanelSplitRatio(getCurrentSplitRatio());
+  applyPanelSplitRatio(currentPanelSplitRatio);
 });
 
 refreshLiveCaptionsToggleButton().then((updated) => {

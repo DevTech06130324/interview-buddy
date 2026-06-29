@@ -30,36 +30,32 @@ function getFunctionSource(source, name) {
   assert.fail(`Expected to find the end of ${name}`);
 }
 
-test('transcript panel defaults leave enough room for paragraph-length reading', () => {
+test('fixed horizontal transcript panel defaults leave enough room for paragraph-length reading', () => {
   const main = readRepoFile('main.js');
   const renderer = readRepoFile('renderer.js');
 
-  assert.match(main, /const DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO = 0\.35;/);
   assert.match(main, /const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0\.4;/);
-  assert.match(main, /const MIN_TRANSCRIPT_PANEL_HEIGHT = 180;/);
   assert.match(main, /const MIN_TRANSCRIPT_PANEL_WIDTH = 280;/);
+  assert.doesNotMatch(main, /DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO/);
+  assert.doesNotMatch(main, /layoutMode/);
 
-  assert.match(renderer, /let currentVerticalPanelSplitRatio = 0\.35;/);
-  assert.match(renderer, /let currentHorizontalPanelSplitRatio = 0\.4;/);
-  assert.match(renderer, /const MIN_TRANSCRIPT_PANEL_HEIGHT = 180;/);
+  assert.match(renderer, /let currentPanelSplitRatio = 0\.4;/);
   assert.match(renderer, /const MIN_TRANSCRIPT_PANEL_WIDTH = 280;/);
+  assert.doesNotMatch(renderer, /currentHorizontalPanelSplitRatio/);
+  assert.doesNotMatch(renderer, /currentVerticalPanelSplitRatio/);
+  assert.doesNotMatch(renderer, /currentLayoutMode/);
 });
 
-test('first-run transcript panel starts expanded while saved collapse state is still respected', () => {
+test('fixed horizontal transcript panel starts expanded without collapse controls', () => {
   const html = readRepoFile('index.html');
   const main = readRepoFile('main.js');
   const renderer = readRepoFile('renderer.js');
 
-  assert.match(main, /let isTranscriptPanelCollapsed = false;/);
-  assert.match(main, /normalizeBoolean\(parsed\?\.transcriptPanelCollapsed,\s*false\)/);
-  assert.match(main, /isTranscriptPanelCollapsed = false;/);
-  assert.match(renderer, /let isTranscriptPanelCollapsed = false;/);
-
   assert.match(html, /<div class="left-panel">/);
-  assert.match(html, /id="toggleTranscriptPanelBtn"[\s\S]*?data-protected-tooltip="Collapse transcript panel"/);
-  assert.match(html, /id="toggleTranscriptPanelBtn"[\s\S]*?aria-label="Collapse transcript panel"/);
-  assert.match(html, /id="toggleTranscriptPanelBtn"[\s\S]*?aria-expanded="true"/);
   assert.doesNotMatch(html, /<div class="left-panel is-collapsed">/);
+  assert.doesNotMatch(html, /toggleTranscriptPanelBtn/);
+  assert.doesNotMatch(main, /isTranscriptPanelCollapsed/);
+  assert.doesNotMatch(renderer, /updateTranscriptPanelCollapsed/);
 });
 
 test('transcript rows use readable paragraph typography without heavy controls', () => {
@@ -100,5 +96,6 @@ test('panel divider has a visible default grip affordance', () => {
 
   assert.match(css, /\.panel-divider::after\s*\{/);
   assert.match(css, /\.panel-divider:hover::after,/);
-  assert.match(css, /body\[data-layout-mode="horizontal"\] \.panel-divider::after/);
+  assert.match(css, /\.panel-divider::after\s*\{[^}]*height:\s*24px;/s);
+  assert.doesNotMatch(css, /data-layout-mode/);
 });

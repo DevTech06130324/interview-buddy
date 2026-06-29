@@ -40,3 +40,20 @@ test('mode dropdown skips unchanged renders and selects without artificial click
   assert.doesNotMatch(modeMenu, /pendingModeSelectionTimer/);
   assert.doesNotMatch(modeMenu, /window\.setTimeout\(async \(\) => \{[\s\S]*?\{ type: 'select'/);
 });
+
+test('theme and layout switching code is removed for fixed dark horizontal UI', () => {
+  const main = readRepoFile('main.js');
+  const renderer = readRepoFile('renderer.js');
+  const preload = readRepoFile('preload.js');
+  const html = readRepoFile('index.html');
+  const css = readRepoFile('styles.css');
+  const settingsCss = readRepoFile('hotkey-settings.css');
+  const modeMenuCss = readRepoFile('mode-menu.css');
+
+  for (const source of [main, renderer, preload, html, css, settingsCss, modeMenuCss]) {
+    assert.doesNotMatch(source, /toggleAppTheme|toggleThemeBtn|setAppTheme|cycleLayoutMode|cycleLayoutBtn/);
+    assert.doesNotMatch(source, /setLayoutMode|setSwitchActiveView|toggleSwitchActiveView|switchViewTabs/);
+    assert.doesNotMatch(source, /data-theme|data-layout-mode|data-switch-active-view/);
+    assert.doesNotMatch(source, /:root\[data-theme="light"\]/);
+  }
+});

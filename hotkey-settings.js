@@ -7,10 +7,6 @@ let translationEnabled = false;
 const globalHotkeyFeedbackTimers = new Map();
 const HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
-}
-
 function updateTranslationEnabledToggle(isEnabled) {
   translationEnabled = isEnabled !== false;
 
@@ -21,8 +17,6 @@ function updateTranslationEnabledToggle(isEnabled) {
 }
 
 function applyAppPreferences(preferences = {}) {
-  applyTheme(preferences?.theme);
-
   if (typeof preferences?.translationEnabled === 'boolean') {
     updateTranslationEnabledToggle(preferences.translationEnabled);
   } else {

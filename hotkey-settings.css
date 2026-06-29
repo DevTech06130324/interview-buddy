@@ -4,8 +4,7 @@
   box-sizing: border-box;
 }
 
-:root,
-:root[data-theme="dark"] {
+:root {
   --dialog-bg: #181818;
   --dialog-header-bg: #202020;
   --border: #3f3f3f;
@@ -20,23 +19,6 @@
   --success: #42c46f;
   --error: #ff6262;
   color-scheme: dark;
-}
-
-:root[data-theme="light"] {
-  --dialog-bg: #ffffff;
-  --dialog-header-bg: #edf0f4;
-  --border: #cfd6df;
-  --border-soft: #dfe4ea;
-  --border-strong: #b8c2cf;
-  --control-bg: #f7f8fa;
-  --control-hover: #e8ebf0;
-  --text: #17191c;
-  --text-muted: #606873;
-  --text-soft: #4a535f;
-  --accent: #246bce;
-  --success: #128a43;
-  --error: #d83c3c;
-  color-scheme: light;
 }
 
 body {

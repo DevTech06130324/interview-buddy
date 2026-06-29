@@ -271,10 +271,6 @@ function renderModeMenu() {
 }
 
 function applyModeMenuState(state = {}) {
-  if (state.theme === 'light' || state.theme === 'dark') {
-    document.documentElement.dataset.theme = state.theme;
-  }
-
   if (Array.isArray(state.promptModes)) {
     promptModes = state.promptModes.map((mode) => ({
       id: mode.id,

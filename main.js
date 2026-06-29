@@ -53,7 +53,6 @@ const APP_HEADBAR_HEIGHT = 38;
 const TAB_BAR_HEIGHT = 40;
 const URL_BAR_HEIGHT = 50;
 const PANEL_DIVIDER_WIDTH = 10;
-const TRANSCRIPT_PANEL_COLLAPSED_HEIGHT = 55;
 const MODE_PANEL_HEIGHT = 224;
 const MODE_PANEL_COLLAPSED_HEIGHT = 54;
 const MOVE_DISTANCE = 100;
@@ -63,8 +62,6 @@ const MAX_OPACITY = 1.0;
 const DEFAULT_OPACITY = 1.0;
 const DEFAULT_WINDOW_WIDTH = 430;
 const DEFAULT_WINDOW_HEIGHT = 700;
-const MIN_TRANSCRIPT_PANEL_HEIGHT = 180;
-const MIN_BROWSER_PANEL_HEIGHT = 190;
 const MIN_TRANSCRIPT_PANEL_WIDTH = 280;
 const MIN_BROWSER_PANEL_WIDTH = 220;
 const SCREEN_SELECTION_MIN_SIZE = 8;
@@ -75,13 +72,8 @@ const GLOBAL_HOTKEY_STORE_FILE = 'global-hotkeys.json';
 const APP_PREFERENCES_STORE_FILE = 'app-preferences.json';
 const TEMP_UPLOAD_DIR_NAME = 'assistant-temp-uploads';
 const DEFAULT_PROMPT_MODE_NAME = 'Default';
-const DEFAULT_THEME = 'dark';
-const DEFAULT_LAYOUT_MODE = 'vertical';
-const DEFAULT_SWITCH_ACTIVE_VIEW = 'transcript';
 const DEFAULT_TRANSLATION_ENABLED = false;
-const DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO = 0.35;
 const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0.4;
-const SWITCH_VIEW_TABS_HEIGHT = 38;
 const DEFAULT_TAB_URLS = DEFAULT_ASSISTANT_URLS;
 const ALLOWED_NAVIGATION_PROTOCOLS = new Set(['http:', 'https:']);
 const ASSISTANT_COMPOSER_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_COMPOSER_SELECTORS);
@@ -265,12 +257,6 @@ const GLOBAL_HOTKEY_DEFINITIONS = [
     label: 'Mute tabs',
     description: 'Mute or unmute all browser tabs.',
     defaultAccelerator: 'Alt+M'
-  },
-  {
-    id: 'toggleSwitchView',
-    label: 'Switch transcript/webview',
-    description: 'Toggle the visible view in switching layout mode.',
-    defaultAccelerator: 'F12'
   }
 ];
 
@@ -289,12 +275,7 @@ let appWindowBounds = {
   width: DEFAULT_WINDOW_WIDTH,
   height: DEFAULT_WINDOW_HEIGHT
 };
-let currentTheme = DEFAULT_THEME;
-let layoutMode = DEFAULT_LAYOUT_MODE;
-let switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
-let verticalTranscriptPanelRatio = DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO;
 let horizontalTranscriptPanelRatio = DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
-let isTranscriptPanelCollapsed = false;
 let isModePanelCollapsed = true;
 let translationsVisible = false;
 let translationEnabled = DEFAULT_TRANSLATION_ENABLED;
@@ -520,18 +501,6 @@ function broadcastPromptModeState() {
   broadcastModeMenuState();
 }
 
-function normalizeTheme(value) {
-  return value === 'light' ? 'light' : 'dark';
-}
-
-function normalizeLayoutMode(value) {
-  return ['horizontal', 'vertical', 'switch'].includes(value) ? value : DEFAULT_LAYOUT_MODE;
-}
-
-function normalizeSwitchActiveView(value) {
-  return value === 'webview' ? 'webview' : 'transcript';
-}
-
 function normalizeBoolean(value, fallback) {
   return typeof value === 'boolean' ? value : fallback;
 }
@@ -623,15 +592,10 @@ function getCurrentWindowBoundsSnapshot() {
 
 function getAppPreferenceStateSnapshot() {
   return {
-    theme: currentTheme,
-    layoutMode,
-    switchActiveView,
-    verticalTranscriptPanelRatio,
     horizontalTranscriptPanelRatio,
     windowBounds: getCurrentWindowBoundsSnapshot(),
     opacity: currentOpacity,
     isMuted,
-    transcriptPanelCollapsed: layoutMode === 'horizontal' ? false : isTranscriptPanelCollapsed,
     modePanelCollapsed: isModePanelCollapsed,
     translationsVisible,
     translationEnabled,
@@ -680,13 +644,6 @@ function loadAppPreferences() {
     const rawData = fs.readFileSync(getAppPreferencesStorePath(), 'utf8');
     const parsed = JSON.parse(rawData);
 
-    currentTheme = normalizeTheme(parsed?.theme);
-    layoutMode = normalizeLayoutMode(parsed?.layoutMode);
-    switchActiveView = normalizeSwitchActiveView(parsed?.switchActiveView);
-    verticalTranscriptPanelRatio = normalizeSplitRatio(
-      parsed?.verticalTranscriptPanelRatio,
-      DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO
-    );
     horizontalTranscriptPanelRatio = normalizeSplitRatio(
       parsed?.horizontalTranscriptPanelRatio,
       DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO
@@ -694,16 +651,11 @@ function loadAppPreferences() {
     appWindowBounds = normalizeWindowBounds(parsed?.windowBounds) || appWindowBounds;
     currentOpacity = normalizeOpacity(parsed?.opacity);
     isMuted = normalizeBoolean(parsed?.isMuted, false);
-    isTranscriptPanelCollapsed = normalizeBoolean(parsed?.transcriptPanelCollapsed, false);
     isModePanelCollapsed = normalizeBoolean(parsed?.modePanelCollapsed, true);
     translationsVisible = normalizeBoolean(parsed?.translationsVisible, false);
     translationEnabled = normalizeBoolean(parsed?.translationEnabled, DEFAULT_TRANSLATION_ENABLED);
     liveCaptionsWindowVisible = normalizeBoolean(parsed?.liveCaptionsWindowVisible, true);
   } catch (error) {
-    currentTheme = DEFAULT_THEME;
-    layoutMode = DEFAULT_LAYOUT_MODE;
-    switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
-    verticalTranscriptPanelRatio = DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO;
     horizontalTranscriptPanelRatio = DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
     appWindowBounds = {
       width: DEFAULT_WINDOW_WIDTH,
@@ -711,7 +663,6 @@ function loadAppPreferences() {
     };
     currentOpacity = DEFAULT_OPACITY;
     isMuted = false;
-    isTranscriptPanelCollapsed = false;
     isModePanelCollapsed = true;
     translationsVisible = false;
     translationEnabled = DEFAULT_TRANSLATION_ENABLED;
@@ -719,10 +670,6 @@ function loadAppPreferences() {
   }
 
   translationManager.setTranslationEnabled(translationEnabled);
-
-  if (layoutMode === 'horizontal') {
-    isTranscriptPanelCollapsed = false;
-  }
 }
 
 function broadcastAppPreferences() {
@@ -740,21 +687,11 @@ function broadcastAppPreferences() {
 }
 
 function applyNativeTheme() {
-  nativeTheme.themeSource = currentTheme;
+  nativeTheme.themeSource = 'dark';
 }
 
-function getThemeWindowBackground() {
-  return currentTheme === 'light' ? '#ffffff' : '#181818';
-}
-
-function applyThemeWindowBackgrounds() {
-  if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
-    hotkeySettingsWindow.setBackgroundColor(getThemeWindowBackground());
-  }
-
-  if (modeMenuWindow && !modeMenuWindow.isDestroyed()) {
-    modeMenuWindow.setBackgroundColor('#00000000');
-  }
+function getDarkWindowBackground() {
+  return '#181818';
 }
 
 function applyOpacityToWindow(targetWindow) {
@@ -767,62 +704,6 @@ function applyOpacityToAppWindows() {
   applyOpacityToWindow(mainWindow);
   applyOpacityToWindow(hotkeySettingsWindow);
   applyOpacityToWindow(modeMenuWindow);
-}
-
-function setAppTheme(theme) {
-  currentTheme = normalizeTheme(theme);
-  applyNativeTheme();
-  applyThemeWindowBackgrounds();
-  scheduleAppPreferencesPersist();
-  broadcastAppPreferences();
-  applyWebThemeToAllTabs();
-  return getAppPreferenceStateSnapshot();
-}
-
-function toggleAppTheme() {
-  return setAppTheme(currentTheme === 'dark' ? 'light' : 'dark');
-}
-
-function setLayoutMode(nextLayoutMode) {
-  const previousLayoutMode = layoutMode;
-  layoutMode = normalizeLayoutMode(nextLayoutMode);
-
-  if (layoutMode === 'horizontal') {
-    isTranscriptPanelCollapsed = false;
-  }
-
-  if (layoutMode === 'switch' && previousLayoutMode !== 'switch') {
-    switchActiveView = DEFAULT_SWITCH_ACTIVE_VIEW;
-  } else {
-    switchActiveView = normalizeSwitchActiveView(switchActiveView);
-  }
-
-  scheduleAppPreferencesPersist();
-  broadcastAppPreferences();
-  resizeTabs();
-  return getAppPreferenceStateSnapshot();
-}
-
-function cycleLayoutMode() {
-  const order = ['vertical', 'horizontal', 'switch'];
-  const currentIndex = Math.max(0, order.indexOf(layoutMode));
-  return setLayoutMode(order[(currentIndex + 1) % order.length]);
-}
-
-function setSwitchActiveView(nextView) {
-  switchActiveView = normalizeSwitchActiveView(nextView);
-  scheduleAppPreferencesPersist();
-  broadcastAppPreferences();
-  resizeTabs();
-  return getAppPreferenceStateSnapshot();
-}
-
-function toggleSwitchActiveView() {
-  if (layoutMode !== 'switch') {
-    return getAppPreferenceStateSnapshot();
-  }
-
-  return setSwitchActiveView(switchActiveView === 'transcript' ? 'webview' : 'transcript');
 }
 
 function setTranslationVisible(isVisible) {
@@ -980,9 +861,6 @@ function runGlobalHotkeyAction(id) {
       return;
     case 'toggleMute':
       toggleMuteAllTabs();
-      return;
-    case 'toggleSwitchView':
-      toggleSwitchActiveView();
       return;
     default:
       console.error(`[ERROR] Unknown global hotkey action: ${id}`);
@@ -1653,7 +1531,7 @@ function openHotkeySettingsWindow() {
   if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
     const bounds = getCenteredHotkeySettingsBounds(width, height);
     hotkeySettingsWindow.setBounds(bounds);
-    hotkeySettingsWindow.setBackgroundColor(getThemeWindowBackground());
+    hotkeySettingsWindow.setBackgroundColor(getDarkWindowBackground());
     hotkeySettingsWindow.setOpacity(currentOpacity);
     hotkeySettingsWindow.show();
     hotkeySettingsWindow.focus();
@@ -1678,7 +1556,7 @@ function openHotkeySettingsWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
-    backgroundColor: getThemeWindowBackground(),
+    backgroundColor: getDarkWindowBackground(),
     opacity: currentOpacity,
     modal: false,
     webPreferences: {
@@ -1745,10 +1623,7 @@ function normalizeModeMenuAnchor(anchor) {
 }
 
 function getModeMenuStateSnapshot() {
-  return {
-    ...getPromptModeStateSnapshot(),
-    theme: currentTheme
-  };
+  return getPromptModeStateSnapshot();
 }
 
 function getModeMenuContentHeight() {
@@ -1959,37 +1834,26 @@ function scheduleCaptionSyncStart(delayMs = 250) {
   }, delayMs);
 }
 
-function getWebThemeCss() {
-  if (currentTheme === 'light') {
-    return `
-      :root { color-scheme: light !important; }
-      html[data-interview-buddy-theme="light"] body {
-        background-color: #ffffff !important;
-        color: #171717 !important;
-      }
-    `;
-  }
-
+function getDarkWebCss() {
   return `
     :root { color-scheme: dark !important; }
-    html[data-interview-buddy-theme="dark"] body {
+    body {
       background-color: #0f0f0f !important;
       color: #f4f4f4 !important;
     }
   `;
 }
 
-function applyWebThemeToTab(tabId) {
+function applyDarkWebStylesToTab(tabId) {
   const tab = tabs.get(tabId);
   if (!tab || !tab.view || !tab.view.webContents || tab.view.webContents.isDestroyed()) {
     return;
   }
 
-  const theme = currentTheme;
-  const css = getWebThemeCss();
+  const css = getDarkWebCss();
   const script = `
     (() => {
-      const id = 'interview-buddy-theme-style';
+      const id = 'interview-buddy-dark-style';
       let style = document.getElementById(id);
       if (!style) {
         style = document.createElement('style');
@@ -1997,20 +1861,13 @@ function applyWebThemeToTab(tabId) {
         document.documentElement.appendChild(style);
       }
       style.textContent = ${JSON.stringify(css)};
-      document.documentElement.dataset.interviewBuddyTheme = ${JSON.stringify(theme)};
-      document.documentElement.style.colorScheme = ${JSON.stringify(theme)};
+      document.documentElement.style.colorScheme = 'dark';
     })();
   `;
 
   tab.view.webContents.executeJavaScript(script, true).catch((error) => {
-    console.error('[WARNING] Failed to apply web theme:', error.message || error);
+    console.error('[WARNING] Failed to apply dark web styles:', error.message || error);
   });
-}
-
-function applyWebThemeToAllTabs() {
-  for (const tabId of tabs.keys()) {
-    applyWebThemeToTab(tabId);
-  }
 }
 
 function getLayoutDimensions() {
@@ -2019,10 +1876,9 @@ function getLayoutDimensions() {
   const totalContentWidth = Math.max(0, bounds.width - totalOffset);
   const totalContentHeight = Math.max(0, bounds.height - totalOffset);
   const modePanelHeight = isModePanelCollapsed ? MODE_PANEL_COLLAPSED_HEIGHT : MODE_PANEL_HEIGHT;
-  const switchTabsHeight = layoutMode === 'switch' ? SWITCH_VIEW_TABS_HEIGHT : 0;
-  const browserContainerHeight = Math.max(0, totalContentHeight - APP_HEADBAR_HEIGHT - switchTabsHeight - modePanelHeight);
+  const browserContainerHeight = Math.max(0, totalContentHeight - APP_HEADBAR_HEIGHT - modePanelHeight);
   const contentX = BORDER_WIDTH + PADDING_WIDTH;
-  const contentY = BORDER_WIDTH + PADDING_WIDTH + APP_HEADBAR_HEIGHT + switchTabsHeight;
+  const contentY = BORDER_WIDTH + PADDING_WIDTH + APP_HEADBAR_HEIGHT;
 
   if (browserContainerHeight <= 0 || totalContentWidth <= 0) {
     return {
@@ -2037,123 +1893,51 @@ function getLayoutDimensions() {
     };
   }
 
-  if (layoutMode === 'switch') {
-    const browserViewHeight = Math.max(0, browserContainerHeight - TAB_BAR_HEIGHT - URL_BAR_HEIGHT);
-
+  const adjustableWidth = Math.max(0, totalContentWidth - PANEL_DIVIDER_WIDTH);
+  if (adjustableWidth <= 0) {
     return {
       transcriptPanelHeight: browserContainerHeight,
-      transcriptPanelWidth: totalContentWidth,
+      transcriptPanelWidth: 0,
       browserPanelHeight: browserContainerHeight,
-      browserPanelWidth: totalContentWidth,
-      browserViewX: switchActiveView === 'webview' ? contentX : -9999,
-      browserViewY: switchActiveView === 'webview' ? contentY + TAB_BAR_HEIGHT + URL_BAR_HEIGHT : -9999,
-      // Keep the hidden webview sized so offscreen DOM automation can still
-      // measure and activate assistant controls while transcript view is active.
-      browserViewWidth: totalContentWidth,
-      browserViewHeight
-    };
-  }
-
-  if (layoutMode === 'horizontal') {
-    const adjustableWidth = Math.max(0, totalContentWidth - PANEL_DIVIDER_WIDTH);
-    if (adjustableWidth <= 0) {
-      return {
-        transcriptPanelHeight: browserContainerHeight,
-        transcriptPanelWidth: 0,
-        browserPanelHeight: browserContainerHeight,
-        browserPanelWidth: 0,
-        browserViewX: -9999,
-        browserViewY: -9999,
-        browserViewWidth: 0,
-        browserViewHeight: 0
-      };
-    }
-
-    let minTranscriptWidth = MIN_TRANSCRIPT_PANEL_WIDTH;
-    let minBrowserPanelWidth = MIN_BROWSER_PANEL_WIDTH;
-
-    if (adjustableWidth < (minTranscriptWidth + minBrowserPanelWidth)) {
-      const fallbackWidth = Math.floor(adjustableWidth / 2);
-      minTranscriptWidth = Math.min(minTranscriptWidth, fallbackWidth);
-      minBrowserPanelWidth = Math.min(minBrowserPanelWidth, Math.max(0, adjustableWidth - minTranscriptWidth));
-    }
-
-    const maxTranscriptWidth = Math.max(minTranscriptWidth, adjustableWidth - minBrowserPanelWidth);
-    const normalizedRatio = Number.isFinite(horizontalTranscriptPanelRatio)
-      ? horizontalTranscriptPanelRatio
-      : DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
-    const desiredTranscriptWidth = adjustableWidth * normalizedRatio;
-    const transcriptPanelWidth = Math.round(Math.min(
-      maxTranscriptWidth,
-      Math.max(minTranscriptWidth, desiredTranscriptWidth)
-    ));
-    horizontalTranscriptPanelRatio = transcriptPanelWidth / adjustableWidth;
-
-    const browserPanelWidth = Math.max(0, adjustableWidth - transcriptPanelWidth);
-    const browserViewHeight = Math.max(0, browserContainerHeight - TAB_BAR_HEIGHT - URL_BAR_HEIGHT);
-
-    return {
-      transcriptPanelHeight: browserContainerHeight,
-      transcriptPanelWidth,
-      browserPanelHeight: browserContainerHeight,
-      browserPanelWidth,
-      browserViewX: contentX + transcriptPanelWidth + PANEL_DIVIDER_WIDTH,
-      browserViewY: contentY + TAB_BAR_HEIGHT + URL_BAR_HEIGHT,
-      browserViewWidth: browserPanelWidth,
-      browserViewHeight
-    };
-  }
-
-  const adjustableHeight = Math.max(0, browserContainerHeight - PANEL_DIVIDER_WIDTH);
-  if (adjustableHeight <= 0) {
-    return {
-      transcriptPanelHeight: 0,
-      transcriptPanelWidth: totalContentWidth,
-      browserPanelHeight: 0,
-      browserPanelWidth: totalContentWidth,
+      browserPanelWidth: 0,
       browserViewX: -9999,
       browserViewY: -9999,
-      browserViewWidth: totalContentWidth,
+      browserViewWidth: 0,
       browserViewHeight: 0
     };
   }
 
-  let transcriptPanelHeight = Math.min(TRANSCRIPT_PANEL_COLLAPSED_HEIGHT, adjustableHeight);
+  let minTranscriptWidth = MIN_TRANSCRIPT_PANEL_WIDTH;
+  let minBrowserPanelWidth = MIN_BROWSER_PANEL_WIDTH;
 
-  if (!isTranscriptPanelCollapsed) {
-    let minTranscriptHeight = MIN_TRANSCRIPT_PANEL_HEIGHT;
-    let minBrowserPanelHeight = MIN_BROWSER_PANEL_HEIGHT;
-
-    if (adjustableHeight < (minTranscriptHeight + minBrowserPanelHeight)) {
-      const fallbackHeight = Math.floor(adjustableHeight / 2);
-      minTranscriptHeight = Math.min(minTranscriptHeight, fallbackHeight);
-      minBrowserPanelHeight = Math.min(minBrowserPanelHeight, Math.max(0, adjustableHeight - minTranscriptHeight));
-    }
-
-    const maxTranscriptHeight = Math.max(minTranscriptHeight, adjustableHeight - minBrowserPanelHeight);
-    const normalizedRatio = Number.isFinite(verticalTranscriptPanelRatio)
-      ? verticalTranscriptPanelRatio
-      : DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO;
-    const desiredTranscriptHeight = adjustableHeight * normalizedRatio;
-    transcriptPanelHeight = Math.round(Math.min(
-      maxTranscriptHeight,
-      Math.max(minTranscriptHeight, desiredTranscriptHeight)
-    ));
-    verticalTranscriptPanelRatio = transcriptPanelHeight / adjustableHeight;
+  if (adjustableWidth < (minTranscriptWidth + minBrowserPanelWidth)) {
+    const fallbackWidth = Math.floor(adjustableWidth / 2);
+    minTranscriptWidth = Math.min(minTranscriptWidth, fallbackWidth);
+    minBrowserPanelWidth = Math.min(minBrowserPanelWidth, Math.max(0, adjustableWidth - minTranscriptWidth));
   }
 
-  const browserPanelHeight = Math.max(0, adjustableHeight - transcriptPanelHeight);
-  const browserViewY = contentY + transcriptPanelHeight + PANEL_DIVIDER_WIDTH + TAB_BAR_HEIGHT + URL_BAR_HEIGHT;
-  const browserViewHeight = Math.max(0, browserPanelHeight - TAB_BAR_HEIGHT - URL_BAR_HEIGHT);
+  const maxTranscriptWidth = Math.max(minTranscriptWidth, adjustableWidth - minBrowserPanelWidth);
+  const normalizedRatio = Number.isFinite(horizontalTranscriptPanelRatio)
+    ? horizontalTranscriptPanelRatio
+    : DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
+  const desiredTranscriptWidth = adjustableWidth * normalizedRatio;
+  const transcriptPanelWidth = Math.round(Math.min(
+    maxTranscriptWidth,
+    Math.max(minTranscriptWidth, desiredTranscriptWidth)
+  ));
+  horizontalTranscriptPanelRatio = transcriptPanelWidth / adjustableWidth;
+
+  const browserPanelWidth = Math.max(0, adjustableWidth - transcriptPanelWidth);
+  const browserViewHeight = Math.max(0, browserContainerHeight - TAB_BAR_HEIGHT - URL_BAR_HEIGHT);
 
   return {
-    transcriptPanelHeight,
-    transcriptPanelWidth: totalContentWidth,
-    browserPanelHeight,
-    browserPanelWidth: totalContentWidth,
-    browserViewX: contentX,
-    browserViewY,
-    browserViewWidth: totalContentWidth,
+    transcriptPanelHeight: browserContainerHeight,
+    transcriptPanelWidth,
+    browserPanelHeight: browserContainerHeight,
+    browserPanelWidth,
+    browserViewX: contentX + transcriptPanelWidth + PANEL_DIVIDER_WIDTH,
+    browserViewY: contentY + TAB_BAR_HEIGHT + URL_BAR_HEIGHT,
+    browserViewWidth: browserPanelWidth,
     browserViewHeight
   };
 }
@@ -2266,7 +2050,7 @@ function createNewTab(url = 'about:blank', options = {}) {
   if (!shouldDeferLoad) {
     tabView.webContents.loadURL(requestedUrl);
   }
-  applyWebThemeToTab(tabId);
+  applyDarkWebStylesToTab(tabId);
 
   setupTabListeners(tabId, tabView);
   
@@ -2310,7 +2094,7 @@ function setupTabListeners(tabId, tabView) {
   webContents.on('did-finish-load', () => {
     const tab = tabs.get(tabId);
     if (tab) {
-      applyWebThemeToTab(tabId);
+      applyDarkWebStylesToTab(tabId);
       const url = webContents.getURL();
       const title = webContents.getTitle();
       tab.url = url;
@@ -2414,7 +2198,7 @@ function setupTabListeners(tabId, tabView) {
   });
 
   webContents.on('dom-ready', () => {
-    applyWebThemeToTab(tabId);
+    applyDarkWebStylesToTab(tabId);
   });
   
   // Handle new-window event (legacy, but still needed for some cases)
@@ -4817,42 +4601,17 @@ ipcMain.handle('reload', (event) => {
 
 ipcMain.handle('set-panel-split-ratio', (event, ratio) => {
   if (!isMainWindowSender(event)) {
-    return rejectUnauthorizedIpc(
-      'set-panel-split-ratio',
-      layoutMode === 'horizontal' ? horizontalTranscriptPanelRatio : verticalTranscriptPanelRatio
-    );
+    return rejectUnauthorizedIpc('set-panel-split-ratio', horizontalTranscriptPanelRatio);
   }
 
-  if (layoutMode !== 'switch' && Number.isFinite(ratio)) {
-    if (layoutMode === 'horizontal') {
-      horizontalTranscriptPanelRatio = normalizeSplitRatio(ratio, DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO);
-    } else {
-      verticalTranscriptPanelRatio = normalizeSplitRatio(ratio, DEFAULT_VERTICAL_TRANSCRIPT_PANEL_RATIO);
-    }
+  if (Number.isFinite(ratio)) {
+    horizontalTranscriptPanelRatio = normalizeSplitRatio(ratio, DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO);
     scheduleAppPreferencesPersist();
     broadcastAppPreferences();
     resizeTabs();
   }
 
-  return layoutMode === 'horizontal' ? horizontalTranscriptPanelRatio : verticalTranscriptPanelRatio;
-});
-
-ipcMain.handle('set-transcript-panel-collapsed', (event, collapsed) => {
-  if (!isMainWindowSender(event)) {
-    return rejectUnauthorizedIpc('set-transcript-panel-collapsed', isTranscriptPanelCollapsed);
-  }
-
-  if (layoutMode === 'horizontal') {
-    isTranscriptPanelCollapsed = false;
-    scheduleAppPreferencesPersist();
-    resizeTabs();
-    return isTranscriptPanelCollapsed;
-  }
-
-  isTranscriptPanelCollapsed = Boolean(collapsed);
-  scheduleAppPreferencesPersist();
-  resizeTabs();
-  return isTranscriptPanelCollapsed;
+  return horizontalTranscriptPanelRatio;
 });
 
 ipcMain.handle('set-mode-panel-collapsed', (event, collapsed) => {
@@ -4872,54 +4631,6 @@ ipcMain.handle('get-app-preferences', (event) => {
   }
 
   return getAppPreferenceStateSnapshot();
-});
-
-ipcMain.handle('set-app-theme', (event, theme) => {
-  if (!isMainWindowSender(event)) {
-    return rejectUnauthorizedIpc('set-app-theme', getAppPreferenceStateSnapshot());
-  }
-
-  return setAppTheme(theme);
-});
-
-ipcMain.handle('toggle-app-theme', (event) => {
-  if (!isMainWindowSender(event)) {
-    return rejectUnauthorizedIpc('toggle-app-theme', getAppPreferenceStateSnapshot());
-  }
-
-  return toggleAppTheme();
-});
-
-ipcMain.handle('set-layout-mode', (event, nextLayoutMode) => {
-  if (!isMainWindowSender(event)) {
-    return rejectUnauthorizedIpc('set-layout-mode', getAppPreferenceStateSnapshot());
-  }
-
-  return setLayoutMode(nextLayoutMode);
-});
-
-ipcMain.handle('cycle-layout-mode', (event) => {
-  if (!isMainWindowSender(event)) {
-    return rejectUnauthorizedIpc('cycle-layout-mode', getAppPreferenceStateSnapshot());
-  }
-
-  return cycleLayoutMode();
-});
-
-ipcMain.handle('set-switch-active-view', (event, nextView) => {
-  if (!isMainWindowSender(event)) {
-    return rejectUnauthorizedIpc('set-switch-active-view', getAppPreferenceStateSnapshot());
-  }
-
-  return setSwitchActiveView(nextView);
-});
-
-ipcMain.handle('toggle-switch-active-view', (event) => {
-  if (!isMainWindowSender(event)) {
-    return rejectUnauthorizedIpc('toggle-switch-active-view', getAppPreferenceStateSnapshot());
-  }
-
-  return toggleSwitchActiveView();
 });
 
 ipcMain.handle('set-translation-visible', (event, isVisible) => {
@@ -5124,14 +4835,9 @@ ipcMain.handle('get-tabs', (event) => {
     return rejectUnauthorizedIpc('get-tabs', null);
   }
 
-  const currentPanelSplitRatio = layoutMode === 'horizontal'
-    ? horizontalTranscriptPanelRatio
-    : verticalTranscriptPanelRatio;
-
   return {
     activeTabId,
-    panelSplitRatio: currentPanelSplitRatio,
-    transcriptPanelCollapsed: isTranscriptPanelCollapsed,
+    panelSplitRatio: horizontalTranscriptPanelRatio,
     modePanelCollapsed: isModePanelCollapsed,
     ...getAppPreferenceStateSnapshot(),
     ...getPromptModeStateSnapshot(),
