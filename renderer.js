@@ -67,6 +67,9 @@ const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 const TRANSCRIPT_SPEAKER_TAG = 'Them';
 const DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL = '00:00:00';
+const createTranscriptDisplayGroups = typeof window.transcriptDisplayGroups?.createTranscriptDisplayGroups === 'function'
+  ? window.transcriptDisplayGroups.createTranscriptDisplayGroups
+  : (entries) => entries;
 
 function setProtectedTooltip(element, text) {
   if (!element) {
@@ -427,9 +430,10 @@ function renderTranscriptEntries(entries) {
   }
 
   transcriptEl.classList.remove('has-error');
+  const displayEntries = createTranscriptDisplayGroups(entries);
 
   if (!transcriptRowsEl) {
-    transcriptEl.textContent = entries
+    transcriptEl.textContent = displayEntries
       .map((entry, index) => `${formatTranscriptEntryMarker(entry, {
         includeSpeaker: index === 0
       })}\n${entry.sourceText}`)
@@ -448,8 +452,8 @@ function renderTranscriptEntries(entries) {
 
   let expectedNextRow = transcriptRowsEl.firstElementChild;
 
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
+  for (let index = 0; index < displayEntries.length; index += 1) {
+    const entry = displayEntries[index];
     const row = existingRows.get(entry.id) || createTranscriptRow(entry, index);
     updateTranscriptRow(row, entry, index);
     existingRows.delete(entry.id);

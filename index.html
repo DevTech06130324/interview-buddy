@@ -116,12 +116,12 @@
           </div>
         </div>
         <div class="panel-divider" id="panelDivider" role="separator" aria-orientation="vertical" aria-label="Resize panels"></div>
-      
+
         <div class="right-panel">
         <div class="tab-bar" id="tabBar">
           <button class="new-tab-btn" id="newTabBtn" data-protected-tooltip="New Tab (Ctrl+T)">+</button>
         </div>
-      
+
         <div class="url-bar-container">
           <div class="nav-buttons">
             <button class="nav-btn" id="backBtn" data-protected-tooltip="Back (Alt+Left)" disabled>
@@ -141,19 +141,19 @@
               </svg>
             </button>
           </div>
-        
+
           <div class="url-input-wrapper">
-            <input 
-              type="text" 
-              class="url-input" 
-              id="urlInput" 
+            <input
+              type="text"
+              class="url-input"
+              id="urlInput"
               placeholder="Enter URL or search"
               spellcheck="false"
             />
             <div class="loading-indicator" id="loadingIndicator" style="display: none;"></div>
           </div>
         </div>
-      
+
         <div class="content-area" id="contentArea">
           <!-- The main process positions the active BrowserView over this area. -->
         </div>
@@ -243,6 +243,7 @@
   </div>
   
   <script src="protected-tooltips.js"></script>
+  <script src="src/transcriptDisplayGroups.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -61,6 +61,7 @@ test('fixed horizontal transcript panel starts expanded without collapse control
 test('transcript rows show metadata above text with side-by-side translation', () => {
   const css = readRepoFile('styles.css');
   const renderer = readRepoFile('renderer.js');
+  const html = readRepoFile('index.html');
 
   assert.match(css, /\.transcript-content\s*\{[^}]*font-size:\s*14px;/s);
   assert.match(css, /\.transcript-content\s*\{[^}]*line-height:\s*1\.55;/s);
@@ -72,6 +73,9 @@ test('transcript rows show metadata above text with side-by-side translation', (
   assert.match(css, /\.transcript-entry-text\s*\{[^}]*max-width:\s*78ch;/s);
   assert.match(css, /\.transcript-cell-translation\s*\{[^}]*max-width:\s*78ch;/s);
   assert.doesNotMatch(css, /\.transcript-cell-translation\s*\{[^}]*border-top:/s);
+  assert.match(html, /src="src\/transcriptDisplayGroups\.js"/);
+  assert.match(renderer, /createTranscriptDisplayGroups/);
+  assert.match(renderer, /const displayEntries = createTranscriptDisplayGroups\(entries\)/);
 
   const updateSourceCell = getFunctionSource(renderer, 'updateTranscriptSourceCell');
   const createTranscriptRow = getFunctionSource(renderer, 'createTranscriptRow');
