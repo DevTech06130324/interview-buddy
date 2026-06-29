@@ -58,19 +58,29 @@ test('fixed horizontal transcript panel starts expanded without collapse control
   assert.doesNotMatch(renderer, /updateTranscriptPanelCollapsed/);
 });
 
-test('transcript rows use readable paragraph typography without heavy controls', () => {
+test('transcript rows show metadata above text with side-by-side translation', () => {
   const css = readRepoFile('styles.css');
   const renderer = readRepoFile('renderer.js');
 
   assert.match(css, /\.transcript-content\s*\{[^}]*font-size:\s*14px;/s);
   assert.match(css, /\.transcript-content\s*\{[^}]*line-height:\s*1\.55;/s);
   assert.match(css, /\.transcript-cell\s*\{[^}]*padding:\s*12px 16px;/s);
+  assert.match(css, /\.transcript-entry-header\s*\{/);
+  assert.match(css, /\.transcript-entry-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/s);
+  assert.match(css, /\.transcript-content\.is-translation-disabled\s+\.transcript-entry-body,/);
+  assert.match(css, /\.transcript-content\.is-translation-hidden\s+\.transcript-entry-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
   assert.match(css, /\.transcript-entry-text\s*\{[^}]*max-width:\s*78ch;/s);
   assert.match(css, /\.transcript-cell-translation\s*\{[^}]*max-width:\s*78ch;/s);
+  assert.doesNotMatch(css, /\.transcript-cell-translation\s*\{[^}]*border-top:/s);
 
   const updateSourceCell = getFunctionSource(renderer, 'updateTranscriptSourceCell');
   const createTranscriptRow = getFunctionSource(renderer, 'createTranscriptRow');
+  assert.match(updateSourceCell, /sourceCell\.replaceChildren\(sourceText\)/);
+  assert.match(createTranscriptRow, /transcript-entry-header/);
+  assert.match(createTranscriptRow, /transcript-entry-body/);
+  assert.match(createTranscriptRow, /row\.append\(header,\s*body\)/);
   assert.doesNotMatch(updateSourceCell, /createElement\('button'\)/);
+  assert.doesNotMatch(updateSourceCell, /document\.createTextNode\(' '\)/);
   assert.doesNotMatch(createTranscriptRow, /addEventListener\('click'/);
 });
 

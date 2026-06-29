@@ -342,23 +342,27 @@ function getTranscriptEntrySignature(entry, options = {}) {
   });
 }
 
-function updateTranscriptSourceCell(sourceCell, entry, index = 0) {
-  const marker = document.createElement('span');
-  marker.className = 'transcript-entry-marker';
-  marker.textContent = formatTranscriptEntryMarker(entry, {
-    includeSpeaker: index === 0
-  });
-
+function updateTranscriptSourceCell(sourceCell, entry) {
   const sourceText = document.createElement('span');
   sourceText.className = 'transcript-entry-text';
   sourceText.textContent = entry.sourceText;
 
-  sourceCell.replaceChildren(marker, document.createTextNode(' '), sourceText);
+  sourceCell.replaceChildren(sourceText);
 }
 
 function createTranscriptRow(entry, index = 0) {
   const row = document.createElement('div');
   row.dataset.captionId = entry.id;
+
+  const header = document.createElement('div');
+  header.className = 'transcript-entry-header';
+
+  const marker = document.createElement('span');
+  marker.className = 'transcript-entry-marker';
+  header.appendChild(marker);
+
+  const body = document.createElement('div');
+  body.className = 'transcript-entry-body';
 
   const sourceCell = document.createElement('div');
   sourceCell.className = 'transcript-cell transcript-cell-source';
@@ -366,8 +370,8 @@ function createTranscriptRow(entry, index = 0) {
   const translatedCell = document.createElement('div');
   translatedCell.className = 'transcript-cell transcript-cell-translation';
 
-  row.appendChild(sourceCell);
-  row.appendChild(translatedCell);
+  body.append(sourceCell, translatedCell);
+  row.append(header, body);
   updateTranscriptRow(row, entry, index);
   return row;
 }
@@ -385,9 +389,14 @@ function updateTranscriptRow(row, entry, index = 0) {
   row.className = `transcript-row transcript-row-${entry.status}`;
   row.classList.toggle('is-partial', !entry.isFinal);
 
+  const marker = row.querySelector('.transcript-entry-marker');
+  if (marker) {
+    marker.textContent = formatTranscriptEntryMarker(entry, markerOptions);
+  }
+
   const sourceCell = row.querySelector('.transcript-cell-source');
   if (sourceCell) {
-    updateTranscriptSourceCell(sourceCell, entry, index);
+    updateTranscriptSourceCell(sourceCell, entry);
   }
 
   const translatedCell = row.querySelector('.transcript-cell-translation');
@@ -423,8 +432,8 @@ function renderTranscriptEntries(entries) {
     transcriptEl.textContent = entries
       .map((entry, index) => `${formatTranscriptEntryMarker(entry, {
         includeSpeaker: index === 0
-      })} ${entry.sourceText}`)
-      .join('\n');
+      })}\n${entry.sourceText}`)
+      .join('\n\n');
     return;
   }
 
