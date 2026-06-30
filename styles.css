@@ -249,10 +249,6 @@ body {
   display: none;
 }
 
-.deepgram-usage-separator {
-  color: #686868;
-}
-
 .transcript-actions {
   display: inline-flex;
   align-items: center;
@@ -1319,8 +1315,7 @@ body {
   color: var(--text-soft);
 }
 
-.deepgram-usage-status,
-.deepgram-usage-separator {
+.deepgram-usage-status {
   color: var(--text-muted);
 }
 

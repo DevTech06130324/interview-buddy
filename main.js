@@ -318,7 +318,6 @@ let deepgramApiKey = '';
 let deepgramApiKeyStorage = null;
 let deepgramTranscriptionService = null;
 let deepgramTranscriptionActive = false;
-let deepgramTranscriptionStartedAtMs = null;
 let deepgramUsageLastFetchedAtMs = 0;
 let deepgramUsageRefreshPromise = null;
 let deepgramAccountUsageSnapshot = {
@@ -709,20 +708,6 @@ function getDeepgramConnectionApiKey() {
   return deepgramApiKey;
 }
 
-function formatDeepgramSessionDuration(totalSeconds = 0) {
-  const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
-  const minutes = Math.floor(safeSeconds / 60);
-  const seconds = safeSeconds % 60;
-
-  if (minutes < 60) {
-    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return `${hours}:${String(remainingMinutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
 function formatDeepgramBalanceAmount(amount) {
   const numericAmount = Number(amount);
   if (!Number.isFinite(numericAmount)) {
@@ -784,16 +769,9 @@ async function fetchDeepgramJson(url, apiKey) {
   return response.json();
 }
 
-function getDeepgramUsageSnapshot(now = Date.now()) {
-  const sessionElapsedSeconds = deepgramTranscriptionActive && deepgramTranscriptionStartedAtMs
-    ? Math.floor(Math.max(0, now - deepgramTranscriptionStartedAtMs) / 1000)
-    : 0;
-
+function getDeepgramUsageSnapshot() {
   return {
     active: deepgramTranscriptionActive,
-    sessionStartedAtMs: deepgramTranscriptionStartedAtMs,
-    sessionElapsedSeconds,
-    sessionUsageText: `Session ${formatDeepgramSessionDuration(sessionElapsedSeconds)}`,
     accountStatus: deepgramAccountUsageSnapshot.status,
     remainingText: deepgramAccountUsageSnapshot.remainingText,
     updatedAtMs: deepgramAccountUsageSnapshot.updatedAtMs,
@@ -818,7 +796,7 @@ async function refreshDeepgramAccountUsage({ force = false } = {}) {
     && deepgramAccountUsageSnapshot.status !== 'idle'
     && now - deepgramUsageLastFetchedAtMs < DEEPGRAM_USAGE_REFRESH_INTERVAL_MS
   ) {
-    return getDeepgramUsageSnapshot(now);
+    return getDeepgramUsageSnapshot();
   }
 
   if (deepgramUsageRefreshPromise) {
@@ -3127,9 +3105,6 @@ function resetTranscriptStateForSource(sourcePayload = '') {
 
 function setDeepgramTranscriptionState(isActive) {
   deepgramTranscriptionActive = Boolean(isActive);
-  deepgramTranscriptionStartedAtMs = deepgramTranscriptionActive
-    ? (deepgramTranscriptionStartedAtMs || Date.now())
-    : null;
 }
 
 function getDeepgramCaptureStateSnapshot(reason = '') {

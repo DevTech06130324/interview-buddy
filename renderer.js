@@ -9,7 +9,6 @@ const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
 const newTranscriptIndicator = document.getElementById('newTranscriptIndicator');
 const deepgramUsageStatus = document.getElementById('deepgramUsageStatus');
-const deepgramSessionUsageValue = document.getElementById('deepgramSessionUsageValue');
 const deepgramRemainingUsageValue = document.getElementById('deepgramRemainingUsageValue');
 const saveTranscriptBtn = document.getElementById('saveTranscriptBtn');
 const clearTranscriptBtn = document.getElementById('clearTranscriptBtn');
@@ -55,9 +54,7 @@ let translationEnabled = false;
 let transcriptSource = 'live-captions';
 let hasDeepgramApiKey = false;
 let deepgramCaptureActive = false;
-let deepgramCaptureStartedAtMs = null;
 let deepgramRemainingText = 'Remaining unavailable';
-let deepgramUsageTimer = null;
 let currentPanelSplitRatio = 0.4;
 let isModePanelCollapsed = true;
 let promptModes = [];
@@ -721,38 +718,10 @@ async function startDeepgramCapture() {
   return deepgramCaptureStartPromise;
 }
 
-function formatDeepgramSessionDuration(totalSeconds = 0) {
-  const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
-  const minutes = Math.floor(safeSeconds / 60);
-  const seconds = safeSeconds % 60;
-
-  if (minutes < 60) {
-    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return `${hours}:${String(remainingMinutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-function getDeepgramSessionElapsedSeconds() {
-  if (!deepgramCaptureActive || !deepgramCaptureStartedAtMs) {
-    return 0;
-  }
-
-  return Math.floor(Math.max(0, Date.now() - deepgramCaptureStartedAtMs) / 1000);
-}
-
 function updateDeepgramUsageStatus(usage = {}) {
   if (usage && typeof usage === 'object') {
     if (usage.active !== undefined) {
       deepgramCaptureActive = Boolean(usage.active);
-    }
-
-    if (Number.isFinite(usage.sessionStartedAtMs)) {
-      deepgramCaptureStartedAtMs = usage.sessionStartedAtMs;
-    } else if (!deepgramCaptureActive) {
-      deepgramCaptureStartedAtMs = null;
     }
 
     if (typeof usage.remainingText === 'string' && usage.remainingText.trim()) {
@@ -765,50 +734,24 @@ function updateDeepgramUsageStatus(usage = {}) {
     deepgramUsageStatus.hidden = !isDeepgramSource;
   }
 
-  if (deepgramSessionUsageValue) {
-    deepgramSessionUsageValue.textContent = `Session ${formatDeepgramSessionDuration(getDeepgramSessionElapsedSeconds())}`;
-  }
-
   if (deepgramRemainingUsageValue) {
     deepgramRemainingUsageValue.textContent = deepgramRemainingText;
-  }
-}
-
-function syncDeepgramUsageTimer() {
-  if (!deepgramCaptureActive) {
-    if (deepgramUsageTimer) {
-      clearInterval(deepgramUsageTimer);
-      deepgramUsageTimer = null;
-    }
-    updateDeepgramUsageStatus();
-    return;
-  }
-
-  if (!deepgramUsageTimer) {
-    deepgramUsageTimer = setInterval(() => updateDeepgramUsageStatus(), 1000);
   }
 }
 
 function syncDeepgramCaptureFromPreferences() {
   if (transcriptSource !== TRANSCRIPT_SOURCE_DEEPGRAM || !hasDeepgramApiKey) {
     deepgramCaptureActive = false;
-    deepgramCaptureStartedAtMs = null;
     stopDeepgramCapture();
   }
 
   updateDeepgramUsageStatus();
-  syncDeepgramUsageTimer();
   updateTranscriptSourceControlButton();
 }
 
 function applyDeepgramCaptureState(state = {}) {
   deepgramCaptureActive = Boolean(state?.active);
-  deepgramCaptureStartedAtMs = Number.isFinite(state?.sessionStartedAtMs)
-    ? state.sessionStartedAtMs
-    : (deepgramCaptureActive ? (deepgramCaptureStartedAtMs || Date.now()) : null);
-
   updateDeepgramUsageStatus(state);
-  syncDeepgramUsageTimer();
   updateTranscriptSourceControlButton();
 
   if (deepgramCaptureActive) {

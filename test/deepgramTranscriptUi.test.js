@@ -104,7 +104,7 @@ test('Deepgram transcription starts and stops only through explicit controls', (
   assert.doesNotMatch(setKeyPreference, /startDeepgramTranscriptSource\(\)/);
 });
 
-test('Deepgram mode exposes session usage and remaining account balance status', () => {
+test('Deepgram mode exposes only remaining account balance status', () => {
   const html = readRepoFile('index.html');
   const css = readRepoFile('styles.css');
   const renderer = readRepoFile('renderer.js');
@@ -112,16 +112,23 @@ test('Deepgram mode exposes session usage and remaining account balance status',
   const preload = readRepoFile('preload.js');
 
   assert.match(html, /id="deepgramUsageStatus"/);
-  assert.match(html, /id="deepgramSessionUsageValue"/);
   assert.match(html, /id="deepgramRemainingUsageValue"/);
+  assert.doesNotMatch(html, /deepgramSessionUsageValue/);
+  assert.doesNotMatch(html, /Session 00:00/);
+  assert.doesNotMatch(html, /deepgram-usage-separator/);
   assert.match(css, /\.deepgram-usage-status/);
-  assert.match(renderer, /function formatDeepgramSessionDuration/);
   assert.match(renderer, /function updateDeepgramUsageStatus/);
-  assert.match(renderer, /deepgramSessionUsageValue/);
+  assert.doesNotMatch(renderer, /formatDeepgramSessionDuration/);
+  assert.doesNotMatch(renderer, /getDeepgramSessionElapsedSeconds/);
+  assert.doesNotMatch(renderer, /deepgramSessionUsageValue/);
+  assert.doesNotMatch(renderer, /deepgramUsageTimer/);
   assert.match(renderer, /deepgramRemainingUsageValue/);
   assert.match(preload, /refreshDeepgramUsage:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('refresh-deepgram-usage'\)/);
   assert.match(main, /function getDeepgramUsageSnapshot/);
   assert.match(main, /function refreshDeepgramAccountUsage/);
+  assert.doesNotMatch(main, /formatDeepgramSessionDuration/);
+  assert.doesNotMatch(main, /sessionUsageText/);
+  assert.doesNotMatch(main, /sessionElapsedSeconds/);
   assert.match(main, /DEEPGRAM_PROJECTS_ENDPOINT/);
   assert.match(main, /DEEPGRAM_BALANCES_ENDPOINT/);
 });
