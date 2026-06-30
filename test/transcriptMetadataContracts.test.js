@@ -26,6 +26,15 @@ test('Ctrl+Enter prompt injection does not stop when there is no pending transcr
   assert.match(source, /getTranscriptPromptText\(\s*pendingTranscriptText,\s*pendingTranscriptEntries/);
 });
 
+test('Ctrl+Enter marks submitted transcript text and entries from the same snapshot', () => {
+  const source = getAsyncFunctionSource('submitTranscriptToAssistant');
+
+  assert.match(source, /const transcriptEntriesSnapshot = normalizeTranscriptEntriesForPrompt\(latestTranscriptEntries\)/);
+  assert.match(source, /transcriptEntries:\s*transcriptEntriesSnapshot/);
+  assert.match(source, /markTranscriptSubmitted\(transcriptSnapshot,\s*transcriptEntriesSnapshot\)/);
+  assert.doesNotMatch(source, /markTranscriptSubmitted\(transcriptSnapshot\)/);
+});
+
 test('caption updates send normalized entries with transcript metadata to the renderer', () => {
   const source = readRepoFile('main.js');
 

@@ -7,31 +7,24 @@ function readRepoFile(fileName) {
   return fs.readFileSync(path.join(__dirname, '..', fileName), 'utf8');
 }
 
-test('Deepgram workflow has privacy-safe console diagnostics across capture, IPC, socket, and render boundaries', () => {
+test('Deepgram workflow debug console logging is removed after capture diagnostics are no longer needed', () => {
   const main = readRepoFile('main.js');
   const renderer = readRepoFile('renderer.js');
   const service = readRepoFile('src/deepgramTranscriptionService.js');
 
-  assert.match(main, /function logDeepgramWorkflow/);
-  assert.match(main, /\[Deepgram\]/);
-  assert.match(main, /logDeepgramWorkflow\('source-change'/);
-  assert.match(main, /logDeepgramWorkflow\('service-started'/);
-  assert.match(main, /logDeepgramWorkflow\('audio-chunk-received'/);
-  assert.match(main, /logDeepgramWorkflow\('caption-update'/);
-  assert.match(main, /console-message/);
-  assert.match(main, /\[Deepgram renderer\]/);
-  assert.doesNotMatch(main, /logDeepgramWorkflow\([^)]*deepgramApiKey/);
+  assert.doesNotMatch(main, /function logDeepgramWorkflow/);
+  assert.doesNotMatch(main, /logDeepgramWorkflow/);
+  assert.doesNotMatch(main, /\[Deepgram\]/);
+  assert.doesNotMatch(main, /\[Deepgram renderer\]/);
+  assert.doesNotMatch(main, /deepgramAudioChunkLogCounts/);
+  assert.doesNotMatch(main, /Copied transcript prompt to clipboard/);
 
-  assert.match(renderer, /function logDeepgramWorkflow/);
-  assert.match(renderer, /logDeepgramWorkflow\('capture-start-requested'/);
-  assert.match(renderer, /logDeepgramWorkflow\('recorder-started'/);
-  assert.match(renderer, /logDeepgramWorkflow\('recorder-chunk'/);
-  assert.match(renderer, /logDeepgramWorkflow\('caption-update'/);
+  assert.doesNotMatch(renderer, /function logDeepgramWorkflow/);
+  assert.doesNotMatch(renderer, /logDeepgramWorkflow/);
+  assert.doesNotMatch(renderer, /deepgramWorkflowLogCounts/);
+  assert.doesNotMatch(renderer, /\[Deepgram\]/);
 
-  assert.match(service, /function logDeepgramWorkflow/);
-  assert.match(service, /logDeepgramWorkflow\('service-start'/);
-  assert.match(service, /logDeepgramWorkflow\('socket-open'/);
-  assert.match(service, /logDeepgramWorkflow\('audio-chunk-sent'/);
-  assert.match(service, /logDeepgramWorkflow\('transcript-message'/);
-  assert.doesNotMatch(service, /logDeepgramWorkflow\([^)]*apiKey/);
+  assert.doesNotMatch(service, /function logDeepgramWorkflow/);
+  assert.doesNotMatch(service, /logDeepgramWorkflow/);
+  assert.doesNotMatch(service, /\[Deepgram\]/);
 });
