@@ -52,6 +52,32 @@ test('builds conversation prompt with bracketed metadata and prompt suffix', () 
   ].join('\n'));
 });
 
+test('builds conversation prompt with speaker tags at speaker turn boundaries', () => {
+  const text = buildTranscriptPromptText({
+    promptText: 'What should I say?',
+    transcriptEntries: [
+      { sourceText: 'Can you walk me through your last project?', timestampLabel: '00:12:34', speakerTag: 'Them' },
+      { sourceText: 'What tradeoffs did you make?', timestampLabel: '00:13:02', speakerTag: 'Them' },
+      { sourceText: 'I focused on latency first.', timestampLabel: '00:13:15', speakerTag: 'Me' },
+      { sourceText: 'Then I cleaned up reliability.', timestampLabel: '00:13:26', speakerTag: 'Me' },
+      { sourceText: 'What was the result?', timestampLabel: '00:13:40', speakerTag: 'Them' }
+    ]
+  });
+
+  assert.equal(text, [
+    'Conversations so far like this',
+    '"""',
+    '[00:12:34 | Them] Can you walk me through your last project?',
+    '[00:13:02] What tradeoffs did you make?',
+    '[00:13:15 | Me] I focused on latency first.',
+    '[00:13:26] Then I cleaned up reliability.',
+    '[00:13:40 | Them] What was the result?',
+    '"""',
+    '',
+    'What should I say?'
+  ].join('\n'));
+});
+
 test('builds prompt text when there is no transcript', () => {
   assert.equal(buildTranscriptPromptText({ promptText: 'What should I say?' }), 'What should I say?');
 });

@@ -59,6 +59,16 @@ function formatTranscriptEntryMarker(entry = {}, options = {}) {
   return `[${timestampLabel}]`;
 }
 
+function shouldIncludeTranscriptSpeaker(entry = {}, index = 0, previousEntry = null) {
+  if (index === 0) {
+    return true;
+  }
+
+  const currentSpeaker = normalizeTranscriptSpeakerTag(entry.speakerTag);
+  const previousSpeaker = normalizeTranscriptSpeakerTag(previousEntry?.speakerTag);
+  return Boolean(currentSpeaker && previousSpeaker && currentSpeaker !== previousSpeaker);
+}
+
 function formatTranscriptEntryPromptLine(entry = {}, options = {}) {
   const sourceText = normalizeTranscriptPromptText(entry.sourceText);
   if (!sourceText) {
@@ -75,7 +85,7 @@ function getTranscriptEntryPromptLines(transcriptEntries = []) {
 
   return transcriptEntries
     .map((entry, index) => formatTranscriptEntryPromptLine(entry, {
-      includeSpeaker: index === 0
+      includeSpeaker: shouldIncludeTranscriptSpeaker(entry, index, transcriptEntries[index - 1])
     }))
     .filter(Boolean);
 }
@@ -127,6 +137,7 @@ return {
   formatTranscriptEntryPromptLine,
   normalizeTranscriptPromptText,
   normalizeTranscriptSpeakerTag,
-  normalizeTranscriptTimestampLabel
+  normalizeTranscriptTimestampLabel,
+  shouldIncludeTranscriptSpeaker
 };
 }));

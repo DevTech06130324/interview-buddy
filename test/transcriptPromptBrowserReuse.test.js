@@ -15,8 +15,9 @@ test('renderer reuses transcript prompt marker helpers from the shared module', 
   assert.match(html, /src="src\/transcriptPrompt\.js"[\s\S]*src="renderer\.js"/);
   assert.match(transcriptPrompt, /root\.transcriptPrompt = factory\(\)/);
   assert.match(transcriptPrompt, /module\.exports = factory\(\)/);
-  assert.match(renderer, /const \{\s*DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,\s*TRANSCRIPT_SPEAKER_TAG,\s*formatTranscriptEntryMarker,\s*normalizeTranscriptSpeakerTag,\s*normalizeTranscriptTimestampLabel\s*\} = window\.transcriptPrompt;/);
+  assert.match(renderer, /const \{\s*DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,\s*TRANSCRIPT_SPEAKER_TAG,\s*formatTranscriptEntryMarker,\s*normalizeTranscriptSpeakerTag,\s*normalizeTranscriptTimestampLabel,\s*shouldIncludeTranscriptSpeaker\s*\} = window\.transcriptPrompt;/);
   assert.equal((renderer.match(/function normalizeTranscriptTimestampLabel/g) || []).length, 0);
   assert.equal((renderer.match(/function normalizeTranscriptSpeakerTag/g) || []).length, 0);
   assert.equal((renderer.match(/function formatTranscriptEntryMarker/g) || []).length, 0);
+  assert.equal((renderer.match(/function shouldIncludeTranscriptSpeaker/g) || []).length, 0);
 });

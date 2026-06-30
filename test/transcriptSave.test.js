@@ -30,7 +30,7 @@ test('main process saves the whole transcript through a native save dialog', () 
   assert.match(main, /function getTranscriptSaveDefaultFilename\(date = new Date\(\)\)/);
   assert.match(main, /TRANSCRIPT_SAVE_DEFAULT_BASENAME}\-\$\{formatTranscriptSaveDate\(date\)}\.txt/);
   assert.match(main, /function getSavedTranscriptText\(\)/);
-  assert.match(main, /formatTranscriptEntryPromptLine\(entry, \{\s*includeSpeaker: index === 0\s*\}\)/);
+  assert.match(main, /formatTranscriptEntryPromptLine\(entry, \{\s*includeSpeaker: shouldIncludeTranscriptSpeaker\(entry,\s*index,\s*normalizedTranscriptEntries\[index - 1\]\)\s*\}\)/);
   assert.match(main, /dialog\.showSaveDialog/);
   assert.match(main, /defaultPath:\s*path\.join\(\s*app\.getPath\('documents'\),\s*getTranscriptSaveDefaultFilename\(\)\s*\)/);
   assert.match(main, /fs\.promises\.writeFile\(filePath,\s*transcriptFileText,\s*'utf8'\)/);

@@ -81,7 +81,8 @@ const {
   TRANSCRIPT_SPEAKER_TAG,
   formatTranscriptEntryMarker,
   normalizeTranscriptSpeakerTag,
-  normalizeTranscriptTimestampLabel
+  normalizeTranscriptTimestampLabel,
+  shouldIncludeTranscriptSpeaker
 } = window.transcriptPrompt;
 const TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram';
 const TRANSCRIPT_SOURCE_LIVE_CAPTIONS = 'live-captions';
@@ -331,16 +332,6 @@ function getTranscriptSpeakerRoleClass(entry) {
   return normalizeTranscriptSpeakerTag(entry?.speakerTag) === DEEPGRAM_ROLE_ME
     ? 'transcript-row-role-me'
     : 'transcript-row-role-them';
-}
-
-function shouldIncludeTranscriptSpeaker(entry, index, previousEntry = null) {
-  if (index === 0) {
-    return true;
-  }
-
-  const currentSpeaker = normalizeTranscriptSpeakerTag(entry?.speakerTag);
-  const previousSpeaker = normalizeTranscriptSpeakerTag(previousEntry?.speakerTag);
-  return Boolean(currentSpeaker && previousSpeaker && currentSpeaker !== previousSpeaker);
 }
 
 function getTranscriptEntrySignature(entry, options = {}) {

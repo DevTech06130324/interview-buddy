@@ -38,8 +38,9 @@ test('renderer transcript rows display the speaker marker only on the first row'
   const promptHelpers = readRepoFile('src/transcriptPrompt.js');
 
   assert.match(source, /formatTranscriptEntryMarker/);
-  assert.match(source, /includeSpeaker:\s*index === 0/);
+  assert.match(source, /shouldIncludeTranscriptSpeaker/);
   assert.match(promptHelpers, /return `\[\$\{timestampLabel\} \| \$\{speakerTag\}\]`;/);
+  assert.match(promptHelpers, /function shouldIncludeTranscriptSpeaker/);
   assert.match(source, /transcript-entry-marker/);
   assert.match(source, /sourceCell\.replaceChildren/);
 });
