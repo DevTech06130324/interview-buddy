@@ -8,6 +8,9 @@ const loadingIndicator = document.getElementById('loadingIndicator');
 const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
 const newTranscriptIndicator = document.getElementById('newTranscriptIndicator');
+const deepgramUsageStatus = document.getElementById('deepgramUsageStatus');
+const deepgramSessionUsageValue = document.getElementById('deepgramSessionUsageValue');
+const deepgramRemainingUsageValue = document.getElementById('deepgramRemainingUsageValue');
 const saveTranscriptBtn = document.getElementById('saveTranscriptBtn');
 const clearTranscriptBtn = document.getElementById('clearTranscriptBtn');
 const closeAppBtn = document.getElementById('closeAppBtn');
@@ -51,6 +54,10 @@ let translationsVisible = false;
 let translationEnabled = false;
 let transcriptSource = 'live-captions';
 let hasDeepgramApiKey = false;
+let deepgramCaptureActive = false;
+let deepgramCaptureStartedAtMs = null;
+let deepgramRemainingText = 'Remaining unavailable';
+let deepgramUsageTimer = null;
 let currentPanelSplitRatio = 0.4;
 let isModePanelCollapsed = true;
 let promptModes = [];
@@ -684,6 +691,7 @@ async function startDeepgramCapture() {
     const stopOnTrackEnd = () => {
       if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
         stopDeepgramCapture();
+        void window.electronAPI?.stopDeepgramTranscription?.();
       }
     };
 
@@ -713,13 +721,121 @@ async function startDeepgramCapture() {
   return deepgramCaptureStartPromise;
 }
 
+function formatDeepgramSessionDuration(totalSeconds = 0) {
+  const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+
+  if (minutes < 60) {
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}:${String(remainingMinutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function getDeepgramSessionElapsedSeconds() {
+  if (!deepgramCaptureActive || !deepgramCaptureStartedAtMs) {
+    return 0;
+  }
+
+  return Math.floor(Math.max(0, Date.now() - deepgramCaptureStartedAtMs) / 1000);
+}
+
+function updateDeepgramUsageStatus(usage = {}) {
+  if (usage && typeof usage === 'object') {
+    if (usage.active !== undefined) {
+      deepgramCaptureActive = Boolean(usage.active);
+    }
+
+    if (Number.isFinite(usage.sessionStartedAtMs)) {
+      deepgramCaptureStartedAtMs = usage.sessionStartedAtMs;
+    } else if (!deepgramCaptureActive) {
+      deepgramCaptureStartedAtMs = null;
+    }
+
+    if (typeof usage.remainingText === 'string' && usage.remainingText.trim()) {
+      deepgramRemainingText = usage.remainingText;
+    }
+  }
+
+  const isDeepgramSource = transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM;
+  if (deepgramUsageStatus) {
+    deepgramUsageStatus.hidden = !isDeepgramSource;
+  }
+
+  if (deepgramSessionUsageValue) {
+    deepgramSessionUsageValue.textContent = `Session ${formatDeepgramSessionDuration(getDeepgramSessionElapsedSeconds())}`;
+  }
+
+  if (deepgramRemainingUsageValue) {
+    deepgramRemainingUsageValue.textContent = deepgramRemainingText;
+  }
+}
+
+function syncDeepgramUsageTimer() {
+  if (!deepgramCaptureActive) {
+    if (deepgramUsageTimer) {
+      clearInterval(deepgramUsageTimer);
+      deepgramUsageTimer = null;
+    }
+    updateDeepgramUsageStatus();
+    return;
+  }
+
+  if (!deepgramUsageTimer) {
+    deepgramUsageTimer = setInterval(() => updateDeepgramUsageStatus(), 1000);
+  }
+}
+
 function syncDeepgramCaptureFromPreferences() {
-  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && hasDeepgramApiKey) {
+  if (transcriptSource !== TRANSCRIPT_SOURCE_DEEPGRAM || !hasDeepgramApiKey) {
+    deepgramCaptureActive = false;
+    deepgramCaptureStartedAtMs = null;
+    stopDeepgramCapture();
+  }
+
+  updateDeepgramUsageStatus();
+  syncDeepgramUsageTimer();
+  updateTranscriptSourceControlButton();
+}
+
+function applyDeepgramCaptureState(state = {}) {
+  deepgramCaptureActive = Boolean(state?.active);
+  deepgramCaptureStartedAtMs = Number.isFinite(state?.sessionStartedAtMs)
+    ? state.sessionStartedAtMs
+    : (deepgramCaptureActive ? (deepgramCaptureStartedAtMs || Date.now()) : null);
+
+  updateDeepgramUsageStatus(state);
+  syncDeepgramUsageTimer();
+  updateTranscriptSourceControlButton();
+
+  if (deepgramCaptureActive) {
     void startDeepgramCapture();
     return;
   }
 
   stopDeepgramCapture();
+}
+
+function refreshDeepgramUsageStatus() {
+  if (
+    transcriptSource !== TRANSCRIPT_SOURCE_DEEPGRAM
+    || !hasDeepgramApiKey
+    || !window.electronAPI?.refreshDeepgramUsage
+  ) {
+    return;
+  }
+
+  window.electronAPI.refreshDeepgramUsage()
+    .then((usage) => {
+      updateDeepgramUsageStatus(usage);
+      updateTranscriptSourceControlButton();
+    })
+    .catch((error) => {
+      console.error('[ERROR] Failed to refresh Deepgram usage:', error);
+    });
 }
 
 function renderTranscriptError(errorMessage) {
@@ -776,8 +892,14 @@ function applyAppPreferences(preferences = {}) {
     hasDeepgramApiKey = preferences.hasDeepgramApiKey;
   }
 
-  updateLiveCaptionsToggleButton(liveCaptionsWindowVisible);
-  syncDeepgramCaptureFromPreferences();
+  if (preferences.deepgramUsage && typeof preferences.deepgramUsage === 'object') {
+    applyDeepgramCaptureState(preferences.deepgramUsage);
+  } else {
+    syncDeepgramCaptureFromPreferences();
+  }
+
+  updateTranscriptSourceControlButton();
+  refreshDeepgramUsageStatus();
 
   if (Number.isFinite(preferences.horizontalTranscriptPanelRatio)) {
     setCurrentSplitRatio(preferences.horizontalTranscriptPanelRatio);
@@ -1615,27 +1737,33 @@ function queueIncomingPromptModeState(state) {
     });
 }
 
-function updateLiveCaptionsToggleButton(isVisible) {
+function updateTranscriptSourceControlButton() {
   if (!toggleLiveCaptionsBtn) {
     return;
   }
 
-  if (typeof isVisible === 'boolean') {
-    liveCaptionsWindowVisible = isVisible;
-  }
-
   const isLiveCaptionsSource = transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
-  toggleLiveCaptionsBtn.disabled = !isLiveCaptionsSource;
-  toggleLiveCaptionsBtn.setAttribute('aria-disabled', String(!isLiveCaptionsSource));
-  toggleLiveCaptionsBtn.classList.toggle('is-disabled', !isLiveCaptionsSource);
+  const isDeepgramSource = transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM;
+  const isDisabled = isDeepgramSource && !hasDeepgramApiKey;
 
-  if (!isLiveCaptionsSource) {
-    toggleLiveCaptionsBtn.classList.add('is-hidden-state');
-    setProtectedTooltip(toggleLiveCaptionsBtn, 'Live Captions window is unavailable while Deepgram is selected');
-    toggleLiveCaptionsBtn.setAttribute('aria-label', 'Live Captions window is unavailable while Deepgram is selected');
+  toggleLiveCaptionsBtn.disabled = isDisabled;
+  toggleLiveCaptionsBtn.setAttribute('aria-disabled', String(isDisabled));
+  toggleLiveCaptionsBtn.classList.toggle('is-disabled', isDisabled);
+  toggleLiveCaptionsBtn.classList.toggle('is-deepgram-source', isDeepgramSource);
+  toggleLiveCaptionsBtn.classList.toggle('is-deepgram-running', isDeepgramSource && deepgramCaptureActive);
+
+  if (isDeepgramSource) {
+    toggleLiveCaptionsBtn.classList.remove('is-hidden-state');
+    const actionLabel = !hasDeepgramApiKey
+      ? 'Add Deepgram API key in settings'
+      : (deepgramCaptureActive ? 'Stop Deepgram transcription' : 'Start Deepgram transcription');
+    setProtectedTooltip(toggleLiveCaptionsBtn, actionLabel);
+    toggleLiveCaptionsBtn.setAttribute('aria-label', actionLabel);
+    toggleLiveCaptionsBtn.setAttribute('aria-pressed', String(deepgramCaptureActive));
     return;
   }
 
+  toggleLiveCaptionsBtn.classList.remove('is-deepgram-running');
   toggleLiveCaptionsBtn.classList.toggle('is-hidden-state', !liveCaptionsWindowVisible);
 
   const actionLabel = liveCaptionsWindowVisible
@@ -1644,6 +1772,15 @@ function updateLiveCaptionsToggleButton(isVisible) {
 
   setProtectedTooltip(toggleLiveCaptionsBtn, actionLabel);
   toggleLiveCaptionsBtn.setAttribute('aria-label', actionLabel);
+  toggleLiveCaptionsBtn.setAttribute('aria-pressed', String(liveCaptionsWindowVisible));
+}
+
+function updateLiveCaptionsToggleButton(isVisible) {
+  if (typeof isVisible === 'boolean') {
+    liveCaptionsWindowVisible = isVisible;
+  }
+
+  updateTranscriptSourceControlButton();
 }
 
 async function refreshLiveCaptionsToggleButton() {
@@ -1758,6 +1895,28 @@ if (toggleLiveCaptionsBtn) {
   updateLiveCaptionsToggleButton(liveCaptionsWindowVisible);
 
   toggleLiveCaptionsBtn.onclick = async () => {
+    if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+      if (!hasDeepgramApiKey) {
+        updateTranscriptSourceControlButton();
+        return;
+      }
+
+      setButtonBusy(toggleLiveCaptionsBtn, true);
+
+      try {
+        const state = deepgramCaptureActive
+          ? await window.electronAPI.stopDeepgramTranscription()
+          : await window.electronAPI.startDeepgramTranscription();
+        applyDeepgramCaptureState(state);
+      } catch (error) {
+        console.error('[ERROR] Failed to toggle Deepgram transcription:', error);
+      } finally {
+        setButtonBusy(toggleLiveCaptionsBtn, false);
+        updateTranscriptSourceControlButton();
+      }
+      return;
+    }
+
     if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
       return;
     }
@@ -2100,12 +2259,7 @@ window.electronAPI.onAppPreferencesUpdated((preferences) => {
 });
 
 window.electronAPI.onDeepgramCaptureState((state) => {
-  if (state?.active) {
-    void startDeepgramCapture();
-    return;
-  }
-
-  stopDeepgramCapture();
+  applyDeepgramCaptureState(state);
 });
 
 window.electronAPI.onFocusUrlInput(() => {

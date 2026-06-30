@@ -90,6 +90,10 @@ const TRANSCRIPT_SOURCE_LIVE_CAPTIONS = 'live-captions';
 const TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram';
 const DEFAULT_TRANSCRIPT_SOURCE = TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
 const DEFAULT_TRANSLATION_ENABLED = false;
+const DEEPGRAM_API_BASE_URL = 'https://api.deepgram.com/v1';
+const DEEPGRAM_PROJECTS_ENDPOINT = `${DEEPGRAM_API_BASE_URL}/projects`;
+const DEEPGRAM_BALANCES_ENDPOINT = 'balances';
+const DEEPGRAM_USAGE_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0.4;
 const DEFAULT_TAB_URLS = DEFAULT_ASSISTANT_URLS;
 const ALLOWED_NAVIGATION_PROTOCOLS = new Set(['http:', 'https:']);
@@ -313,6 +317,16 @@ let transcriptSource = DEFAULT_TRANSCRIPT_SOURCE;
 let deepgramApiKey = '';
 let deepgramApiKeyStorage = null;
 let deepgramTranscriptionService = null;
+let deepgramTranscriptionActive = false;
+let deepgramTranscriptionStartedAtMs = null;
+let deepgramUsageLastFetchedAtMs = 0;
+let deepgramUsageRefreshPromise = null;
+let deepgramAccountUsageSnapshot = {
+  status: 'idle',
+  remainingText: 'Remaining unavailable',
+  updatedAtMs: null,
+  error: ''
+};
 let captureOverlayState = null;
 const shortcutCooldowns = new Map();
 const registeredGlobalHotkeys = new Map();
@@ -695,6 +709,158 @@ function getDeepgramConnectionApiKey() {
   return deepgramApiKey;
 }
 
+function formatDeepgramSessionDuration(totalSeconds = 0) {
+  const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+
+  if (minutes < 60) {
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}:${String(remainingMinutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatDeepgramBalanceAmount(amount) {
+  const numericAmount = Number(amount);
+  if (!Number.isFinite(numericAmount)) {
+    return 'Remaining unavailable';
+  }
+
+  return `$${Math.max(0, numericAmount).toFixed(2)} left`;
+}
+
+function getDeepgramProjectId(projectsPayload) {
+  const projects = Array.isArray(projectsPayload?.projects)
+    ? projectsPayload.projects
+    : (Array.isArray(projectsPayload) ? projectsPayload : []);
+  const firstProject = projects.find((project) => project && typeof project === 'object');
+  return String(firstProject?.project_id || firstProject?.id || '').trim();
+}
+
+function getDeepgramBalanceAmount(balancesPayload) {
+  const balances = Array.isArray(balancesPayload?.balances)
+    ? balancesPayload.balances
+    : (Array.isArray(balancesPayload) ? balancesPayload : []);
+
+  const amounts = balances
+    .map((balance) => Number(
+      balance?.amount
+      ?? balance?.balance
+      ?? balance?.remaining
+      ?? balance?.available
+    ))
+    .filter(Number.isFinite);
+
+  if (amounts.length === 0) {
+    return null;
+  }
+
+  return amounts.reduce((total, amount) => total + amount, 0);
+}
+
+function getDeepgramBalancesEndpoint(projectId) {
+  return `${DEEPGRAM_API_BASE_URL}/projects/${encodeURIComponent(projectId)}/${DEEPGRAM_BALANCES_ENDPOINT}`;
+}
+
+async function fetchDeepgramJson(url, apiKey) {
+  if (typeof fetch !== 'function') {
+    throw new Error('Fetch is not available in this runtime.');
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Token ${apiKey}`,
+      Accept: 'application/json'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Deepgram usage request failed with HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function getDeepgramUsageSnapshot(now = Date.now()) {
+  const sessionElapsedSeconds = deepgramTranscriptionActive && deepgramTranscriptionStartedAtMs
+    ? Math.floor(Math.max(0, now - deepgramTranscriptionStartedAtMs) / 1000)
+    : 0;
+
+  return {
+    active: deepgramTranscriptionActive,
+    sessionStartedAtMs: deepgramTranscriptionStartedAtMs,
+    sessionElapsedSeconds,
+    sessionUsageText: `Session ${formatDeepgramSessionDuration(sessionElapsedSeconds)}`,
+    accountStatus: deepgramAccountUsageSnapshot.status,
+    remainingText: deepgramAccountUsageSnapshot.remainingText,
+    updatedAtMs: deepgramAccountUsageSnapshot.updatedAtMs,
+    error: deepgramAccountUsageSnapshot.error
+  };
+}
+
+async function refreshDeepgramAccountUsage({ force = false } = {}) {
+  if (!deepgramApiKey) {
+    deepgramAccountUsageSnapshot = {
+      status: 'missing-api-key',
+      remainingText: 'Add API key',
+      updatedAtMs: Date.now(),
+      error: ''
+    };
+    return getDeepgramUsageSnapshot();
+  }
+
+  const now = Date.now();
+  if (
+    !force
+    && deepgramAccountUsageSnapshot.status !== 'idle'
+    && now - deepgramUsageLastFetchedAtMs < DEEPGRAM_USAGE_REFRESH_INTERVAL_MS
+  ) {
+    return getDeepgramUsageSnapshot(now);
+  }
+
+  if (deepgramUsageRefreshPromise) {
+    return deepgramUsageRefreshPromise;
+  }
+
+  deepgramUsageRefreshPromise = (async () => {
+    try {
+      const projectsPayload = await fetchDeepgramJson(DEEPGRAM_PROJECTS_ENDPOINT, deepgramApiKey);
+      const projectId = getDeepgramProjectId(projectsPayload);
+      if (!projectId) {
+        throw new Error('No Deepgram project is available for this key.');
+      }
+
+      const balancesPayload = await fetchDeepgramJson(getDeepgramBalancesEndpoint(projectId), deepgramApiKey);
+      const balanceAmount = getDeepgramBalanceAmount(balancesPayload);
+      deepgramAccountUsageSnapshot = {
+        status: Number.isFinite(balanceAmount) ? 'available' : 'unavailable',
+        remainingText: Number.isFinite(balanceAmount)
+          ? formatDeepgramBalanceAmount(balanceAmount)
+          : 'Remaining unavailable',
+        updatedAtMs: Date.now(),
+        error: ''
+      };
+    } catch (error) {
+      deepgramAccountUsageSnapshot = {
+        status: 'unavailable',
+        remainingText: 'Remaining unavailable',
+        updatedAtMs: Date.now(),
+        error: error?.message || String(error)
+      };
+    } finally {
+      deepgramUsageLastFetchedAtMs = Date.now();
+      deepgramUsageRefreshPromise = null;
+    }
+
+    return getDeepgramUsageSnapshot();
+  })();
+
+  return deepgramUsageRefreshPromise;
+}
+
 function getRendererAppPreferenceStateSnapshot() {
   return {
     horizontalTranscriptPanelRatio,
@@ -707,7 +873,8 @@ function getRendererAppPreferenceStateSnapshot() {
     liveCaptionsWindowVisible,
     transcriptSource,
     hasDeepgramApiKey: Boolean(deepgramApiKey),
-    deepgramApiKeyLast4: getDeepgramApiKeyLast4()
+    deepgramApiKeyLast4: getDeepgramApiKeyLast4(),
+    deepgramUsage: getDeepgramUsageSnapshot()
   };
 }
 
@@ -2958,13 +3125,29 @@ function resetTranscriptStateForSource(sourcePayload = '') {
   applyTranscriptPayload(translationManager.reset(sourcePayload));
 }
 
+function setDeepgramTranscriptionState(isActive) {
+  deepgramTranscriptionActive = Boolean(isActive);
+  deepgramTranscriptionStartedAtMs = deepgramTranscriptionActive
+    ? (deepgramTranscriptionStartedAtMs || Date.now())
+    : null;
+}
+
+function getDeepgramCaptureStateSnapshot(reason = '') {
+  return {
+    ...getDeepgramUsageSnapshot(),
+    reason: typeof reason === 'string' ? reason : ''
+  };
+}
+
 function broadcastDeepgramCaptureState(isActive, reason = '') {
+  setDeepgramTranscriptionState(isActive);
+  const snapshot = getDeepgramCaptureStateSnapshot(reason);
+
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('deepgram-capture-state', {
-      active: Boolean(isActive),
-      reason: typeof reason === 'string' ? reason : ''
-    });
+    mainWindow.webContents.send('deepgram-capture-state', snapshot);
   }
+
+  return snapshot;
 }
 
 function normalizeDeepgramAudioChunk(chunk) {
@@ -3033,32 +3216,41 @@ function stopDeepgramTranscriptSource(reason = 'stopped') {
     deepgramTranscriptionService.stop();
   }
 
-  broadcastDeepgramCaptureState(false, reason);
+  return broadcastDeepgramCaptureState(false, reason);
 }
 
 function startDeepgramTranscriptSource() {
+  if (transcriptSource !== TRANSCRIPT_SOURCE_DEEPGRAM) {
+    return broadcastDeepgramCaptureState(false, 'wrong-source');
+  }
+
   const connectionApiKey = getDeepgramConnectionApiKey();
   if (!connectionApiKey) {
-    broadcastDeepgramCaptureState(false, 'missing-api-key');
-    return false;
+    return broadcastDeepgramCaptureState(false, 'missing-api-key');
+  }
+
+  if (deepgramTranscriptionActive) {
+    return getDeepgramCaptureStateSnapshot('already-started');
   }
 
   try {
     getDeepgramTranscriptionService().start({ apiKey: connectionApiKey });
-    broadcastDeepgramCaptureState(true, 'started');
-    return true;
+    const snapshot = broadcastDeepgramCaptureState(true, 'started');
+    void refreshDeepgramAccountUsage().then(() => {
+      broadcastDeepgramCaptureState(deepgramTranscriptionActive, 'usage-updated');
+    });
+    return snapshot;
   } catch (error) {
     console.error('[ERROR] Failed to start Deepgram transcription:', error);
     sendCaptionError(`Deepgram transcription failed to start: ${error?.message || String(error)}`);
-    broadcastDeepgramCaptureState(false, 'start-failed');
-    return false;
+    return broadcastDeepgramCaptureState(false, 'start-failed');
   }
 }
 
 function startActiveTranscriptSource() {
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
     stopLiveCaptionTranscriptSource();
-    startDeepgramTranscriptSource();
+    broadcastDeepgramCaptureState(deepgramTranscriptionActive, deepgramTranscriptionActive ? 'running' : 'ready');
     return;
   }
 
@@ -3070,10 +3262,10 @@ function applyTranscriptSourceChange(nextSource, { resetTranscript = true } = {}
   const normalizedSource = normalizeTranscriptSource(nextSource);
 
   if (transcriptSource === normalizedSource) {
-    if (normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
-      startDeepgramTranscriptSource();
-    } else {
+    if (normalizedSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
       scheduleCaptionSyncStart();
+    } else {
+      broadcastDeepgramCaptureState(deepgramTranscriptionActive, deepgramTranscriptionActive ? 'running' : 'ready');
     }
     return getAppPreferenceStateSnapshot();
   }
@@ -3102,8 +3294,18 @@ function setTranscriptSourcePreference(source) {
 
 function setDeepgramApiKeyPreference(apiKey) {
   setDeepgramApiKeyInMemory(apiKey);
-  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
-    startDeepgramTranscriptSource();
+  deepgramUsageLastFetchedAtMs = 0;
+  deepgramAccountUsageSnapshot = {
+    status: deepgramApiKey ? 'idle' : 'missing-api-key',
+    remainingText: deepgramApiKey ? 'Remaining unavailable' : 'Add API key',
+    updatedAtMs: null,
+    error: ''
+  };
+
+  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && deepgramApiKey) {
+    void refreshDeepgramAccountUsage().then(() => {
+      broadcastDeepgramCaptureState(deepgramTranscriptionActive, 'usage-updated');
+    });
   }
 
   scheduleAppPreferencesPersist();
@@ -4859,6 +5061,30 @@ ipcMain.handle('clear-deepgram-api-key', (event) => {
   }
 
   return clearDeepgramApiKeyPreference();
+});
+
+ipcMain.handle('start-deepgram-transcription', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('start-deepgram-transcription', getDeepgramCaptureStateSnapshot('unauthorized'));
+  }
+
+  return startDeepgramTranscriptSource();
+});
+
+ipcMain.handle('stop-deepgram-transcription', (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('stop-deepgram-transcription', getDeepgramCaptureStateSnapshot('unauthorized'));
+  }
+
+  return stopDeepgramTranscriptSource('stopped');
+});
+
+ipcMain.handle('refresh-deepgram-usage', async (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('refresh-deepgram-usage', getDeepgramUsageSnapshot());
+  }
+
+  return refreshDeepgramAccountUsage();
 });
 
 ipcMain.handle('add-prompt-mode', (event) => {

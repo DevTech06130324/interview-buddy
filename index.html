@@ -43,7 +43,14 @@
         <div class="left-panel">
           <div class="transcript-panel">
             <div class="transcript-header">
-              <span>Transcript</span>
+              <div class="transcript-heading">
+                <span>Transcript</span>
+                <div class="deepgram-usage-status" id="deepgramUsageStatus" hidden>
+                  <span id="deepgramSessionUsageValue">Session 00:00</span>
+                  <span class="deepgram-usage-separator" aria-hidden="true">|</span>
+                  <span id="deepgramRemainingUsageValue">Remaining unavailable</span>
+                </div>
+              </div>
               <div class="transcript-actions">
                 <button
                   class="transcript-action-btn transcript-icon-btn"
@@ -52,15 +59,21 @@
                   data-protected-tooltip="Hide Live Captions window"
                   aria-label="Hide Live Captions window"
                 >
-                  <svg class="transcript-icon transcript-icon-visible" viewBox="0 0 24 24" aria-hidden="true">
+                  <svg class="transcript-icon transcript-icon-visible transcript-icon-live-visible" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M2 12s3.75-6 10-6 10 6 10 6-3.75 6-10 6-10-6-10-6Z"></path>
                     <circle cx="12" cy="12" r="3"></circle>
                   </svg>
-                  <svg class="transcript-icon transcript-icon-hidden" viewBox="0 0 24 24" aria-hidden="true">
+                  <svg class="transcript-icon transcript-icon-hidden transcript-icon-live-hidden" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M3 3l18 18"></path>
                     <path d="M10.6 6.1A11.3 11.3 0 0 1 12 6c6.25 0 10 6 10 6a18.4 18.4 0 0 1-4.09 4.53"></path>
                     <path d="M6.53 6.52A18.16 18.16 0 0 0 2 12s3.75 6 10 6c1.64 0 3.11-.41 4.41-1.02"></path>
                     <path d="M9.88 9.88A3 3 0 0 0 12 15a2.98 2.98 0 0 0 2.12-.88"></path>
+                  </svg>
+                  <svg class="transcript-icon transcript-icon-deepgram-play" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 5v14l11-7Z"></path>
+                  </svg>
+                  <svg class="transcript-icon transcript-icon-deepgram-stop" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="7" y="7" width="10" height="10" rx="1.5"></rect>
                   </svg>
                 </button>
                 <button

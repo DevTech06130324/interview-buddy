@@ -226,6 +226,33 @@ body {
   -webkit-app-region: no-drag;
 }
 
+.transcript-heading {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+
+.deepgram-usage-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #a9a9a9;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.deepgram-usage-status[hidden] {
+  display: none;
+}
+
+.deepgram-usage-separator {
+  color: #686868;
+}
+
 .transcript-actions {
   display: inline-flex;
   align-items: center;
@@ -268,7 +295,9 @@ body {
   pointer-events: none;
 }
 
-.transcript-icon-hidden {
+.transcript-icon-hidden,
+.transcript-icon-deepgram-play,
+.transcript-icon-deepgram-stop {
   display: none;
 }
 
@@ -277,6 +306,23 @@ body {
 }
 
 .transcript-icon-btn.is-hidden-state .transcript-icon-hidden {
+  display: block;
+}
+
+.transcript-icon-btn.is-deepgram-source .transcript-icon-visible,
+.transcript-icon-btn.is-deepgram-source .transcript-icon-hidden {
+  display: none;
+}
+
+.transcript-icon-btn.is-deepgram-source .transcript-icon-deepgram-play {
+  display: block;
+}
+
+.transcript-icon-btn.is-deepgram-source.is-deepgram-running .transcript-icon-deepgram-play {
+  display: none;
+}
+
+.transcript-icon-btn.is-deepgram-source.is-deepgram-running .transcript-icon-deepgram-stop {
   display: block;
 }
 
@@ -291,6 +337,10 @@ body {
 
 .transcript-action-btn:disabled {
   opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.transcript-action-btn[aria-busy="true"] {
   cursor: wait;
 }
 
@@ -1267,6 +1317,11 @@ body {
 
 .transcript-cell-translation {
   color: var(--text-soft);
+}
+
+.deepgram-usage-status,
+.deepgram-usage-separator {
+  color: var(--text-muted);
 }
 
 .transcript-row,
