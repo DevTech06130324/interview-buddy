@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppPreferences: () => ipcRenderer.invoke('get-app-preferences'),
   setTranslationVisible: (isVisible) => ipcRenderer.invoke('set-translation-visible', isVisible),
   setTranslationEnabled: (isEnabled) => ipcRenderer.invoke('set-translation-enabled', isEnabled),
+  setTranscriptSource: (source) => ipcRenderer.invoke('set-transcript-source', source),
+  setDeepgramApiKey: (apiKey) => ipcRenderer.invoke('set-deepgram-api-key', apiKey),
+  clearDeepgramApiKey: () => ipcRenderer.invoke('clear-deepgram-api-key'),
+  sendDeepgramAudioChunk: (payload) => ipcRenderer.send('deepgram-audio-chunk', payload),
   addPromptMode: () => ipcRenderer.invoke('add-prompt-mode'),
   selectPromptMode: (modeId) => ipcRenderer.invoke('select-prompt-mode', modeId),
   deletePromptMode: (modeId) => ipcRenderer.invoke('delete-prompt-mode', modeId),
@@ -57,5 +61,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onFocusUrlInput: (callback) => subscribe('focus-url-input', callback),
 
   onCaptionUpdate: (callback) => subscribe('caption-update', callback),
-  onCaptionError: (callback) => subscribe('caption-error', callback)
+  onCaptionError: (callback) => subscribe('caption-error', callback),
+  onDeepgramCaptureState: (callback) => subscribe('deepgram-capture-state', callback)
 });

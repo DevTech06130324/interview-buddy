@@ -49,6 +49,8 @@ let hasNewTranscriptBelow = false;
 let liveCaptionsWindowVisible = true;
 let translationsVisible = false;
 let translationEnabled = false;
+let transcriptSource = 'live-captions';
+let hasDeepgramApiKey = false;
 let currentPanelSplitRatio = 0.4;
 let isModePanelCollapsed = true;
 let promptModes = [];
@@ -81,9 +83,17 @@ const {
   normalizeTranscriptSpeakerTag,
   normalizeTranscriptTimestampLabel
 } = window.transcriptPrompt;
+const TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram';
+const TRANSCRIPT_SOURCE_LIVE_CAPTIONS = 'live-captions';
+const DEEPGRAM_ROLE_THEM = TRANSCRIPT_SPEAKER_TAG;
+const DEEPGRAM_ROLE_ME = 'Me';
+const DEEPGRAM_AUDIO_TIMESLICE_MS = 500;
 const createTranscriptDisplayGroups = typeof window.transcriptDisplayGroups?.createTranscriptDisplayGroups === 'function'
   ? window.transcriptDisplayGroups.createTranscriptDisplayGroups
   : (entries) => entries;
+let deepgramCaptureResources = null;
+let deepgramCaptureStartPromise = null;
+let deepgramCaptureGeneration = 0;
 
 function formatUrl(input) {
   if (!input || input.trim() === '') {
@@ -300,6 +310,28 @@ function normalizeTranscriptEntries(data) {
   }];
 }
 
+function normalizeTranscriptSource(source) {
+  return source === TRANSCRIPT_SOURCE_DEEPGRAM
+    ? TRANSCRIPT_SOURCE_DEEPGRAM
+    : TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
+}
+
+function getTranscriptSpeakerRoleClass(entry) {
+  return normalizeTranscriptSpeakerTag(entry?.speakerTag) === DEEPGRAM_ROLE_ME
+    ? 'transcript-row-role-me'
+    : 'transcript-row-role-them';
+}
+
+function shouldIncludeTranscriptSpeaker(entry, index, previousEntry = null) {
+  if (index === 0) {
+    return true;
+  }
+
+  const currentSpeaker = normalizeTranscriptSpeakerTag(entry?.speakerTag);
+  const previousSpeaker = normalizeTranscriptSpeakerTag(previousEntry?.speakerTag);
+  return Boolean(currentSpeaker && previousSpeaker && currentSpeaker !== previousSpeaker);
+}
+
 function getTranscriptEntrySignature(entry, options = {}) {
   return JSON.stringify({
     sourceText: entry.sourceText,
@@ -320,7 +352,7 @@ function updateTranscriptSourceCell(sourceCell, entry) {
   sourceCell.replaceChildren(sourceText);
 }
 
-function createTranscriptRow(entry, index = 0) {
+function createTranscriptRow(entry, index = 0, previousEntry = null) {
   const row = document.createElement('div');
   row.dataset.captionId = entry.id;
 
@@ -342,13 +374,13 @@ function createTranscriptRow(entry, index = 0) {
 
   body.append(sourceCell, translatedCell);
   row.append(header, body);
-  updateTranscriptRow(row, entry, index);
+  updateTranscriptRow(row, entry, index, previousEntry);
   return row;
 }
 
-function updateTranscriptRow(row, entry, index = 0) {
+function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
   const markerOptions = {
-    includeSpeaker: index === 0
+    includeSpeaker: index === 0 || shouldIncludeTranscriptSpeaker(entry, index, previousEntry)
   };
   const signature = getTranscriptEntrySignature(entry, markerOptions);
   if (row.dataset.entrySignature === signature) {
@@ -356,7 +388,7 @@ function updateTranscriptRow(row, entry, index = 0) {
   }
 
   row.dataset.entrySignature = signature;
-  row.className = `transcript-row transcript-row-${entry.status}`;
+  row.className = `transcript-row transcript-row-${entry.status} ${getTranscriptSpeakerRoleClass(entry)}`;
   row.classList.toggle('is-partial', !entry.isFinal);
 
   const marker = row.querySelector('.transcript-entry-marker');
@@ -402,7 +434,7 @@ function renderTranscriptEntries(entries) {
   if (!transcriptRowsEl) {
     transcriptEl.textContent = displayEntries
       .map((entry, index) => `${formatTranscriptEntryMarker(entry, {
-        includeSpeaker: index === 0
+        includeSpeaker: index === 0 || shouldIncludeTranscriptSpeaker(entry, index, displayEntries[index - 1])
       })}\n${entry.sourceText}`)
       .join('\n\n');
     return;
@@ -421,8 +453,9 @@ function renderTranscriptEntries(entries) {
 
   for (let index = 0; index < displayEntries.length; index += 1) {
     const entry = displayEntries[index];
-    const row = existingRows.get(entry.id) || createTranscriptRow(entry, index);
-    updateTranscriptRow(row, entry, index);
+    const previousEntry = displayEntries[index - 1] || null;
+    const row = existingRows.get(entry.id) || createTranscriptRow(entry, index, previousEntry);
+    updateTranscriptRow(row, entry, index, previousEntry);
     existingRows.delete(entry.id);
 
     if (row !== expectedNextRow) {
@@ -481,6 +514,174 @@ function setTranslationEnabled(isEnabled) {
   updateTranslationToggleButtonState();
 }
 
+function stopMediaStreamTracks(stream) {
+  if (!stream || typeof stream.getTracks !== 'function') {
+    return;
+  }
+
+  for (const track of stream.getTracks()) {
+    try {
+      track.stop();
+    } catch (error) {
+      console.error('[ERROR] Failed to stop media track:', error);
+    }
+  }
+}
+
+function getDeepgramRecorderMimeType() {
+  if (typeof MediaRecorder !== 'function' || typeof MediaRecorder.isTypeSupported !== 'function') {
+    return '';
+  }
+
+  return [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus'
+  ].find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || '';
+}
+
+function createAudioOnlyStream(sourceStream) {
+  const audioTracks = typeof sourceStream?.getAudioTracks === 'function'
+    ? sourceStream.getAudioTracks()
+    : [];
+
+  if (audioTracks.length === 0) {
+    return null;
+  }
+
+  return new MediaStream(audioTracks);
+}
+
+async function sendDeepgramRecorderBlob(role, blob) {
+  if (!blob || blob.size <= 0 || !window.electronAPI?.sendDeepgramAudioChunk) {
+    return;
+  }
+
+  const chunk = await blob.arrayBuffer();
+  window.electronAPI.sendDeepgramAudioChunk({
+    role,
+    chunk
+  });
+}
+
+function createDeepgramRecorder(role, stream) {
+  const mimeType = getDeepgramRecorderMimeType();
+  const recorder = mimeType
+    ? new MediaRecorder(stream, { mimeType })
+    : new MediaRecorder(stream);
+
+  recorder.addEventListener('dataavailable', (event) => {
+    void sendDeepgramRecorderBlob(role, event.data);
+  });
+  recorder.start(DEEPGRAM_AUDIO_TIMESLICE_MS);
+  return recorder;
+}
+
+function stopDeepgramCapture() {
+  deepgramCaptureGeneration += 1;
+  const resources = deepgramCaptureResources;
+  deepgramCaptureResources = null;
+
+  if (!resources) {
+    return;
+  }
+
+  for (const recorder of resources.recorders || []) {
+    try {
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.stop();
+      }
+    } catch (error) {
+      console.error('[ERROR] Failed to stop Deepgram recorder:', error);
+    }
+  }
+
+  for (const stream of resources.streams || []) {
+    stopMediaStreamTracks(stream);
+  }
+}
+
+async function startDeepgramCapture() {
+  if (deepgramCaptureResources) {
+    return true;
+  }
+
+  if (deepgramCaptureStartPromise) {
+    return deepgramCaptureStartPromise;
+  }
+
+  const captureGeneration = deepgramCaptureGeneration;
+  deepgramCaptureStartPromise = (async () => {
+    if (!navigator.mediaDevices?.getDisplayMedia || !navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Media capture is not available in this browser context.');
+    }
+
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: true
+    });
+    const micStream = await navigator.mediaDevices.getUserMedia({
+      audio: true
+    });
+    const systemAudioStream = createAudioOnlyStream(displayStream);
+    const microphoneAudioStream = createAudioOnlyStream(micStream);
+
+    if (!systemAudioStream || !microphoneAudioStream) {
+      stopMediaStreamTracks(displayStream);
+      stopMediaStreamTracks(micStream);
+      throw new Error('Deepgram capture requires both system audio and microphone access.');
+    }
+
+    if (captureGeneration !== deepgramCaptureGeneration) {
+      stopMediaStreamTracks(displayStream);
+      stopMediaStreamTracks(micStream);
+      return false;
+    }
+
+    const recorders = [
+      createDeepgramRecorder(DEEPGRAM_ROLE_THEM, systemAudioStream),
+      createDeepgramRecorder(DEEPGRAM_ROLE_ME, microphoneAudioStream)
+    ];
+
+    const stopOnTrackEnd = () => {
+      if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+        stopDeepgramCapture();
+      }
+    };
+
+    for (const track of displayStream.getTracks()) {
+      track.addEventListener('ended', stopOnTrackEnd, { once: true });
+    }
+
+    for (const track of micStream.getTracks()) {
+      track.addEventListener('ended', stopOnTrackEnd, { once: true });
+    }
+
+    deepgramCaptureResources = {
+      recorders,
+      streams: [displayStream, micStream, systemAudioStream, microphoneAudioStream]
+    };
+    return true;
+  })().catch((error) => {
+    console.error('[ERROR] Failed to start Deepgram capture:', error);
+    stopDeepgramCapture();
+    return false;
+  }).finally(() => {
+    deepgramCaptureStartPromise = null;
+  });
+
+  return deepgramCaptureStartPromise;
+}
+
+function syncDeepgramCaptureFromPreferences() {
+  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && hasDeepgramApiKey) {
+    void startDeepgramCapture();
+    return;
+  }
+
+  stopDeepgramCapture();
+}
+
 function renderTranscriptError(errorMessage) {
   if (!transcriptEl) {
     return;
@@ -526,6 +727,17 @@ function applyAppPreferences(preferences = {}) {
   if (typeof preferences.liveCaptionsWindowVisible === 'boolean') {
     updateLiveCaptionsToggleButton(preferences.liveCaptionsWindowVisible);
   }
+
+  if (typeof preferences.transcriptSource === 'string') {
+    transcriptSource = normalizeTranscriptSource(preferences.transcriptSource);
+  }
+
+  if (typeof preferences.hasDeepgramApiKey === 'boolean') {
+    hasDeepgramApiKey = preferences.hasDeepgramApiKey;
+  }
+
+  updateLiveCaptionsToggleButton(liveCaptionsWindowVisible);
+  syncDeepgramCaptureFromPreferences();
 
   if (Number.isFinite(preferences.horizontalTranscriptPanelRatio)) {
     setCurrentSplitRatio(preferences.horizontalTranscriptPanelRatio);
@@ -1364,14 +1576,29 @@ function queueIncomingPromptModeState(state) {
 }
 
 function updateLiveCaptionsToggleButton(isVisible) {
-  if (!toggleLiveCaptionsBtn || typeof isVisible !== 'boolean') {
+  if (!toggleLiveCaptionsBtn) {
     return;
   }
 
-  liveCaptionsWindowVisible = isVisible;
-  toggleLiveCaptionsBtn.classList.toggle('is-hidden-state', !isVisible);
+  if (typeof isVisible === 'boolean') {
+    liveCaptionsWindowVisible = isVisible;
+  }
 
-  const actionLabel = isVisible
+  const isLiveCaptionsSource = transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
+  toggleLiveCaptionsBtn.disabled = !isLiveCaptionsSource;
+  toggleLiveCaptionsBtn.setAttribute('aria-disabled', String(!isLiveCaptionsSource));
+  toggleLiveCaptionsBtn.classList.toggle('is-disabled', !isLiveCaptionsSource);
+
+  if (!isLiveCaptionsSource) {
+    toggleLiveCaptionsBtn.classList.add('is-hidden-state');
+    setProtectedTooltip(toggleLiveCaptionsBtn, 'Live Captions window is unavailable while Deepgram is selected');
+    toggleLiveCaptionsBtn.setAttribute('aria-label', 'Live Captions window is unavailable while Deepgram is selected');
+    return;
+  }
+
+  toggleLiveCaptionsBtn.classList.toggle('is-hidden-state', !liveCaptionsWindowVisible);
+
+  const actionLabel = liveCaptionsWindowVisible
     ? 'Hide Live Captions window'
     : 'Show Live Captions window';
 
@@ -1382,6 +1609,11 @@ function updateLiveCaptionsToggleButton(isVisible) {
 async function refreshLiveCaptionsToggleButton() {
   if (!toggleLiveCaptionsBtn) {
     return false;
+  }
+
+  if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
+    updateLiveCaptionsToggleButton(liveCaptionsWindowVisible);
+    return true;
   }
 
   try {
@@ -1486,6 +1718,10 @@ if (toggleLiveCaptionsBtn) {
   updateLiveCaptionsToggleButton(liveCaptionsWindowVisible);
 
   toggleLiveCaptionsBtn.onclick = async () => {
+    if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
+      return;
+    }
+
     setButtonBusy(toggleLiveCaptionsBtn, true);
 
     try {
@@ -1823,6 +2059,15 @@ window.electronAPI.onAppPreferencesUpdated((preferences) => {
   applyAppPreferences(preferences);
 });
 
+window.electronAPI.onDeepgramCaptureState((state) => {
+  if (state?.active) {
+    void startDeepgramCapture();
+    return;
+  }
+
+  stopDeepgramCapture();
+});
+
 window.electronAPI.onFocusUrlInput(() => {
   if (!urlInput) {
     return;
@@ -1842,6 +2087,9 @@ updateModeHotkeyInput();
 applyPanelSplitRatio(currentPanelSplitRatio);
 window.addEventListener('resize', () => {
   applyPanelSplitRatio(currentPanelSplitRatio);
+});
+window.addEventListener('beforeunload', () => {
+  stopDeepgramCapture();
 });
 
 refreshLiveCaptionsToggleButton().then((updated) => {

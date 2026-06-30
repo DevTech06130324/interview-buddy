@@ -1,4 +1,5 @@
 const { app, BrowserWindow, BrowserView, ipcMain, globalShortcut, screen, clipboard, nativeTheme, dialog } = require('electron');
+const { safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -28,6 +29,10 @@ if (process.platform === 'win32') {
 // Screen capture integration
 const screenCapture = require('./src/screenCapture');
 const translationManager = require('./src/translationManager');
+const {
+  DeepgramTranscriptionService,
+  normalizeDeepgramApiKey
+} = require('./src/deepgramTranscriptionService');
 const {
   DEFAULT_ASSISTANT_URLS,
   ASSISTANT_COMPOSER_SELECTORS,
@@ -74,6 +79,9 @@ const APP_PREFERENCES_STORE_FILE = 'app-preferences.json';
 const TEMP_UPLOAD_DIR_NAME = 'assistant-temp-uploads';
 const DEFAULT_PROMPT_MODE_NAME = 'Default';
 const TRANSCRIPT_SAVE_DEFAULT_BASENAME = 'company name-meeting name';
+const TRANSCRIPT_SOURCE_LIVE_CAPTIONS = 'live-captions';
+const TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram';
+const DEFAULT_TRANSCRIPT_SOURCE = TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
 const DEFAULT_TRANSLATION_ENABLED = false;
 const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0.4;
 const DEFAULT_TAB_URLS = DEFAULT_ASSISTANT_URLS;
@@ -294,6 +302,10 @@ let isModePanelCollapsed = true;
 let translationsVisible = false;
 let translationEnabled = DEFAULT_TRANSLATION_ENABLED;
 let liveCaptionsWindowVisible = true;
+let transcriptSource = DEFAULT_TRANSCRIPT_SOURCE;
+let deepgramApiKey = '';
+let deepgramApiKeyStorage = null;
+let deepgramTranscriptionService = null;
 let captureOverlayState = null;
 const shortcutCooldowns = new Map();
 const registeredGlobalHotkeys = new Map();
@@ -519,6 +531,12 @@ function normalizeBoolean(value, fallback) {
   return typeof value === 'boolean' ? value : fallback;
 }
 
+function normalizeTranscriptSource(value) {
+  return value === TRANSCRIPT_SOURCE_DEEPGRAM
+    ? TRANSCRIPT_SOURCE_DEEPGRAM
+    : TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
+}
+
 function normalizeOpacity(value) {
   const opacity = Number(value);
   return Number.isFinite(opacity) ? Math.min(MAX_OPACITY, Math.max(MIN_OPACITY, opacity)) : DEFAULT_OPACITY;
@@ -604,7 +622,69 @@ function getCurrentWindowBoundsSnapshot() {
   };
 }
 
-function getAppPreferenceStateSnapshot() {
+function canEncryptDeepgramApiKey() {
+  try {
+    return Boolean(safeStorage && safeStorage.isEncryptionAvailable());
+  } catch (_) {
+    return false;
+  }
+}
+
+function encodeDeepgramApiKeyForStorage(apiKey) {
+  const normalizedApiKey = normalizeDeepgramApiKey(apiKey);
+  if (!normalizedApiKey) {
+    return null;
+  }
+
+  if (canEncryptDeepgramApiKey()) {
+    return {
+      encrypted: true,
+      value: safeStorage.encryptString(normalizedApiKey).toString('base64')
+    };
+  }
+
+  return {
+    encrypted: false,
+    value: normalizedApiKey
+  };
+}
+
+function decodeDeepgramApiKeyFromStorage(storage) {
+  if (!storage || typeof storage !== 'object' || typeof storage.value !== 'string') {
+    return '';
+  }
+
+  try {
+    if (storage.encrypted) {
+      return safeStorage.decryptString(Buffer.from(storage.value, 'base64'));
+    }
+
+    return storage.value;
+  } catch (error) {
+    console.error('[WARNING] Failed to decode stored Deepgram API key:', error);
+    return '';
+  }
+}
+
+function setDeepgramApiKeyInMemory(apiKey) {
+  deepgramApiKey = normalizeDeepgramApiKey(apiKey);
+  deepgramApiKeyStorage = encodeDeepgramApiKeyForStorage(deepgramApiKey);
+}
+
+function clearDeepgramApiKeyInMemory() {
+  deepgramApiKey = '';
+  deepgramApiKeyStorage = null;
+}
+
+function getDeepgramApiKeyLast4() {
+  return deepgramApiKey ? deepgramApiKey.slice(-4) : '';
+}
+
+function getDeepgramConnectionApiKey() {
+  return deepgramApiKey;
+}
+
+function getRendererAppPreferenceStateSnapshot() {
   return {
     horizontalTranscriptPanelRatio,
     windowBounds: getCurrentWindowBoundsSnapshot(),
@@ -613,7 +693,21 @@ function getAppPreferenceStateSnapshot() {
     modePanelCollapsed: isModePanelCollapsed,
     translationsVisible,
     translationEnabled,
-    liveCaptionsWindowVisible
+    liveCaptionsWindowVisible,
+    transcriptSource,
+    hasDeepgramApiKey: Boolean(deepgramApiKey),
+    deepgramApiKeyLast4: getDeepgramApiKeyLast4()
+  };
+}
+
+function getAppPreferenceStateSnapshot() {
+  return getRendererAppPreferenceStateSnapshot();
+}
+
+function getPersistedAppPreferenceStateSnapshot() {
+  return {
+    ...getRendererAppPreferenceStateSnapshot(),
+    deepgramApiKeyStorage
   };
 }
 
@@ -626,7 +720,7 @@ function persistAppPreferencesSync() {
   try {
     fs.writeFileSync(
       getAppPreferencesStorePath(),
-      JSON.stringify(getAppPreferenceStateSnapshot(), null, 2)
+      JSON.stringify(getPersistedAppPreferenceStateSnapshot(), null, 2)
     );
   } catch (error) {
     console.error('[ERROR] Failed to persist app preferences:', error);
@@ -669,6 +763,12 @@ function loadAppPreferences() {
     translationsVisible = normalizeBoolean(parsed?.translationsVisible, false);
     translationEnabled = normalizeBoolean(parsed?.translationEnabled, DEFAULT_TRANSLATION_ENABLED);
     liveCaptionsWindowVisible = normalizeBoolean(parsed?.liveCaptionsWindowVisible, true);
+    transcriptSource = normalizeTranscriptSource(parsed?.transcriptSource);
+    deepgramApiKeyStorage = parsed?.deepgramApiKeyStorage || null;
+    deepgramApiKey = normalizeDeepgramApiKey(decodeDeepgramApiKeyFromStorage(deepgramApiKeyStorage));
+    if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && !deepgramApiKey) {
+      transcriptSource = TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
+    }
   } catch (error) {
     horizontalTranscriptPanelRatio = DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO;
     appWindowBounds = {
@@ -681,6 +781,9 @@ function loadAppPreferences() {
     translationsVisible = false;
     translationEnabled = DEFAULT_TRANSLATION_ENABLED;
     liveCaptionsWindowVisible = true;
+    transcriptSource = DEFAULT_TRANSCRIPT_SOURCE;
+    deepgramApiKey = '';
+    deepgramApiKeyStorage = null;
   }
 
   translationManager.setTranslationEnabled(translationEnabled);
@@ -1460,7 +1563,7 @@ function bindMainWindowLifecycle(targetWindow) {
     }
 
     createDefaultTabs();
-    scheduleCaptionSyncStart();
+    startActiveTranscriptSource();
   });
 
   targetWindow.on('resize', () => {
@@ -1829,7 +1932,7 @@ async function openModeMenuWindow(anchor) {
 }
 
 function scheduleCaptionSyncStart(delayMs = 250) {
-  if (!captionSync || process.platform !== 'win32') {
+  if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS || !captionSync || process.platform !== 'win32') {
     return;
   }
 
@@ -2579,7 +2682,7 @@ function getTranscriptEntryMetadata(entryId, entry = {}) {
   const metadata = {
     receivedAtMs,
     timestampLabel,
-    speakerTag: TRANSCRIPT_SPEAKER_TAG
+    speakerTag: normalizeTranscriptSpeakerTag(entry.speakerTag || existing?.speakerTag || TRANSCRIPT_SPEAKER_TAG)
   };
 
   transcriptEntryMetadata.set(entryId, metadata);
@@ -3006,6 +3109,203 @@ function sendCaptionUpdate(payload = translationManager.getPayload()) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('caption-update', payload);
   }
+}
+
+function sendCaptionError(error) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('caption-error', error?.message || String(error));
+  }
+}
+
+function applyTranscriptPayload(payload = translationManager.getPayload()) {
+  latestTranscriptEntries = normalizeTranscriptEntriesForPrompt(payload?.entries);
+  latestTranscriptText = typeof payload?.fullText === 'string'
+    ? normalizeTranscriptTextForPrompt(payload.fullText)
+    : getTranscriptTextFromEntries(latestTranscriptEntries);
+
+  if (!latestTranscriptText && latestTranscriptEntries.length === 0) {
+    resetTranscriptMetadata();
+  }
+
+  sendCaptionUpdate({
+    ...payload,
+    fullText: latestTranscriptText,
+    entries: latestTranscriptEntries
+  });
+}
+
+function resetTranscriptStateForSource(sourcePayload = '') {
+  latestTranscriptText = '';
+  latestTranscriptEntries = [];
+  resetTranscriptCursors();
+  resetTranscriptMetadata();
+  applyTranscriptPayload(translationManager.reset(sourcePayload));
+}
+
+function broadcastDeepgramCaptureState(isActive, reason = '') {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('deepgram-capture-state', {
+      active: Boolean(isActive),
+      reason: typeof reason === 'string' ? reason : ''
+    });
+  }
+}
+
+function normalizeDeepgramAudioChunk(chunk) {
+  if (Buffer.isBuffer(chunk)) {
+    return chunk;
+  }
+
+  if (chunk instanceof ArrayBuffer) {
+    return Buffer.from(chunk);
+  }
+
+  if (ArrayBuffer.isView(chunk)) {
+    return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+  }
+
+  if (Array.isArray(chunk)) {
+    return Buffer.from(chunk);
+  }
+
+  return Buffer.alloc(0);
+}
+
+function handleDeepgramCaptionUpdate(payload) {
+  if (transcriptSource !== TRANSCRIPT_SOURCE_DEEPGRAM) {
+    return;
+  }
+
+  const incomingEntries = normalizeTranscriptEntriesForPrompt(payload?.entries);
+  applyTranscriptPayload(translationManager.updateEntries(incomingEntries));
+}
+
+function getDeepgramTranscriptionService() {
+  if (deepgramTranscriptionService) {
+    return deepgramTranscriptionService;
+  }
+
+  deepgramTranscriptionService = new DeepgramTranscriptionService();
+  deepgramTranscriptionService.on('captionUpdate', handleDeepgramCaptionUpdate);
+  deepgramTranscriptionService.on('error', (error) => {
+    console.error('[ERROR] Deepgram transcription error:', error);
+    if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+      sendCaptionError(`Deepgram transcription error: ${error?.message || String(error)}`);
+    }
+  });
+
+  return deepgramTranscriptionService;
+}
+
+function stopLiveCaptionTranscriptSource() {
+  if (captionSyncStartTimer) {
+    clearTimeout(captionSyncStartTimer);
+    captionSyncStartTimer = null;
+  }
+
+  if (captionSync && typeof captionSync.stop === 'function') {
+    try {
+      captionSync.stop();
+    } catch (error) {
+      console.error('[WARNING] Failed to stop caption sync:', error);
+    }
+  }
+}
+
+function stopDeepgramTranscriptSource(reason = 'stopped') {
+  if (deepgramTranscriptionService) {
+    deepgramTranscriptionService.stop();
+  }
+
+  broadcastDeepgramCaptureState(false, reason);
+}
+
+function startDeepgramTranscriptSource() {
+  const connectionApiKey = getDeepgramConnectionApiKey();
+  if (!connectionApiKey) {
+    broadcastDeepgramCaptureState(false, 'missing-api-key');
+    return false;
+  }
+
+  try {
+    getDeepgramTranscriptionService().start({ apiKey: connectionApiKey });
+    broadcastDeepgramCaptureState(true, 'started');
+    return true;
+  } catch (error) {
+    console.error('[ERROR] Failed to start Deepgram transcription:', error);
+    sendCaptionError(`Deepgram transcription failed to start: ${error?.message || String(error)}`);
+    broadcastDeepgramCaptureState(false, 'start-failed');
+    return false;
+  }
+}
+
+function startActiveTranscriptSource() {
+  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+    stopLiveCaptionTranscriptSource();
+    startDeepgramTranscriptSource();
+    return;
+  }
+
+  stopDeepgramTranscriptSource('source-switched');
+  scheduleCaptionSyncStart();
+}
+
+function applyTranscriptSourceChange(nextSource, { resetTranscript = true } = {}) {
+  const normalizedSource = normalizeTranscriptSource(nextSource);
+
+  if (transcriptSource === normalizedSource) {
+    if (normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+      startDeepgramTranscriptSource();
+    } else {
+      scheduleCaptionSyncStart();
+    }
+    return getAppPreferenceStateSnapshot();
+  }
+
+  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+    stopDeepgramTranscriptSource('source-switched');
+  } else {
+    stopLiveCaptionTranscriptSource();
+  }
+
+  transcriptSource = normalizedSource;
+
+  if (resetTranscript) {
+    resetTranscriptStateForSource();
+  }
+
+  startActiveTranscriptSource();
+  scheduleAppPreferencesPersist();
+  broadcastAppPreferences();
+  return getAppPreferenceStateSnapshot();
+}
+
+function setTranscriptSourcePreference(source) {
+  return applyTranscriptSourceChange(source);
+}
+
+function setDeepgramApiKeyPreference(apiKey) {
+  setDeepgramApiKeyInMemory(apiKey);
+  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+    startDeepgramTranscriptSource();
+  }
+
+  scheduleAppPreferencesPersist();
+  broadcastAppPreferences();
+  return getAppPreferenceStateSnapshot();
+}
+
+function clearDeepgramApiKeyPreference() {
+  clearDeepgramApiKeyInMemory();
+  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+    applyTranscriptSourceChange(TRANSCRIPT_SOURCE_LIVE_CAPTIONS);
+  } else {
+    stopDeepgramTranscriptSource('api-key-cleared');
+    scheduleAppPreferencesPersist();
+    broadcastAppPreferences();
+  }
+
+  return getAppPreferenceStateSnapshot();
 }
 
 function isSupportedAssistantUrl(url) {
@@ -4401,6 +4701,7 @@ async function closeLiveCaptionsForAppExit() {
 
   liveCaptionsExitCleanupPromise = (async () => {
     try {
+      stopDeepgramTranscriptSource('app-exit');
       if (captionSync && typeof captionSync.stopAndCloseLiveCaptions === 'function') {
         await captionSync.stopAndCloseLiveCaptions();
       } else if (captionSync && typeof captionSync.stop === 'function') {
@@ -4461,6 +4762,19 @@ ipcMain.on('screen-capture-overlay-cancel', (event) => {
   resolveScreenSelection(null);
 });
 
+ipcMain.on('deepgram-audio-chunk', (event, payload = {}) => {
+  if (!isMainWindowSender(event) || transcriptSource !== TRANSCRIPT_SOURCE_DEEPGRAM) {
+    return;
+  }
+
+  const chunk = normalizeDeepgramAudioChunk(payload?.chunk);
+  if (chunk.length === 0) {
+    return;
+  }
+
+  getDeepgramTranscriptionService().sendAudioChunk(payload?.role, chunk);
+});
+
 app.whenReady().then(async () => {
   loadPromptModeState();
   loadGlobalHotkeyState();
@@ -4479,6 +4793,7 @@ app.on('will-quit', () => {
     clearTimeout(defaultTabWarmupTimer);
     defaultTabWarmupTimer = null;
   }
+  stopDeepgramTranscriptSource('app-exit');
   if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
     hotkeySettingsWindow.close();
   }
@@ -4708,6 +5023,30 @@ ipcMain.handle('set-translation-enabled', (event, isEnabled) => {
   return setTranslationEnabled(isEnabled);
 });
 
+ipcMain.handle('set-transcript-source', (event, source) => {
+  if (!isMainOrHotkeySettingsSender(event)) {
+    return rejectUnauthorizedIpc('set-transcript-source', getAppPreferenceStateSnapshot());
+  }
+
+  return setTranscriptSourcePreference(source);
+});
+
+ipcMain.handle('set-deepgram-api-key', (event, apiKey) => {
+  if (!isHotkeySettingsWindowSender(event)) {
+    return rejectUnauthorizedIpc('set-deepgram-api-key', getAppPreferenceStateSnapshot());
+  }
+
+  return setDeepgramApiKeyPreference(apiKey);
+});
+
+ipcMain.handle('clear-deepgram-api-key', (event) => {
+  if (!isHotkeySettingsWindowSender(event)) {
+    return rejectUnauthorizedIpc('clear-deepgram-api-key', getAppPreferenceStateSnapshot());
+  }
+
+  return clearDeepgramApiKeyPreference();
+});
+
 ipcMain.handle('add-prompt-mode', (event) => {
   if (!isMainWindowSender(event)) {
     return rejectUnauthorizedIpc('add-prompt-mode', null);
@@ -4808,11 +5147,19 @@ ipcMain.handle('clear-transcript', async (event) => {
     });
   }
 
-  latestTranscriptText = '';
-  latestTranscriptEntries = [];
-  resetTranscriptCursors();
-  resetTranscriptMetadata();
-  sendCaptionUpdate(translationManager.reset(''));
+  resetTranscriptStateForSource();
+
+  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+    if (deepgramTranscriptionService) {
+      deepgramTranscriptionService.clear();
+    }
+
+    return {
+      success: true,
+      liveCaptionsVisible: null,
+      transcriptSource
+    };
+  }
 
   if (captionSync && typeof captionSync.clearTranscript === 'function') {
     try {
@@ -4835,10 +5182,6 @@ ipcMain.handle('clear-transcript', async (event) => {
     }
   }
 
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    sendCaptionUpdate(translationManager.reset(''));
-  }
-
   return {
     success: false,
     liveCaptionsVisible: null
@@ -4848,6 +5191,10 @@ ipcMain.handle('clear-transcript', async (event) => {
 ipcMain.handle('toggle-live-captions-window', async (event) => {
   if (!isMainWindowSender(event)) {
     return rejectUnauthorizedIpc('toggle-live-captions-window', null);
+  }
+
+  if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
+    return null;
   }
 
   if (!captionSync || typeof captionSync.toggleLiveCaptionsVisibility !== 'function') {
@@ -4871,6 +5218,10 @@ ipcMain.handle('toggle-live-captions-window', async (event) => {
 ipcMain.handle('get-live-captions-window-visibility', async (event) => {
   if (!isMainWindowSender(event)) {
     return rejectUnauthorizedIpc('get-live-captions-window-visibility', null);
+  }
+
+  if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
+    return null;
   }
 
   if (!captionSync || typeof captionSync.getLiveCaptionsVisibility !== 'function') {
@@ -4935,49 +5286,34 @@ ipcMain.handle('get-tabs', (event) => {
 
 // LiveCaptions IPC handlers
 translationManager.on('updated', (payload) => {
-  latestTranscriptEntries = normalizeTranscriptEntriesForPrompt(payload?.entries);
-  latestTranscriptText = typeof payload?.fullText === 'string'
-    ? normalizeTranscriptTextForPrompt(payload.fullText)
-    : getTranscriptTextFromEntries(latestTranscriptEntries);
-  if (!latestTranscriptText && latestTranscriptEntries.length === 0) {
-    resetTranscriptMetadata();
-  }
-  sendCaptionUpdate({
-    ...payload,
-    fullText: latestTranscriptText,
-    entries: latestTranscriptEntries
-  });
+  applyTranscriptPayload(payload);
 });
 
 if (captionSync) {
   // Handle caption updates from caption sync service
   captionSync.on('captionUpdate', (data) => {
+    if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
+      return;
+    }
+
     const incomingEntries = normalizeTranscriptEntriesForPrompt(data?.entries);
     const liveCaptionText = typeof data?.fullText === 'string'
       ? data.fullText
       : getTranscriptTextFromEntries(incomingEntries);
-    const payload = translationManager.update(liveCaptionText);
-    latestTranscriptText = payload.fullText;
-    latestTranscriptEntries = normalizeTranscriptEntriesForPrompt(payload.entries);
-    if (!latestTranscriptText && latestTranscriptEntries.length === 0) {
-      resetTranscriptMetadata();
-    }
-    sendCaptionUpdate({
-      ...payload,
-      fullText: latestTranscriptText,
-      entries: latestTranscriptEntries
-    });
+    applyTranscriptPayload(translationManager.update(liveCaptionText));
   });
 
   captionSync.on('error', (error) => {
     console.error('[ERROR] Caption sync error:', error);
+    if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
+      return;
+    }
+
     latestTranscriptText = '';
     latestTranscriptEntries = [];
     resetTranscriptCursors();
     resetTranscriptMetadata();
     translationManager.reset('');
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('caption-error', error.message || String(error));
-    }
+    sendCaptionError(error);
   });
 }

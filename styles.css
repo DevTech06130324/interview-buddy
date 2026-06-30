@@ -362,10 +362,6 @@ body {
   display: none;
 }
 
-.transcript-row {
-  max-width: 120ch;
-}
-
 .transcript-content.is-translation-disabled .transcript-cell-translation,
 .transcript-content.is-translation-hidden .transcript-cell-translation {
   display: none;
@@ -378,10 +374,27 @@ body {
 
 .transcript-rows {
   min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 .transcript-row {
+  width: min(100%, 120ch);
   border-bottom: 1px solid #2d2d2d;
+}
+
+.transcript-row-role-them {
+  margin-right: auto;
+}
+
+.transcript-row-role-me {
+  margin-left: auto;
+}
+
+.transcript-row-role-me .transcript-entry-header,
+.transcript-row-role-me .transcript-entry-body {
+  text-align: left;
 }
 
 .transcript-row:last-child {

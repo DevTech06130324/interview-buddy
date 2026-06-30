@@ -49,6 +49,51 @@
           </span>
         </label>
       </div>
+      <div class="setting-row">
+        <div class="setting-meta">
+          <div class="setting-name">Transcript source</div>
+          <div class="setting-description">Choose Live Captions or Deepgram.</div>
+        </div>
+        <select
+          class="setting-select"
+          id="transcriptSourceSelect"
+          aria-label="Transcript source"
+        >
+          <option value="live-captions">Live Captions</option>
+          <option value="deepgram">Deepgram</option>
+        </select>
+      </div>
+      <div class="setting-row setting-row-stacked">
+        <div class="setting-meta">
+          <div class="setting-name">Deepgram API key</div>
+          <div class="setting-description">Saved locally and shown masked after saving.</div>
+        </div>
+        <div class="setting-inline-controls">
+          <input
+            class="setting-input"
+            id="deepgramApiKeyInput"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Enter Deepgram API key"
+            aria-label="Deepgram API key"
+          >
+          <button
+            class="setting-button"
+            id="saveDeepgramApiKeyBtn"
+            type="button"
+          >
+            Save
+          </button>
+          <button
+            class="setting-button"
+            id="clearDeepgramApiKeyBtn"
+            type="button"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
     </div>
     <div class="hotkey-list" id="hotkeyList"></div>
   </section>

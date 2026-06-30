@@ -92,3 +92,80 @@ test('display groups keep a long entry as its own readable block', () => {
     'This sentence is intentionally long enough to exceed the tiny test character limit by itself.'
   );
 });
+
+test('display groups start a new block when speaker changes', () => {
+  const groups = createTranscriptDisplayGroups([
+    {
+      id: 'caption-1',
+      sourceText: 'Interviewer opening.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      timestampLabel: '00:00:01',
+      speakerTag: 'Them'
+    },
+    {
+      id: 'caption-2',
+      sourceText: 'Interviewer follow up.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      timestampLabel: '00:00:03',
+      speakerTag: 'Them'
+    },
+    {
+      id: 'caption-3',
+      sourceText: 'Candidate answer.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      timestampLabel: '00:00:05',
+      speakerTag: 'Me'
+    }
+  ], {
+    maxEntries: 5,
+    maxSourceChars: 240
+  });
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].sourceText, 'Interviewer opening. Interviewer follow up.');
+  assert.equal(groups[0].speakerTag, 'Them');
+  assert.equal(groups[1].sourceText, 'Candidate answer.');
+  assert.equal(groups[1].speakerTag, 'Me');
+});
+
+test('display groups keep a speaker turn together until another speaker starts', () => {
+  const groups = createTranscriptDisplayGroups([
+    {
+      id: 'caption-1',
+      sourceText: 'First part.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      speakerTag: 'Me'
+    },
+    {
+      id: 'caption-2',
+      sourceText: 'Second part.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      speakerTag: 'Me'
+    },
+    {
+      id: 'caption-3',
+      sourceText: 'Third part.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      speakerTag: 'Me'
+    }
+  ], {
+    maxEntries: 1,
+    maxSourceChars: 8
+  });
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].sourceText, 'First part. Second part. Third part.');
+  assert.equal(groups[0].speakerTag, 'Me');
+});

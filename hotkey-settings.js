@@ -1,15 +1,49 @@
 const closeHotkeyDialogBtn = document.getElementById('closeHotkeyDialogBtn');
 const hotkeyList = document.getElementById('hotkeyList');
 const translationEnabledToggle = document.getElementById('translationEnabledToggle');
+const transcriptSourceSelect = document.getElementById('transcriptSourceSelect');
+const deepgramApiKeyInput = document.getElementById('deepgramApiKeyInput');
+const saveDeepgramApiKeyBtn = document.getElementById('saveDeepgramApiKeyBtn');
+const clearDeepgramApiKeyBtn = document.getElementById('clearDeepgramApiKeyBtn');
 const {
   formatHotkeyForDisplay,
   getHotkeyCaptureFromEvent
 } = window.hotkeyHelpers;
 
+const TRANSCRIPT_SOURCE_LIVE_CAPTIONS = 'live-captions';
+const TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram';
+const DEEPGRAM_KEY_MASK_PREFIX = '********';
+
 let globalHotkeys = [];
 let translationEnabled = false;
+let transcriptSource = TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
+let hasDeepgramApiKey = false;
+let deepgramApiKeyLast4 = '';
 const globalHotkeyFeedbackTimers = new Map();
 const HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
+
+function normalizeTranscriptSource(source) {
+  return source === TRANSCRIPT_SOURCE_DEEPGRAM
+    ? TRANSCRIPT_SOURCE_DEEPGRAM
+    : TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
+}
+
+function maskDeepgramApiKey(last4) {
+  const suffix = String(last4 || '').trim();
+  return suffix ? `${DEEPGRAM_KEY_MASK_PREFIX}${suffix}` : '';
+}
+
+function getCurrentDeepgramMask() {
+  return hasDeepgramApiKey ? maskDeepgramApiKey(deepgramApiKeyLast4) : '';
+}
+
+function isShowingStoredDeepgramMask() {
+  return Boolean(
+    deepgramApiKeyInput
+    && hasDeepgramApiKey
+    && deepgramApiKeyInput.value === getCurrentDeepgramMask()
+  );
+}
 
 function updateTranslationEnabledToggle(isEnabled) {
   translationEnabled = isEnabled !== false;
@@ -20,12 +54,42 @@ function updateTranslationEnabledToggle(isEnabled) {
   }
 }
 
+function updateTranscriptSourceSelect(source) {
+  transcriptSource = normalizeTranscriptSource(source);
+
+  if (transcriptSourceSelect) {
+    transcriptSourceSelect.value = transcriptSource;
+  }
+}
+
+function updateDeepgramKeyControls(preferences = {}) {
+  hasDeepgramApiKey = Boolean(preferences.hasDeepgramApiKey);
+  deepgramApiKeyLast4 = typeof preferences.deepgramApiKeyLast4 === 'string'
+    ? preferences.deepgramApiKeyLast4
+    : '';
+
+  if (deepgramApiKeyInput && document.activeElement !== deepgramApiKeyInput) {
+    deepgramApiKeyInput.type = hasDeepgramApiKey ? 'text' : 'password';
+    deepgramApiKeyInput.value = getCurrentDeepgramMask();
+    deepgramApiKeyInput.placeholder = hasDeepgramApiKey
+      ? 'Saved key'
+      : 'Enter Deepgram API key';
+  }
+
+  if (clearDeepgramApiKeyBtn) {
+    clearDeepgramApiKeyBtn.disabled = !hasDeepgramApiKey;
+  }
+}
+
 function applyAppPreferences(preferences = {}) {
   if (typeof preferences?.translationEnabled === 'boolean') {
     updateTranslationEnabledToggle(preferences.translationEnabled);
   } else {
     updateTranslationEnabledToggle(false);
   }
+
+  updateTranscriptSourceSelect(preferences?.transcriptSource);
+  updateDeepgramKeyControls(preferences);
 }
 
 function clearGlobalHotkeyFeedbackTimer(id) {
@@ -221,9 +285,111 @@ async function applyTranslationEnabled(isEnabled) {
   }
 }
 
+async function setTranscriptSource(source) {
+  const previousSource = transcriptSource;
+  updateTranscriptSourceSelect(source);
+
+  try {
+    const preferences = await window.electronAPI.setTranscriptSource(transcriptSource);
+    applyAppPreferences(preferences);
+  } catch (error) {
+    updateTranscriptSourceSelect(previousSource);
+    console.error('[ERROR] Failed to update transcript source:', error);
+  }
+}
+
+async function setDeepgramApiKey(apiKey) {
+  const normalizedApiKey = String(apiKey || '').trim();
+  if (!normalizedApiKey || normalizedApiKey === getCurrentDeepgramMask()) {
+    updateDeepgramKeyControls({
+      hasDeepgramApiKey,
+      deepgramApiKeyLast4
+    });
+    return;
+  }
+
+  if (saveDeepgramApiKeyBtn) {
+    saveDeepgramApiKeyBtn.disabled = true;
+  }
+
+  try {
+    const preferences = await window.electronAPI.setDeepgramApiKey(normalizedApiKey);
+    applyAppPreferences(preferences);
+  } catch (error) {
+    console.error('[ERROR] Failed to save Deepgram API key:', error);
+  } finally {
+    if (saveDeepgramApiKeyBtn) {
+      saveDeepgramApiKeyBtn.disabled = false;
+    }
+  }
+}
+
+async function clearDeepgramApiKey() {
+  if (clearDeepgramApiKeyBtn) {
+    clearDeepgramApiKeyBtn.disabled = true;
+  }
+
+  try {
+    const preferences = await window.electronAPI.clearDeepgramApiKey();
+    applyAppPreferences(preferences);
+  } catch (error) {
+    console.error('[ERROR] Failed to clear Deepgram API key:', error);
+    updateDeepgramKeyControls({
+      hasDeepgramApiKey,
+      deepgramApiKeyLast4
+    });
+  }
+}
+
 if (translationEnabledToggle) {
   translationEnabledToggle.addEventListener('change', (event) => {
     void applyTranslationEnabled(event.currentTarget.checked);
+  });
+}
+
+if (transcriptSourceSelect) {
+  transcriptSourceSelect.addEventListener('change', (event) => {
+    void setTranscriptSource(event.currentTarget.value);
+  });
+}
+
+if (deepgramApiKeyInput) {
+  deepgramApiKeyInput.addEventListener('focus', () => {
+    if (!isShowingStoredDeepgramMask()) {
+      return;
+    }
+
+    deepgramApiKeyInput.type = 'password';
+    deepgramApiKeyInput.value = '';
+    deepgramApiKeyInput.placeholder = 'Enter new Deepgram API key';
+  });
+
+  deepgramApiKeyInput.addEventListener('blur', () => {
+    if (!deepgramApiKeyInput.value.trim()) {
+      updateDeepgramKeyControls({
+        hasDeepgramApiKey,
+        deepgramApiKeyLast4
+      });
+    }
+  });
+
+  deepgramApiKeyInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void setDeepgramApiKey(deepgramApiKeyInput.value);
+    }
+  });
+}
+
+if (saveDeepgramApiKeyBtn) {
+  saveDeepgramApiKeyBtn.addEventListener('click', () => {
+    void setDeepgramApiKey(deepgramApiKeyInput?.value || '');
+  });
+}
+
+if (clearDeepgramApiKeyBtn) {
+  clearDeepgramApiKeyBtn.addEventListener('click', () => {
+    void clearDeepgramApiKey();
   });
 }
 

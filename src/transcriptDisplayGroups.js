@@ -84,6 +84,12 @@
       return false;
     }
 
+    const currentSpeakerTag = getCleanText(currentEntries[currentEntries.length - 1]?.speakerTag);
+    const nextSpeakerTag = getCleanText(nextEntry?.speakerTag);
+    if (currentSpeakerTag && nextSpeakerTag) {
+      return currentSpeakerTag !== nextSpeakerTag;
+    }
+
     if (currentEntries.length >= options.maxEntries) {
       return true;
     }

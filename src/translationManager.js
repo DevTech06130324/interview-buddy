@@ -253,7 +253,10 @@ class TranslationManager extends EventEmitter {
         sourceText: entry.sourceText,
         translatedText: entry.translatedText,
         status: entry.status,
-        isFinal: entry.isFinal
+        isFinal: entry.isFinal,
+        speakerTag: entry.speakerTag,
+        timestampLabel: entry.timestampLabel,
+        receivedAtMs: entry.receivedAtMs
       }))
     };
   }
@@ -366,6 +369,9 @@ class TranslationManager extends EventEmitter {
       translatedText: previousPartial?.translatedText || '',
       status: this.translationEnabled ? 'pending' : 'disabled',
       isFinal: segment.isFinal,
+      speakerTag: segment.speakerTag,
+      timestampLabel: segment.timestampLabel,
+      receivedAtMs: segment.receivedAtMs,
       version: (previousPartial?.version || 0) + 1,
       lastQueuedText: '',
       queuedTranslationText: '',
@@ -378,11 +384,114 @@ class TranslationManager extends EventEmitter {
     this.abortEntryTranslation(entry);
     entry.sourceText = segment.sourceText;
     entry.isFinal = segment.isFinal;
+    entry.speakerTag = segment.speakerTag || entry.speakerTag;
+    entry.timestampLabel = segment.timestampLabel || entry.timestampLabel;
+    entry.receivedAtMs = segment.receivedAtMs ?? entry.receivedAtMs;
     entry.status = this.translationEnabled ? 'pending' : 'disabled';
     entry.version += 1;
     entry.lastQueuedText = '';
     entry.queuedTranslationText = '';
     entry.changeCount = segment.isFinal ? 0 : (entry.changeCount || 0) + 1;
+  }
+
+  createEntryFromTranscriptEntry(sourceEntry, previousEntry = null) {
+    return {
+      id: sourceEntry.id || `caption-${this.sessionGeneration}-${this.entryCounter++}`,
+      sourceText: sourceEntry.sourceText,
+      translatedText: previousEntry?.translatedText || '',
+      status: this.translationEnabled ? 'pending' : 'disabled',
+      isFinal: Boolean(sourceEntry.isFinal),
+      speakerTag: sourceEntry.speakerTag,
+      timestampLabel: sourceEntry.timestampLabel,
+      receivedAtMs: sourceEntry.receivedAtMs,
+      version: (previousEntry?.version || 0) + 1,
+      lastQueuedText: '',
+      queuedTranslationText: '',
+      changeCount: sourceEntry.isFinal ? 0 : ((previousEntry?.changeCount || 0) + 1),
+      controller: null
+    };
+  }
+
+  updateEntryFromTranscriptEntry(entry, sourceEntry) {
+    const sourceChanged = entry.sourceText !== sourceEntry.sourceText;
+    if (sourceChanged) {
+      this.abortEntryTranslation(entry);
+      entry.translatedText = '';
+      entry.lastQueuedText = '';
+      entry.queuedTranslationText = '';
+      entry.version += 1;
+      entry.changeCount = sourceEntry.isFinal ? 0 : ((entry.changeCount || 0) + 1);
+    }
+
+    entry.sourceText = sourceEntry.sourceText;
+    entry.isFinal = Boolean(sourceEntry.isFinal);
+    entry.speakerTag = sourceEntry.speakerTag;
+    entry.timestampLabel = sourceEntry.timestampLabel;
+    entry.receivedAtMs = sourceEntry.receivedAtMs;
+    entry.status = this.translationEnabled ? (entry.translatedText ? 'translated' : 'pending') : 'disabled';
+  }
+
+  updateEntries(sourceEntries = []) {
+    const normalizedSourceEntries = Array.isArray(sourceEntries)
+      ? sourceEntries
+        .filter((entry) => entry && typeof entry.sourceText === 'string' && entry.sourceText.trim())
+        .map((entry) => ({
+          id: typeof entry.id === 'string' && entry.id ? entry.id : '',
+          sourceText: sanitizeCaptionText(entry.sourceText),
+          isFinal: Boolean(entry.isFinal),
+          speakerTag: entry.speakerTag,
+          timestampLabel: entry.timestampLabel,
+          receivedAtMs: entry.receivedAtMs
+        }))
+      : [];
+
+    const nextLiveCaptionText = normalizedSourceEntries.map((entry) => entry.sourceText).join('\n');
+    const currentSignature = JSON.stringify(this.entries.map((entry) => ({
+      id: entry.id,
+      sourceText: entry.sourceText,
+      isFinal: entry.isFinal,
+      speakerTag: entry.speakerTag,
+      timestampLabel: entry.timestampLabel,
+      receivedAtMs: entry.receivedAtMs
+    })));
+    const nextSignature = JSON.stringify(normalizedSourceEntries);
+
+    if (nextSignature === currentSignature) {
+      return this.getPayload();
+    }
+
+    this.liveCaptionText = nextLiveCaptionText;
+
+    const existingEntries = new Map(this.entries.map((entry) => [entry.id, entry]));
+    const nextEntries = [];
+
+    for (let index = 0; index < normalizedSourceEntries.length; index += 1) {
+      const sourceEntry = normalizedSourceEntries[index];
+      const entryId = sourceEntry.id || `caption-${this.sessionGeneration}-${index}`;
+      const existingEntry = existingEntries.get(entryId);
+      sourceEntry.id = entryId;
+
+      if (existingEntry) {
+        this.updateEntryFromTranscriptEntry(existingEntry, sourceEntry);
+        nextEntries.push(existingEntry);
+        existingEntries.delete(entryId);
+      } else {
+        nextEntries.push(this.createEntryFromTranscriptEntry(sourceEntry));
+      }
+    }
+
+    for (const removedEntry of existingEntries.values()) {
+      this.abortEntryTranslation(removedEntry);
+    }
+
+    this.entries = nextEntries;
+    if (this.translationEnabled) {
+      this.queueTranslations();
+    } else {
+      this.markEntriesTranslationDisabled();
+    }
+    this.bumpPayloadVersion();
+    return this.getPayload();
   }
 
   getReconcileSearchStart(segmentCount) {
