@@ -55,6 +55,8 @@ let transcriptSource = 'live-captions';
 let hasDeepgramApiKey = false;
 let deepgramCaptureActive = false;
 let deepgramRemainingText = 'Remaining unavailable';
+let deepgramUsageLastRequestedAtMs = 0;
+let deepgramUsageRefreshInFlight = null;
 let currentPanelSplitRatio = 0.4;
 let isModePanelCollapsed = true;
 let promptModes = [];
@@ -80,6 +82,7 @@ const MIN_TRANSCRIPT_PANEL_WIDTH = 280;
 const MIN_BROWSER_PANEL_WIDTH = 220;
 const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
+const DEEPGRAM_USAGE_REFRESH_INTERVAL_MS = 60_000;
 const {
   DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
   TRANSCRIPT_SPEAKER_TAG,
@@ -771,13 +774,25 @@ function refreshDeepgramUsageStatus() {
     return;
   }
 
-  window.electronAPI.refreshDeepgramUsage()
+  const msSinceLastRequest = Date.now() - deepgramUsageLastRequestedAtMs;
+  if (
+    deepgramUsageRefreshInFlight
+    || (deepgramUsageLastRequestedAtMs > 0 && msSinceLastRequest < DEEPGRAM_USAGE_REFRESH_INTERVAL_MS)
+  ) {
+    return;
+  }
+
+  deepgramUsageLastRequestedAtMs = Date.now();
+  deepgramUsageRefreshInFlight = window.electronAPI.refreshDeepgramUsage()
     .then((usage) => {
       updateDeepgramUsageStatus(usage);
       updateTranscriptSourceControlButton();
     })
     .catch((error) => {
       console.error('[ERROR] Failed to refresh Deepgram usage:', error);
+    })
+    .finally(() => {
+      deepgramUsageRefreshInFlight = null;
     });
 }
 
@@ -815,6 +830,9 @@ function setCurrentSplitRatio(ratio) {
 }
 
 function applyAppPreferences(preferences = {}) {
+  const previousTranscriptSource = transcriptSource;
+  const previousHasDeepgramApiKey = hasDeepgramApiKey;
+
   if (typeof preferences.translationsVisible === 'boolean') {
     setTranslationVisibility(preferences.translationsVisible);
   }
@@ -833,6 +851,10 @@ function applyAppPreferences(preferences = {}) {
 
   if (typeof preferences.hasDeepgramApiKey === 'boolean') {
     hasDeepgramApiKey = preferences.hasDeepgramApiKey;
+  }
+
+  if (previousTranscriptSource !== transcriptSource || previousHasDeepgramApiKey !== hasDeepgramApiKey) {
+    deepgramUsageLastRequestedAtMs = 0;
   }
 
   if (preferences.deepgramUsage && typeof preferences.deepgramUsage === 'object') {

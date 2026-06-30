@@ -320,11 +320,10 @@ let deepgramTranscriptionService = null;
 let deepgramTranscriptionActive = false;
 let deepgramUsageLastFetchedAtMs = 0;
 let deepgramUsageRefreshPromise = null;
+let deepgramUsageRefreshApiKey = '';
 let deepgramAccountUsageSnapshot = {
   status: 'idle',
-  remainingText: 'Remaining unavailable',
-  updatedAtMs: null,
-  error: ''
+  remainingText: 'Remaining unavailable'
 };
 let captureOverlayState = null;
 const shortcutCooldowns = new Map();
@@ -770,72 +769,80 @@ async function fetchDeepgramJson(url, apiKey) {
 }
 
 function getDeepgramUsageSnapshot() {
+  if (!deepgramApiKey) {
+    return {
+      active: deepgramTranscriptionActive,
+      remainingText: 'Add API key'
+    };
+  }
+
   return {
     active: deepgramTranscriptionActive,
-    accountStatus: deepgramAccountUsageSnapshot.status,
-    remainingText: deepgramAccountUsageSnapshot.remainingText,
-    updatedAtMs: deepgramAccountUsageSnapshot.updatedAtMs,
-    error: deepgramAccountUsageSnapshot.error
+    remainingText: deepgramAccountUsageSnapshot.remainingText
   };
 }
 
-async function refreshDeepgramAccountUsage({ force = false } = {}) {
+async function refreshDeepgramAccountUsage() {
   if (!deepgramApiKey) {
     deepgramAccountUsageSnapshot = {
       status: 'missing-api-key',
-      remainingText: 'Add API key',
-      updatedAtMs: Date.now(),
-      error: ''
+      remainingText: 'Add API key'
     };
     return getDeepgramUsageSnapshot();
   }
 
   const now = Date.now();
   if (
-    !force
-    && deepgramAccountUsageSnapshot.status !== 'idle'
+    deepgramAccountUsageSnapshot.status !== 'idle'
     && now - deepgramUsageLastFetchedAtMs < DEEPGRAM_USAGE_REFRESH_INTERVAL_MS
   ) {
     return getDeepgramUsageSnapshot();
   }
 
-  if (deepgramUsageRefreshPromise) {
+  const requestApiKey = deepgramApiKey;
+  if (deepgramUsageRefreshPromise && deepgramUsageRefreshApiKey === requestApiKey) {
     return deepgramUsageRefreshPromise;
   }
 
-  deepgramUsageRefreshPromise = (async () => {
+  deepgramUsageRefreshApiKey = requestApiKey;
+  const refreshPromise = (async () => {
     try {
-      const projectsPayload = await fetchDeepgramJson(DEEPGRAM_PROJECTS_ENDPOINT, deepgramApiKey);
+      const projectsPayload = await fetchDeepgramJson(DEEPGRAM_PROJECTS_ENDPOINT, requestApiKey);
       const projectId = getDeepgramProjectId(projectsPayload);
       if (!projectId) {
         throw new Error('No Deepgram project is available for this key.');
       }
 
-      const balancesPayload = await fetchDeepgramJson(getDeepgramBalancesEndpoint(projectId), deepgramApiKey);
+      const balancesPayload = await fetchDeepgramJson(getDeepgramBalancesEndpoint(projectId), requestApiKey);
       const balanceAmount = getDeepgramBalanceAmount(balancesPayload);
-      deepgramAccountUsageSnapshot = {
-        status: Number.isFinite(balanceAmount) ? 'available' : 'unavailable',
-        remainingText: Number.isFinite(balanceAmount)
-          ? formatDeepgramBalanceAmount(balanceAmount)
-          : 'Remaining unavailable',
-        updatedAtMs: Date.now(),
-        error: ''
-      };
+
+      if (deepgramUsageRefreshPromise === refreshPromise && requestApiKey === deepgramApiKey) {
+        deepgramAccountUsageSnapshot = {
+          status: Number.isFinite(balanceAmount) ? 'available' : 'unavailable',
+          remainingText: Number.isFinite(balanceAmount)
+            ? formatDeepgramBalanceAmount(balanceAmount)
+            : 'Remaining unavailable'
+        };
+      }
     } catch (error) {
-      deepgramAccountUsageSnapshot = {
-        status: 'unavailable',
-        remainingText: 'Remaining unavailable',
-        updatedAtMs: Date.now(),
-        error: error?.message || String(error)
-      };
+      if (deepgramUsageRefreshPromise === refreshPromise && requestApiKey === deepgramApiKey) {
+        deepgramAccountUsageSnapshot = {
+          status: 'unavailable',
+          remainingText: 'Remaining unavailable'
+        };
+      }
     } finally {
-      deepgramUsageLastFetchedAtMs = Date.now();
-      deepgramUsageRefreshPromise = null;
+      if (deepgramUsageRefreshPromise === refreshPromise) {
+        deepgramUsageLastFetchedAtMs = Date.now();
+        deepgramUsageRefreshPromise = null;
+        deepgramUsageRefreshApiKey = '';
+      }
     }
 
     return getDeepgramUsageSnapshot();
   })();
 
+  deepgramUsageRefreshPromise = refreshPromise;
   return deepgramUsageRefreshPromise;
 }
 
@@ -3270,11 +3277,10 @@ function setTranscriptSourcePreference(source) {
 function setDeepgramApiKeyPreference(apiKey) {
   setDeepgramApiKeyInMemory(apiKey);
   deepgramUsageLastFetchedAtMs = 0;
+  deepgramUsageRefreshApiKey = '';
   deepgramAccountUsageSnapshot = {
     status: deepgramApiKey ? 'idle' : 'missing-api-key',
-    remainingText: deepgramApiKey ? 'Remaining unavailable' : 'Add API key',
-    updatedAtMs: null,
-    error: ''
+    remainingText: deepgramApiKey ? 'Remaining unavailable' : 'Add API key'
   };
 
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && deepgramApiKey) {

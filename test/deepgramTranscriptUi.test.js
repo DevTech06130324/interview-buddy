@@ -110,6 +110,8 @@ test('Deepgram mode exposes only remaining account balance status', () => {
   const renderer = readRepoFile('renderer.js');
   const main = readRepoFile('main.js');
   const preload = readRepoFile('preload.js');
+  const usageSnapshot = getFunctionSource(main, 'getDeepgramUsageSnapshot');
+  const refreshUsageStatus = getFunctionSource(renderer, 'refreshDeepgramUsageStatus');
 
   assert.match(html, /id="deepgramUsageStatus"/);
   assert.match(html, /id="deepgramRemainingUsageValue"/);
@@ -123,9 +125,22 @@ test('Deepgram mode exposes only remaining account balance status', () => {
   assert.doesNotMatch(renderer, /deepgramSessionUsageValue/);
   assert.doesNotMatch(renderer, /deepgramUsageTimer/);
   assert.match(renderer, /deepgramRemainingUsageValue/);
+  assert.match(renderer, /DEEPGRAM_USAGE_REFRESH_INTERVAL_MS/);
+  assert.match(renderer, /deepgramUsageRefreshInFlight/);
+  assert.match(refreshUsageStatus, /Date\.now\(\) - deepgramUsageLastRequestedAtMs/);
+  assert.match(refreshUsageStatus, /deepgramUsageRefreshInFlight/);
   assert.match(preload, /refreshDeepgramUsage:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('refresh-deepgram-usage'\)/);
   assert.match(main, /function getDeepgramUsageSnapshot/);
   assert.match(main, /function refreshDeepgramAccountUsage/);
+  assert.match(usageSnapshot, /if\s*\(!deepgramApiKey\)/);
+  assert.match(usageSnapshot, /remainingText:\s*'Add API key'/);
+  assert.doesNotMatch(usageSnapshot, /accountStatus/);
+  assert.doesNotMatch(usageSnapshot, /updatedAtMs/);
+  assert.doesNotMatch(usageSnapshot, /error/);
+  assert.match(main, /deepgramUsageRefreshApiKey/);
+  assert.match(main, /const requestApiKey = deepgramApiKey/);
+  assert.match(main, /fetchDeepgramJson\(DEEPGRAM_PROJECTS_ENDPOINT, requestApiKey\)/);
+  assert.match(main, /deepgramUsageRefreshPromise === refreshPromise/);
   assert.doesNotMatch(main, /formatDeepgramSessionDuration/);
   assert.doesNotMatch(main, /sessionUsageText/);
   assert.doesNotMatch(main, /sessionElapsedSeconds/);
