@@ -626,10 +626,10 @@ async function startDeepgramCapture() {
     const systemAudioStream = createAudioOnlyStream(displayStream);
     const microphoneAudioStream = createAudioOnlyStream(micStream);
 
-    if (!systemAudioStream || !microphoneAudioStream) {
+    if (!microphoneAudioStream) {
       stopMediaStreamTracks(displayStream);
       stopMediaStreamTracks(micStream);
-      throw new Error('Deepgram capture requires both system audio and microphone access.');
+      throw new Error('Deepgram capture requires microphone access.');
     }
 
     if (captureGeneration !== deepgramCaptureGeneration) {
@@ -638,10 +638,18 @@ async function startDeepgramCapture() {
       return false;
     }
 
-    const recorders = [
-      createDeepgramRecorder(DEEPGRAM_ROLE_THEM, systemAudioStream),
-      createDeepgramRecorder(DEEPGRAM_ROLE_ME, microphoneAudioStream)
-    ];
+    const recorders = [];
+    const streams = [micStream, microphoneAudioStream];
+
+    if (systemAudioStream) {
+      recorders.push(createDeepgramRecorder(DEEPGRAM_ROLE_THEM, systemAudioStream));
+      streams.push(displayStream, systemAudioStream);
+    } else {
+      console.warn('[WARNING] System audio is not available for Deepgram capture; microphone capture will continue.');
+      stopMediaStreamTracks(displayStream);
+    }
+
+    recorders.push(createDeepgramRecorder(DEEPGRAM_ROLE_ME, microphoneAudioStream));
 
     const stopOnTrackEnd = () => {
       if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
@@ -649,8 +657,10 @@ async function startDeepgramCapture() {
       }
     };
 
-    for (const track of displayStream.getTracks()) {
-      track.addEventListener('ended', stopOnTrackEnd, { once: true });
+    if (systemAudioStream) {
+      for (const track of displayStream.getTracks()) {
+        track.addEventListener('ended', stopOnTrackEnd, { once: true });
+      }
     }
 
     for (const track of micStream.getTracks()) {
@@ -659,7 +669,7 @@ async function startDeepgramCapture() {
 
     deepgramCaptureResources = {
       recorders,
-      streams: [displayStream, micStream, systemAudioStream, microphoneAudioStream]
+      streams
     };
     return true;
   })().catch((error) => {

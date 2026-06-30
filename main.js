@@ -1,5 +1,6 @@
 const { app, BrowserWindow, BrowserView, ipcMain, globalShortcut, screen, clipboard, nativeTheme, dialog } = require('electron');
 const { safeStorage } = require('electron');
+const { desktopCapturer } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -1595,6 +1596,55 @@ function bindMainWindowLifecycle(targetWindow) {
   });
 }
 
+function isMainWindowDisplayMediaRequest(request) {
+  const frameUrl = typeof request?.frame?.url === 'string' ? request.frame.url : '';
+  return Boolean(
+    mainWindow
+    && !mainWindow.isDestroyed()
+    && request?.frame
+    && request.frame === mainWindow.webContents.mainFrame
+    && frameUrl.startsWith('file://')
+  );
+}
+
+function configureMainWindowDisplayMediaCapture(targetWindow) {
+  const targetSession = targetWindow?.webContents?.session;
+  if (!targetSession || typeof targetSession.setDisplayMediaRequestHandler !== 'function') {
+    return;
+  }
+
+  targetSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    if (!isMainWindowDisplayMediaRequest(request)) {
+      callback({});
+      return;
+    }
+
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: {
+          width: 0,
+          height: 0
+        }
+      });
+      const screenSource = sources[0];
+
+      if (!screenSource) {
+        callback({});
+        return;
+      }
+
+      callback({
+        video: request.videoRequested ? screenSource : undefined,
+        audio: request.audioRequested && process.platform === 'win32' ? 'loopback' : undefined
+      });
+    } catch (error) {
+      console.error('[ERROR] Failed to resolve display media source for Deepgram capture:', error);
+      callback({});
+    }
+  });
+}
+
 function createWindow() {
   const restoredBounds = getRestoredWindowBounds();
 
@@ -1621,6 +1671,7 @@ function createWindow() {
 
   mainWindow.setContentProtection(true);
   mainWindow.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: false });
+  configureMainWindowDisplayMediaCapture(mainWindow);
 
   mainWindow.loadFile('index.html');
 
