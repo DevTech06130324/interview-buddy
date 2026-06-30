@@ -44,6 +44,7 @@ const {
   isSupportedAssistantUrl: isSupportedAssistantTargetUrl
 } = require('./src/assistantTargets');
 const {
+  DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
   TRANSCRIPT_SPEAKER_TAG,
   buildTranscriptPromptText,
   formatTranscriptElapsedTimestamp,
@@ -2724,6 +2725,19 @@ function getIncomingTranscriptEntryTimestampMs(entry) {
     ?? normalizeTranscriptEntryTimestampMs(entry.timestamp);
 }
 
+function getIncomingTranscriptTimestampLabel(entry, hasIncomingTimestampMs = false) {
+  const incomingTimestampLabel = normalizeTranscriptTimestampLabel(entry?.timestampLabel);
+  if (!incomingTimestampLabel) {
+    return '';
+  }
+
+  if (hasIncomingTimestampMs && incomingTimestampLabel === DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL) {
+    return '';
+  }
+
+  return incomingTimestampLabel;
+}
+
 function getTranscriptEntryMetadata(entryId, entry = {}) {
   const existing = transcriptEntryMetadata.get(entryId);
   const incomingTimestampMs = getIncomingTranscriptEntryTimestampMs(entry);
@@ -2735,7 +2749,7 @@ function getTranscriptEntryMetadata(entryId, entry = {}) {
     transcriptSessionStartedAtMs = receivedAtMs;
   }
 
-  const incomingTimestampLabel = normalizeTranscriptTimestampLabel(entry.timestampLabel);
+  const incomingTimestampLabel = getIncomingTranscriptTimestampLabel(entry, incomingTimestampMs !== null);
   const elapsedMs = Math.max(0, receivedAtMs - transcriptSessionStartedAtMs);
   const timestampLabel = incomingTimestampLabel
     || existing?.timestampLabel

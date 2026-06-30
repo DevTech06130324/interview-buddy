@@ -36,7 +36,7 @@ test('pending cursor keeps speaker metadata when the pending text starts mid-tur
 
 test('pending cursor keeps in-progress partial transcript entries', () => {
   const partialEntry = {
-    id: 'deepgram-them-partial',
+    id: 'deepgram-them-partial-0',
     sourceText: 'The interview question is still being spoken',
     timestampLabel: '00:05:22',
     speakerTag: 'Them',

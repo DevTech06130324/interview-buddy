@@ -126,6 +126,54 @@ test('Deepgram service emits ordered Them and Me transcript entries', () => {
   assert.ok(latestPayload.payloadVersion >= 2);
 });
 
+test('Deepgram service keeps partial IDs stable only within one active utterance', () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  let clock = 1000;
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    now: () => {
+      clock += 1000;
+      return clock;
+    }
+  });
+  const payloads = [];
+  service.on('captionUpdate', (payload) => payloads.push(payload));
+  service.start({ apiKey: 'dg_test_key_partials' });
+
+  const themSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
+
+  themSocket.emit('message', JSON.stringify({
+    channel: { alternatives: [{ transcript: 'First partial' }] },
+    is_final: false
+  }));
+  const firstPartialId = payloads.at(-1).entries.find((entry) => !entry.isFinal).id;
+
+  themSocket.emit('message', JSON.stringify({
+    channel: { alternatives: [{ transcript: 'First partial continues' }] },
+    is_final: false
+  }));
+  const updatedPartialId = payloads.at(-1).entries.find((entry) => !entry.isFinal).id;
+
+  themSocket.emit('message', JSON.stringify({
+    channel: { alternatives: [{ transcript: 'First final.' }] },
+    is_final: true
+  }));
+  themSocket.emit('message', JSON.stringify({
+    channel: { alternatives: [{ transcript: 'Next partial' }] },
+    is_final: false
+  }));
+  const nextPartialId = payloads.at(-1).entries.find((entry) => !entry.isFinal).id;
+
+  assert.equal(updatedPartialId, firstPartialId);
+  assert.notEqual(nextPartialId, firstPartialId);
+  assert.match(nextPartialId, /^deepgram-them-partial-\d+$/);
+});
+
 test('Deepgram service sends audio chunks without waiting for response IPC', () => {
   const {
     DeepgramTranscriptionService,

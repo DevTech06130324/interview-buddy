@@ -323,24 +323,71 @@ function getTranscriptSpeakerRoleClass(entry) {
     : 'transcript-row-role-them';
 }
 
-function getTranscriptEntrySignature(entry, options = {}) {
+function getTranscriptMarkerSignature(entry, options = {}) {
   return JSON.stringify({
-    sourceText: entry.sourceText,
-    translatedText: entry.translatedText,
-    status: entry.status,
-    isFinal: entry.isFinal,
     timestampLabel: entry.timestampLabel,
     speakerTag: entry.speakerTag,
     includeSpeaker: Boolean(options.includeSpeaker)
   });
 }
 
+function getTranscriptSourceSignature(entry) {
+  return String(entry?.sourceText || '');
+}
+
+function getTranscriptTranslationSignature(entry) {
+  return JSON.stringify({
+    translatedText: entry.translatedText,
+    status: entry.status
+  });
+}
+
+function updateTranscriptMarker(marker, entry, options = {}) {
+  const signature = getTranscriptMarkerSignature(entry, options);
+  if (marker.dataset.markerSignature === signature) {
+    return;
+  }
+
+  marker.dataset.markerSignature = signature;
+  marker.textContent = formatTranscriptEntryMarker(entry, options);
+}
+
 function updateTranscriptSourceCell(sourceCell, entry) {
+  const signature = getTranscriptSourceSignature(entry);
+  if (sourceCell.dataset.sourceSignature === signature) {
+    return;
+  }
+
+  sourceCell.dataset.sourceSignature = signature;
   const sourceText = document.createElement('span');
   sourceText.className = 'transcript-entry-text';
   sourceText.textContent = entry.sourceText;
 
   sourceCell.replaceChildren(sourceText);
+}
+
+function updateTranscriptTranslationCell(translatedCell, entry) {
+  const signature = getTranscriptTranslationSignature(entry);
+  if (translatedCell.dataset.translationSignature === signature) {
+    return;
+  }
+
+  translatedCell.dataset.translationSignature = signature;
+  translatedCell.className = 'transcript-cell transcript-cell-translation';
+
+  if (entry.status === 'disabled') {
+    translatedCell.classList.add('is-placeholder');
+    translatedCell.textContent = '';
+  } else if (entry.status === 'pending' && !entry.translatedText) {
+    translatedCell.classList.add('is-placeholder');
+    translatedCell.textContent = 'Translating...';
+  } else {
+    translatedCell.textContent = entry.translatedText;
+  }
+
+  if (entry.status === 'pending' && entry.translatedText) {
+    translatedCell.classList.add('is-refreshing');
+  }
 }
 
 function createTranscriptRow(entry, index = 0, previousEntry = null) {
@@ -373,18 +420,21 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
   const markerOptions = {
     includeSpeaker: shouldIncludeTranscriptSpeaker(entry, index, previousEntry)
   };
-  const signature = getTranscriptEntrySignature(entry, markerOptions);
-  if (row.dataset.entrySignature === signature) {
-    return;
-  }
 
-  row.dataset.entrySignature = signature;
-  row.className = `transcript-row transcript-row-${entry.status} ${getTranscriptSpeakerRoleClass(entry)}`;
-  row.classList.toggle('is-partial', !entry.isFinal);
+  const rowClassName = [
+    'transcript-row',
+    `transcript-row-${entry.status}`,
+    getTranscriptSpeakerRoleClass(entry),
+    entry.isFinal ? '' : 'is-partial'
+  ].filter(Boolean).join(' ');
+
+  if (row.className !== rowClassName) {
+    row.className = rowClassName;
+  }
 
   const marker = row.querySelector('.transcript-entry-marker');
   if (marker) {
-    marker.textContent = formatTranscriptEntryMarker(entry, markerOptions);
+    updateTranscriptMarker(marker, entry, markerOptions);
   }
 
   const sourceCell = row.querySelector('.transcript-cell-source');
@@ -397,21 +447,7 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
     return;
   }
 
-  translatedCell.className = 'transcript-cell transcript-cell-translation';
-
-  if (entry.status === 'disabled') {
-    translatedCell.classList.add('is-placeholder');
-    translatedCell.textContent = '';
-  } else if (entry.status === 'pending' && !entry.translatedText) {
-    translatedCell.classList.add('is-placeholder');
-    translatedCell.textContent = 'Translating...';
-  } else {
-    translatedCell.textContent = entry.translatedText;
-  }
-
-  if (entry.status === 'pending' && entry.translatedText) {
-    translatedCell.classList.add('is-refreshing');
-  }
+  updateTranscriptTranslationCell(translatedCell, entry);
 }
 
 function renderTranscriptEntries(entries) {

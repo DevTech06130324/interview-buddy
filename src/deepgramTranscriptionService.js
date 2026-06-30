@@ -61,7 +61,9 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.sockets = new Map();
     this.entries = [];
     this.partialEntries = new Map();
+    this.partialEntryIds = new Map();
     this.entryCounter = 0;
+    this.partialEntryCounter = 0;
     this.payloadVersion = 0;
     this.active = false;
     this.apiKey = '';
@@ -79,7 +81,9 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.apiKey = normalizedApiKey;
     this.entries = [];
     this.partialEntries.clear();
+    this.partialEntryIds.clear();
     this.entryCounter = 0;
+    this.partialEntryCounter = 0;
     this.pendingAudioChunks.clear();
     this.payloadVersion += 1;
 
@@ -111,15 +115,30 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.active = false;
     this.apiKey = '';
     this.partialEntries.clear();
+    this.partialEntryIds.clear();
     this.pendingAudioChunks.clear();
   }
 
   clear() {
     this.entries = [];
     this.partialEntries.clear();
+    this.partialEntryIds.clear();
     this.entryCounter = 0;
+    this.partialEntryCounter = 0;
     this.payloadVersion += 1;
     this.emitSnapshot();
+  }
+
+  getPartialEntryId(role) {
+    const normalizedRole = normalizeDeepgramRole(role);
+    const existingId = this.partialEntryIds.get(normalizedRole);
+    if (existingId) {
+      return existingId;
+    }
+
+    const nextId = `deepgram-${normalizedRole.toLowerCase()}-partial-${this.partialEntryCounter++}`;
+    this.partialEntryIds.set(normalizedRole, nextId);
+    return nextId;
   }
 
   createRoleSocket(role) {
@@ -234,7 +253,7 @@ class DeepgramTranscriptionService extends EventEmitter {
     const entry = {
       id: isFinal
         ? `deepgram-${normalizedRole.toLowerCase()}-${this.entryCounter++}`
-        : `deepgram-${normalizedRole.toLowerCase()}-partial`,
+        : this.getPartialEntryId(normalizedRole),
       sourceText,
       translatedText: '',
       status: 'disabled',
@@ -245,6 +264,7 @@ class DeepgramTranscriptionService extends EventEmitter {
 
     if (isFinal) {
       this.partialEntries.delete(normalizedRole);
+      this.partialEntryIds.delete(normalizedRole);
       this.entries.push(entry);
     } else {
       this.partialEntries.set(normalizedRole, entry);

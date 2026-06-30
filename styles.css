@@ -442,10 +442,6 @@ body {
   max-width: 78ch;
 }
 
-.transcript-row.is-partial .transcript-cell-source {
-  color: #cfcfcf;
-}
-
 .transcript-cell-translation.is-placeholder,
 .transcript-cell-translation.is-refreshing {
   color: #8f8f8f;
@@ -1278,7 +1274,6 @@ body {
   border-color: var(--border);
 }
 
-.transcript-row.is-partial .transcript-cell-source,
 .transcript-cell-translation.is-placeholder,
 .transcript-cell-translation.is-refreshing,
 .mode-header-summary,

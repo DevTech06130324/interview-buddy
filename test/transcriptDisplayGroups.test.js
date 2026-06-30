@@ -44,7 +44,7 @@ test('display groups merge consecutive transcript entries into readable blocks',
   assert.equal(groups[0].id, 'display-caption-1');
   assert.equal(
     groups[0].sourceText,
-    'First short sentence. Second short sentence. Third short sentence still belongs with the paragraph.'
+    'First short sentence.\nSecond short sentence.\nThird short sentence still belongs with the paragraph.'
   );
   assert.equal(groups[0].translatedText, `첫 번째 문장.\n두 번째 문장.\n${TRANSCRIPT_DISPLAY_GROUP_TRANSLATING_TEXT}`);
   assert.equal(groups[0].status, 'pending');
@@ -64,10 +64,37 @@ test('display groups start a new block when the readable block limit is reached'
   });
 
   assert.equal(groups.length, 2);
-  assert.equal(groups[0].sourceText, 'One. Two.');
+  assert.equal(groups[0].sourceText, 'One.\nTwo.');
   assert.equal(groups[0].translatedText, '하나.\n둘.');
   assert.equal(groups[1].sourceText, 'Three.');
   assert.equal(groups[1].translatedText, '셋.');
+});
+
+test('display groups preserve line breaks and punctuation inside a speaker turn', () => {
+  const groups = createTranscriptDisplayGroups([
+    {
+      id: 'caption-1',
+      sourceText: 'Opening line.\nSecond line with punctuation?',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      speakerTag: 'Them'
+    },
+    {
+      id: 'caption-2',
+      sourceText: 'Next point: keep this readable.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      speakerTag: 'Them'
+    }
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(
+    groups[0].sourceText,
+    'Opening line.\nSecond line with punctuation?\nNext point: keep this readable.'
+  );
 });
 
 test('display groups keep a long entry as its own readable block', () => {
@@ -128,7 +155,7 @@ test('display groups start a new block when speaker changes', () => {
   });
 
   assert.equal(groups.length, 2);
-  assert.equal(groups[0].sourceText, 'Interviewer opening. Interviewer follow up.');
+  assert.equal(groups[0].sourceText, 'Interviewer opening.\nInterviewer follow up.');
   assert.equal(groups[0].speakerTag, 'Them');
   assert.equal(groups[1].sourceText, 'Candidate answer.');
   assert.equal(groups[1].speakerTag, 'Me');
@@ -166,6 +193,6 @@ test('display groups keep a speaker turn together until another speaker starts',
   });
 
   assert.equal(groups.length, 1);
-  assert.equal(groups[0].sourceText, 'First part. Second part. Third part.');
+  assert.equal(groups[0].sourceText, 'First part.\nSecond part.\nThird part.');
   assert.equal(groups[0].speakerTag, 'Me');
 });

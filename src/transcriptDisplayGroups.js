@@ -40,7 +40,7 @@
     return entries
       .map((entry) => getCleanText(entry?.sourceText))
       .filter(Boolean)
-      .join(' ');
+      .join('\n');
   }
 
   function joinTranslatedText(entries) {

@@ -79,7 +79,12 @@ test('transcript rows show metadata above text with side-by-side translation', (
 
   const updateSourceCell = getFunctionSource(renderer, 'updateTranscriptSourceCell');
   const createTranscriptRow = getFunctionSource(renderer, 'createTranscriptRow');
+  const updateRow = getFunctionSource(renderer, 'updateTranscriptRow');
+  assert.match(updateSourceCell, /sourceCell\.dataset\.sourceSignature/);
   assert.match(updateSourceCell, /sourceCell\.replaceChildren\(sourceText\)/);
+  assert.match(updateRow, /updateTranscriptMarker/);
+  assert.match(updateRow, /updateTranscriptTranslationCell/);
+  assert.doesNotMatch(updateRow, /entrySignature/);
   assert.match(createTranscriptRow, /transcript-entry-header/);
   assert.match(createTranscriptRow, /transcript-entry-body/);
   assert.match(createTranscriptRow, /row\.append\(header,\s*body\)/);
@@ -103,6 +108,19 @@ test('transcript rendering keeps stable row order and shows a new transcript ind
   assert.match(renderer, /const newTranscriptIndicator = document\.getElementById\('newTranscriptIndicator'\)/);
   assert.match(renderer, /function setNewTranscriptIndicatorVisible/);
   assert.match(renderer, /setNewTranscriptIndicatorVisible\(true\)/);
+});
+
+test('partial transcript updates keep stable text color and diff cells independently', () => {
+  const css = readRepoFile('styles.css');
+  const renderer = readRepoFile('renderer.js');
+
+  assert.doesNotMatch(css, /\.transcript-row\.is-partial\s+\.transcript-cell-source\s*\{[^}]*color:/s);
+  assert.match(renderer, /function getTranscriptMarkerSignature/);
+  assert.match(renderer, /function getTranscriptSourceSignature/);
+  assert.match(renderer, /function getTranscriptTranslationSignature/);
+  assert.match(renderer, /marker\.dataset\.markerSignature/);
+  assert.match(renderer, /sourceCell\.dataset\.sourceSignature/);
+  assert.match(renderer, /translatedCell\.dataset\.translationSignature/);
 });
 
 test('panel divider has a visible default grip affordance', () => {

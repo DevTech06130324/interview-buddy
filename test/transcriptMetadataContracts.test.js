@@ -18,6 +18,29 @@ function getAsyncFunctionSource(name) {
   return source.slice(startIndex, nextFunctionIndex);
 }
 
+function getFunctionSource(source, name) {
+  const startMarker = `function ${name}(`;
+  const startIndex = source.indexOf(startMarker);
+  assert.notEqual(startIndex, -1, `Expected to find ${name}`);
+
+  let depth = 0;
+  let sawOpeningBrace = false;
+  for (let index = startIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '{') {
+      depth += 1;
+      sawOpeningBrace = true;
+    } else if (char === '}') {
+      depth -= 1;
+      if (sawOpeningBrace && depth === 0) {
+        return source.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  assert.fail(`Expected to find the end of ${name}`);
+}
+
 test('Ctrl+Enter prompt injection does not stop when there is no pending transcript', () => {
   const source = getAsyncFunctionSource('submitTranscriptToAssistant');
 
@@ -40,6 +63,17 @@ test('caption updates send normalized entries with transcript metadata to the re
 
   assert.doesNotMatch(source, /entries:\s*payload\?\.entries\s*\|\|\s*latestTranscriptEntries/);
   assert.match(source, /entries:\s*latestTranscriptEntries/);
+});
+
+test('transcript metadata computes elapsed time for in-progress entries with default labels', () => {
+  const source = readRepoFile('main.js');
+  const helperSource = getFunctionSource(source, 'getIncomingTranscriptTimestampLabel');
+
+  assert.match(source, /DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL/);
+  assert.match(helperSource, /hasIncomingTimestampMs/);
+  assert.match(helperSource, /incomingTimestampLabel === DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL/);
+  assert.match(helperSource, /return '';/);
+  assert.match(source, /formatTranscriptElapsedTimestamp\(elapsedMs\)/);
 });
 
 test('renderer transcript rows display the speaker marker only on the first row', () => {
