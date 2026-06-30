@@ -7,6 +7,18 @@ const DEEPGRAM_ROLE_ME = 'Me';
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&punctuate=true&interim_results=true';
 const DEEPGRAM_FINALIZE_MESSAGE = JSON.stringify({ type: 'Finalize' });
 const DEEPGRAM_CLOSE_MESSAGE = JSON.stringify({ type: 'CloseStream' });
+const DEEPGRAM_CHUNK_LOG_INITIAL_COUNT = 3;
+const DEEPGRAM_CHUNK_LOG_INTERVAL = 20;
+
+function logDeepgramWorkflow(eventName, details = {}) {
+  console.log(`[Deepgram] ${eventName}`, details);
+}
+
+function shouldLogDeepgramSample(counterMap, key) {
+  const nextCount = (counterMap.get(key) || 0) + 1;
+  counterMap.set(key, nextCount);
+  return nextCount <= DEEPGRAM_CHUNK_LOG_INITIAL_COUNT || nextCount % DEEPGRAM_CHUNK_LOG_INTERVAL === 0;
+}
 
 function normalizeDeepgramApiKey(apiKey) {
   return String(apiKey || '').trim();
@@ -59,6 +71,7 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.payloadVersion = 0;
     this.active = false;
     this.apiKey = '';
+    this.audioChunkLogCounts = new Map();
   }
 
   start({ apiKey } = {}) {
@@ -73,7 +86,13 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.entries = [];
     this.partialEntries.clear();
     this.entryCounter = 0;
+    this.audioChunkLogCounts.clear();
     this.payloadVersion += 1;
+    logDeepgramWorkflow('service-start', {
+      listenUrl: this.listenUrl,
+      hasKey: true,
+      keyLast4: normalizedApiKey.slice(-4)
+    });
 
     this.createRoleSocket(DEEPGRAM_ROLE_THEM);
     this.createRoleSocket(DEEPGRAM_ROLE_ME);
@@ -103,6 +122,8 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.active = false;
     this.apiKey = '';
     this.partialEntries.clear();
+    this.audioChunkLogCounts.clear();
+    logDeepgramWorkflow('service-stop', {});
   }
 
   clear() {
@@ -116,6 +137,10 @@ class DeepgramTranscriptionService extends EventEmitter {
   createRoleSocket(role) {
     const normalizedRole = normalizeDeepgramRole(role);
     const WebSocketImpl = resolveWebSocketImpl(this.injectedWebSocketImpl);
+    logDeepgramWorkflow('socket-create', {
+      role: normalizedRole,
+      listenUrl: this.listenUrl
+    });
     const socket = new WebSocketImpl(this.listenUrl, {
       headers: {
         Authorization: `Token ${this.apiKey}`
@@ -123,13 +148,27 @@ class DeepgramTranscriptionService extends EventEmitter {
       role: normalizedRole
     });
 
+    socket.on('open', () => {
+      logDeepgramWorkflow('socket-open', {
+        role: normalizedRole
+      });
+    });
     socket.on('message', (message) => {
       this.handleSocketMessage(normalizedRole, message);
     });
     socket.on('error', (error) => {
+      logDeepgramWorkflow('socket-error', {
+        role: normalizedRole,
+        message: error?.message || String(error)
+      });
       this.emit('error', error);
     });
-    socket.on('close', () => {
+    socket.on('close', (code, reason) => {
+      logDeepgramWorkflow('socket-close', {
+        role: normalizedRole,
+        code,
+        reason: reason ? String(reason) : ''
+      });
       if (this.sockets.get(normalizedRole) === socket) {
         this.sockets.delete(normalizedRole);
       }
@@ -141,6 +180,10 @@ class DeepgramTranscriptionService extends EventEmitter {
 
   sendAudioChunk(role, chunk) {
     if (!this.active) {
+      logDeepgramWorkflow('audio-chunk-skipped', {
+        role: normalizeDeepgramRole(role),
+        reason: 'inactive'
+      });
       return false;
     }
 
@@ -148,15 +191,32 @@ class DeepgramTranscriptionService extends EventEmitter {
     const socket = this.sockets.get(normalizedRole);
     const WebSocketImpl = resolveWebSocketImpl(this.injectedWebSocketImpl);
     if (!socket || socket.readyState !== getOpenReadyState(WebSocketImpl)) {
+      if (shouldLogDeepgramSample(this.audioChunkLogCounts, `${normalizedRole}:not-open`)) {
+        logDeepgramWorkflow('audio-chunk-skipped', {
+          role: normalizedRole,
+          reason: 'socket-not-open',
+          readyState: socket?.readyState ?? null
+        });
+      }
       return false;
     }
 
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     if (buffer.length === 0) {
+      logDeepgramWorkflow('audio-chunk-skipped', {
+        role: normalizedRole,
+        reason: 'empty'
+      });
       return false;
     }
 
     socket.send(buffer);
+    if (shouldLogDeepgramSample(this.audioChunkLogCounts, `${normalizedRole}:sent`)) {
+      logDeepgramWorkflow('audio-chunk-sent', {
+        role: normalizedRole,
+        bytes: buffer.length
+      });
+    }
     return true;
   }
 
@@ -179,6 +239,10 @@ class DeepgramTranscriptionService extends EventEmitter {
 
     const sourceText = getTranscriptFromDeepgramMessage(message);
     if (!sourceText) {
+      logDeepgramWorkflow('transcript-message-empty', {
+        role: normalizeDeepgramRole(role),
+        isFinal: isFinalDeepgramMessage(message)
+      });
       return;
     }
 
@@ -196,6 +260,12 @@ class DeepgramTranscriptionService extends EventEmitter {
       speakerTag: normalizedRole,
       receivedAtMs
     };
+    logDeepgramWorkflow('transcript-message', {
+      role: normalizedRole,
+      isFinal,
+      textLength: sourceText.length,
+      payloadVersion: this.payloadVersion + 1
+    });
 
     if (isFinal) {
       this.partialEntries.delete(normalizedRole);

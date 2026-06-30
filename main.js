@@ -328,6 +328,7 @@ let lastSubmittedTranscriptEntries = [];
 let lastClipboardTranscriptEntries = [];
 let transcriptSessionStartedAtMs = null;
 const transcriptEntryMetadata = new Map();
+const deepgramAudioChunkLogCounts = new Map();
 let appQuitRequested = false;
 let liveCaptionsExitCleanupComplete = false;
 let liveCaptionsExitCleanupPromise = null;
@@ -679,6 +680,10 @@ function clearDeepgramApiKeyInMemory() {
 
 function getDeepgramApiKeyLast4() {
   return deepgramApiKey ? deepgramApiKey.slice(-4) : '';
+}
+
+function hasSavedDeepgramKey() {
+  return Boolean(deepgramApiKey);
 }
 
 function getDeepgramConnectionApiKey() {
@@ -1596,6 +1601,21 @@ function bindMainWindowLifecycle(targetWindow) {
   });
 }
 
+function bindMainWindowConsoleLogging(targetWindow) {
+  if (!targetWindow?.webContents || typeof targetWindow.webContents.on !== 'function') {
+    return;
+  }
+
+  targetWindow.webContents.on('console-message', (event, level, message) => {
+    const messageText = String(message || event?.message || '');
+    if (!messageText.includes('[Deepgram]')) {
+      return;
+    }
+
+    console.log(`[Deepgram renderer] ${messageText}`);
+  });
+}
+
 function isMainWindowDisplayMediaRequest(request) {
   const frameUrl = typeof request?.frame?.url === 'string' ? request.frame.url : '';
   return Boolean(
@@ -1610,16 +1630,26 @@ function isMainWindowDisplayMediaRequest(request) {
 function configureMainWindowDisplayMediaCapture(targetWindow) {
   const targetSession = targetWindow?.webContents?.session;
   if (!targetSession || typeof targetSession.setDisplayMediaRequestHandler !== 'function') {
+    logDeepgramWorkflow('display-capture-handler-unavailable', {});
     return;
   }
 
   targetSession.setDisplayMediaRequestHandler(async (request, callback) => {
     if (!isMainWindowDisplayMediaRequest(request)) {
+      logDeepgramWorkflow('display-capture-denied', {
+        reason: 'not-main-window',
+        origin: request?.securityOrigin || ''
+      });
       callback({});
       return;
     }
 
     try {
+      logDeepgramWorkflow('display-capture-request', {
+        videoRequested: Boolean(request.videoRequested),
+        audioRequested: Boolean(request.audioRequested),
+        platform: process.platform
+      });
       const sources = await desktopCapturer.getSources({
         types: ['screen'],
         thumbnailSize: {
@@ -1630,16 +1660,30 @@ function configureMainWindowDisplayMediaCapture(targetWindow) {
       const screenSource = sources[0];
 
       if (!screenSource) {
+        logDeepgramWorkflow('display-capture-denied', {
+          reason: 'no-screen-source'
+        });
         callback({});
         return;
       }
 
-      callback({
+      const streams = {
         video: request.videoRequested ? screenSource : undefined,
         audio: request.audioRequested && process.platform === 'win32' ? 'loopback' : undefined
+      };
+      logDeepgramWorkflow('display-capture-granted', {
+        video: Boolean(streams.video),
+        audio: Boolean(streams.audio),
+        audioMode: streams.audio || 'none',
+        sourceName: screenSource.name
       });
+      callback(streams);
     } catch (error) {
       console.error('[ERROR] Failed to resolve display media source for Deepgram capture:', error);
+      logDeepgramWorkflow('display-capture-denied', {
+        reason: 'error',
+        message: error?.message || String(error)
+      });
       callback({});
     }
   });
@@ -1671,6 +1715,7 @@ function createWindow() {
 
   mainWindow.setContentProtection(true);
   mainWindow.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: false });
+  bindMainWindowConsoleLogging(mainWindow);
   configureMainWindowDisplayMediaCapture(mainWindow);
 
   mainWindow.loadFile('index.html');
@@ -3168,6 +3213,16 @@ function sendCaptionError(error) {
   }
 }
 
+function logDeepgramWorkflow(eventName, details = {}) {
+  console.log(`[Deepgram] ${eventName}`, details);
+}
+
+function shouldLogDeepgramWorkflowSample(counterMap, key, initialCount = 3, interval = 20) {
+  const nextCount = (counterMap.get(key) || 0) + 1;
+  counterMap.set(key, nextCount);
+  return nextCount <= initialCount || nextCount % interval === 0;
+}
+
 function applyTranscriptPayload(payload = translationManager.getPayload()) {
   latestTranscriptEntries = normalizeTranscriptEntriesForPrompt(payload?.entries);
   latestTranscriptText = typeof payload?.fullText === 'string'
@@ -3194,6 +3249,11 @@ function resetTranscriptStateForSource(sourcePayload = '') {
 }
 
 function broadcastDeepgramCaptureState(isActive, reason = '') {
+  logDeepgramWorkflow('capture-state-broadcast', {
+    active: Boolean(isActive),
+    reason: typeof reason === 'string' ? reason : ''
+  });
+
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('deepgram-capture-state', {
       active: Boolean(isActive),
@@ -3224,10 +3284,20 @@ function normalizeDeepgramAudioChunk(chunk) {
 
 function handleDeepgramCaptionUpdate(payload) {
   if (transcriptSource !== TRANSCRIPT_SOURCE_DEEPGRAM) {
+    logDeepgramWorkflow('caption-update-ignored', {
+      reason: 'inactive-source',
+      source: transcriptSource,
+      entries: Array.isArray(payload?.entries) ? payload.entries.length : 0
+    });
     return;
   }
 
   const incomingEntries = normalizeTranscriptEntriesForPrompt(payload?.entries);
+  logDeepgramWorkflow('caption-update', {
+    entries: incomingEntries.length,
+    fullTextLength: typeof payload?.fullText === 'string' ? payload.fullText.length : 0,
+    payloadVersion: payload?.payloadVersion ?? null
+  });
   applyTranscriptPayload(translationManager.updateEntries(incomingEntries));
 }
 
@@ -3279,7 +3349,16 @@ function startDeepgramTranscriptSource() {
   }
 
   try {
+    logDeepgramWorkflow('service-start-requested', {
+      hasKey: true,
+      keyLast4: connectionApiKey.slice(-4)
+    });
     getDeepgramTranscriptionService().start({ apiKey: connectionApiKey });
+    deepgramAudioChunkLogCounts.clear();
+    logDeepgramWorkflow('service-started', {
+      hasKey: true,
+      keyLast4: connectionApiKey.slice(-4)
+    });
     broadcastDeepgramCaptureState(true, 'started');
     return true;
   } catch (error) {
@@ -3291,6 +3370,11 @@ function startDeepgramTranscriptSource() {
 }
 
 function startActiveTranscriptSource() {
+  logDeepgramWorkflow('active-source-start', {
+    source: transcriptSource,
+    hasKey: hasSavedDeepgramKey()
+  });
+
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
     stopLiveCaptionTranscriptSource();
     startDeepgramTranscriptSource();
@@ -3303,6 +3387,12 @@ function startActiveTranscriptSource() {
 
 function applyTranscriptSourceChange(nextSource, { resetTranscript = true } = {}) {
   const normalizedSource = normalizeTranscriptSource(nextSource);
+  logDeepgramWorkflow('source-change', {
+    previousSource: transcriptSource,
+    nextSource: normalizedSource,
+    resetTranscript: Boolean(resetTranscript),
+    hasKey: hasSavedDeepgramKey()
+  });
 
   if (transcriptSource === normalizedSource) {
     if (normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
@@ -3337,6 +3427,10 @@ function setTranscriptSourcePreference(source) {
 
 function setDeepgramApiKeyPreference(apiKey) {
   setDeepgramApiKeyInMemory(apiKey);
+  logDeepgramWorkflow('api-key-saved', {
+    hasKey: hasSavedDeepgramKey(),
+    keyLast4: getDeepgramApiKeyLast4()
+  });
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
     startDeepgramTranscriptSource();
   }
@@ -4820,10 +4914,32 @@ ipcMain.on('deepgram-audio-chunk', (event, payload = {}) => {
 
   const chunk = normalizeDeepgramAudioChunk(payload?.chunk);
   if (chunk.length === 0) {
+    logDeepgramWorkflow('audio-chunk-received', {
+      role: payload?.role,
+      bytes: 0,
+      accepted: false,
+      reason: 'empty'
+    });
     return;
   }
 
-  getDeepgramTranscriptionService().sendAudioChunk(payload?.role, chunk);
+  const logKey = `${payload?.role || 'unknown'}:received`;
+  if (shouldLogDeepgramWorkflowSample(deepgramAudioChunkLogCounts, logKey)) {
+    logDeepgramWorkflow('audio-chunk-received', {
+      role: payload?.role,
+      bytes: chunk.length,
+      accepted: true
+    });
+  }
+
+  const sent = getDeepgramTranscriptionService().sendAudioChunk(payload?.role, chunk);
+  if (shouldLogDeepgramWorkflowSample(deepgramAudioChunkLogCounts, `${payload?.role || 'unknown'}:forwarded`)) {
+    logDeepgramWorkflow('audio-chunk-forwarded', {
+      role: payload?.role,
+      bytes: chunk.length,
+      sent
+    });
+  }
 });
 
 app.whenReady().then(async () => {
