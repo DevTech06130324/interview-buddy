@@ -67,6 +67,8 @@ let modeDropdownOpenRequestId = 0;
 let isModeEditorDirty = false;
 let editingPromptModeId = null;
 let modeDropdownRenderSignature = '';
+let modeDropdownCloseTimer = null;
+let deferredModeDropdownRenderPending = false;
 let modeHotkeyStatus = 'idle';
 let modeHotkeyDisplayOverride = null;
 let modeHotkeyFeedbackTimer = null;
@@ -82,6 +84,7 @@ const MIN_TRANSCRIPT_PANEL_WIDTH = 280;
 const MIN_BROWSER_PANEL_WIDTH = 220;
 const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
+const MODE_RENAME_DOUBLE_CLICK_WINDOW_MS = 260;
 const DEEPGRAM_USAGE_REFRESH_INTERVAL_MS = 60_000;
 const {
   DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
@@ -1218,6 +1221,37 @@ function setInlineModeDropdownFallbackVisible(isVisible) {
   }
 }
 
+function isModeDropdownRenderDeferredForRename() {
+  return modeDropdownCloseTimer !== null;
+}
+
+function flushDeferredModeDropdownRender() {
+  if (!deferredModeDropdownRenderPending) {
+    return;
+  }
+
+  deferredModeDropdownRenderPending = false;
+  renderModeDropdownMenu();
+}
+
+function cancelPendingModeDropdownClose() {
+  if (modeDropdownCloseTimer === null) {
+    return;
+  }
+
+  window.clearTimeout(modeDropdownCloseTimer);
+  modeDropdownCloseTimer = null;
+}
+
+function scheduleModeDropdownCloseAfterRenameWindow() {
+  cancelPendingModeDropdownClose();
+  modeDropdownCloseTimer = window.setTimeout(() => {
+    modeDropdownCloseTimer = null;
+    setModeDropdownOpen(false);
+    flushDeferredModeDropdownRender();
+  }, MODE_RENAME_DOUBLE_CLICK_WINDOW_MS);
+}
+
 async function setModeDropdownOpen(isOpen, options = {}) {
   if (getModeDropdownMenus().length === 0 || getModeDropdownToggles().length === 0) {
     return false;
@@ -1226,8 +1260,10 @@ async function setModeDropdownOpen(isOpen, options = {}) {
   const requestId = ++modeDropdownOpenRequestId;
   isModeDropdownOpen = Boolean(isOpen);
   if (!isModeDropdownOpen) {
+    cancelPendingModeDropdownClose();
     editingPromptModeId = null;
     activeModeDropdownToggle = null;
+    flushDeferredModeDropdownRender();
   }
 
   for (const dropdownContainer of getModeDropdownContainers()) {
@@ -1360,6 +1396,8 @@ async function commitPromptModeRename(modeId, nextName) {
 }
 
 function startPromptModeRename(modeId, sourceMenuElement = null) {
+  cancelPendingModeDropdownClose();
+  deferredModeDropdownRenderPending = false;
   editingPromptModeId = modeId;
   renderModeDropdownMenu();
 
@@ -1375,13 +1413,24 @@ function startPromptModeRename(modeId, sourceMenuElement = null) {
   });
 }
 
-async function selectPromptModeFromMenu(modeId) {
+async function selectPromptModeFromMenu(modeId, options = {}) {
+  const shouldDeferCloseForRename = Boolean(options.deferCloseForRename);
+
+  if (shouldDeferCloseForRename) {
+    scheduleModeDropdownCloseAfterRenameWindow();
+  } else {
+    cancelPendingModeDropdownClose();
+  }
+
   try {
     await flushPendingPromptModeAutosave();
     const nextState = await window.electronAPI.selectPromptMode(modeId);
     updatePromptModeState(nextState);
-    setModeDropdownOpen(false);
+    if (!shouldDeferCloseForRename) {
+      setModeDropdownOpen(false);
+    }
   } catch (error) {
+    cancelPendingModeDropdownClose();
     console.error('[ERROR] Failed to select prompt mode:', error);
   }
 }
@@ -1537,7 +1586,7 @@ function populateModeDropdownMenu(menuElement) {
         return;
       }
 
-      await selectPromptModeFromMenu(mode.id);
+      await selectPromptModeFromMenu(mode.id, { deferCloseForRename: true });
     };
 
     item.onkeydown = async (event) => {
@@ -1550,6 +1599,7 @@ function populateModeDropdownMenu(menuElement) {
     item.ondblclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
+      cancelPendingModeDropdownClose();
       startPromptModeRename(mode.id, menuElement);
     };
 
@@ -1585,6 +1635,15 @@ function renderModeDropdownMenu() {
   }
 }
 
+function renderModeDropdownMenuUnlessDeferred() {
+  if (isModeDropdownRenderDeferredForRename()) {
+    deferredModeDropdownRenderPending = true;
+    return;
+  }
+
+  renderModeDropdownMenu();
+}
+
 async function handleModeMenuAction(action) {
   if (!action || typeof action.type !== 'string') {
     return;
@@ -1592,7 +1651,12 @@ async function handleModeMenuAction(action) {
 
   switch (action.type) {
     case 'select':
-      await selectPromptModeFromMenu(action.modeId);
+      await selectPromptModeFromMenu(action.modeId, {
+        deferCloseForRename: Boolean(action.deferCloseForRename)
+      });
+      break;
+    case 'begin-rename':
+      cancelPendingModeDropdownClose();
       break;
     case 'delete':
       await deletePromptModeFromMenu(action.modeId);

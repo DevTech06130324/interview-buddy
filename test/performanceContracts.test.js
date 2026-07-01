@@ -41,6 +41,27 @@ test('mode dropdown skips unchanged renders and selects without artificial click
   assert.doesNotMatch(modeMenu, /window\.setTimeout\(async \(\) => \{[\s\S]*?\{ type: 'select'/);
 });
 
+test('mode menu mouse selection keeps rows stable long enough for double-click rename', () => {
+  const renderer = readRepoFile('renderer.js');
+  const modeMenu = readRepoFile('mode-menu.js');
+
+  assert.match(renderer, /MODE_RENAME_DOUBLE_CLICK_WINDOW_MS/);
+  assert.match(renderer, /function scheduleModeDropdownCloseAfterRenameWindow/);
+  assert.match(renderer, /function cancelPendingModeDropdownClose/);
+  assert.match(renderer, /selectPromptModeFromMenu\(mode\.id, \{ deferCloseForRename: true \}\)/);
+  assert.match(renderer, /cancelPendingModeDropdownClose\(\);[\s\S]*startPromptModeRename\(mode\.id, menuElement\)/);
+  assert.match(renderer, /if \(isModeDropdownRenderDeferredForRename\(\)\) \{[\s\S]*deferredModeDropdownRenderPending = true;[\s\S]*return;/);
+  assert.match(renderer, /case 'begin-rename':[\s\S]*cancelPendingModeDropdownClose\(\);[\s\S]*break;/);
+
+  assert.match(modeMenu, /MODE_RENAME_DOUBLE_CLICK_WINDOW_MS/);
+  assert.match(modeMenu, /function deferModeMenuRenderForRenameWindow/);
+  assert.match(modeMenu, /function cancelPendingModeMenuRenderDeferral/);
+  assert.match(modeMenu, /sendModeMenuAction\(\{ type: 'select', modeId: mode\.id, deferCloseForRename: true \}\)/);
+  assert.match(modeMenu, /sendModeMenuAction\(\{ type: 'begin-rename', modeId: mode\.id \}\)/);
+  assert.match(modeMenu, /cancelPendingModeMenuRenderDeferral\(\);[\s\S]*startModeRename\(mode\.id\)/);
+  assert.match(modeMenu, /if \(isModeMenuRenderDeferredForRename\(\)\) \{[\s\S]*deferredModeMenuRenderPending = true;[\s\S]*return;/);
+});
+
 test('theme and layout switching code is removed for fixed dark horizontal UI', () => {
   const main = readRepoFile('main.js');
   const renderer = readRepoFile('renderer.js');

@@ -7,9 +7,13 @@ const {
 } = window.promptModeHelpers;
 const setProtectedTooltip = window.protectedTooltips?.setTooltip || (() => {});
 
+const MODE_RENAME_DOUBLE_CLICK_WINDOW_MS = 260;
+
 let promptModes = [];
 let selectedPromptModeId = null;
 let editingModeId = null;
+let modeMenuRenderResumeTimer = null;
+let deferredModeMenuRenderPending = false;
 
 async function sendModeMenuAction(action) {
   if (!window.electronAPI?.modeMenuAction) {
@@ -29,9 +33,40 @@ function closeModeMenu() {
     return;
   }
 
+  cancelPendingModeMenuRenderDeferral();
   window.electronAPI.closeModeMenu().catch((error) => {
     console.error('[ERROR] Failed to close Mode menu:', error);
   });
+}
+
+function isModeMenuRenderDeferredForRename() {
+  return modeMenuRenderResumeTimer !== null;
+}
+
+function flushDeferredModeMenuRender() {
+  if (!deferredModeMenuRenderPending) {
+    return;
+  }
+
+  deferredModeMenuRenderPending = false;
+  renderModeMenu();
+}
+
+function cancelPendingModeMenuRenderDeferral() {
+  if (modeMenuRenderResumeTimer === null) {
+    return;
+  }
+
+  window.clearTimeout(modeMenuRenderResumeTimer);
+  modeMenuRenderResumeTimer = null;
+}
+
+function deferModeMenuRenderForRenameWindow() {
+  cancelPendingModeMenuRenderDeferral();
+  modeMenuRenderResumeTimer = window.setTimeout(() => {
+    modeMenuRenderResumeTimer = null;
+    flushDeferredModeMenuRender();
+  }, MODE_RENAME_DOUBLE_CLICK_WINDOW_MS);
 }
 
 async function commitModeRename(modeId, nextName) {
@@ -53,6 +88,8 @@ async function commitModeRename(modeId, nextName) {
 }
 
 function startModeRename(modeId) {
+  cancelPendingModeMenuRenderDeferral();
+  deferredModeMenuRenderPending = false;
   editingModeId = modeId;
   renderModeMenu();
 
@@ -174,7 +211,8 @@ function createModeItem(mode) {
       return;
     }
 
-    void sendModeMenuAction({ type: 'select', modeId: mode.id });
+    deferModeMenuRenderForRenameWindow();
+    void sendModeMenuAction({ type: 'select', modeId: mode.id, deferCloseForRename: true });
   };
 
   item.onkeydown = (event) => {
@@ -189,6 +227,8 @@ function createModeItem(mode) {
   item.ondblclick = (event) => {
     event.preventDefault();
     event.stopPropagation();
+    cancelPendingModeMenuRenderDeferral();
+    void sendModeMenuAction({ type: 'begin-rename', modeId: mode.id });
     startModeRename(mode.id);
   };
 
@@ -240,6 +280,11 @@ function applyModeMenuState(state = {}) {
 
   if (editingModeId && !promptModes.some((mode) => mode.id === editingModeId)) {
     editingModeId = null;
+  }
+
+  if (isModeMenuRenderDeferredForRename()) {
+    deferredModeMenuRenderPending = true;
+    return;
   }
 
   renderModeMenu();
