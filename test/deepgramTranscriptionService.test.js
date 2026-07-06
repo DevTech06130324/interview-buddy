@@ -61,8 +61,7 @@ test('Deepgram service opens one authorized stream per speaker role', () => {
 
   FakeWebSocket.instances = [];
   const service = new DeepgramTranscriptionService({
-    WebSocketImpl: FakeWebSocket,
-    now: () => 12000
+    WebSocketImpl: FakeWebSocket
   });
 
   service.start({ apiKey: 'dg_test_key_123456' });
@@ -92,13 +91,8 @@ test('Deepgram service emits ordered Them and Me transcript entries', () => {
   } = require('../src/deepgramTranscriptionService');
 
   FakeWebSocket.instances = [];
-  let clock = 1000;
   const service = new DeepgramTranscriptionService({
-    WebSocketImpl: FakeWebSocket,
-    now: () => {
-      clock += 1000;
-      return clock;
-    }
+    WebSocketImpl: FakeWebSocket
   });
   const payloads = [];
   service.on('captionUpdate', (payload) => payloads.push(payload));
@@ -123,6 +117,8 @@ test('Deepgram service emits ordered Them and Me transcript entries', () => {
     'Hello from interviewer.',
     'My answer.'
   ]);
+  assert.ok(latestPayload.entries.every((entry) => entry.receivedAtMs === undefined));
+  assert.ok(latestPayload.entries.every((entry) => entry.order === undefined));
   assert.ok(latestPayload.payloadVersion >= 2);
 });
 
@@ -133,13 +129,8 @@ test('Deepgram service keeps partial IDs stable only within one active utterance
   } = require('../src/deepgramTranscriptionService');
 
   FakeWebSocket.instances = [];
-  let clock = 1000;
   const service = new DeepgramTranscriptionService({
-    WebSocketImpl: FakeWebSocket,
-    now: () => {
-      clock += 1000;
-      return clock;
-    }
+    WebSocketImpl: FakeWebSocket
   });
   const payloads = [];
   service.on('captionUpdate', (payload) => payloads.push(payload));

@@ -8,37 +8,9 @@
 }(typeof globalThis !== 'undefined' ? globalThis : this, function createTranscriptPromptModule() {
 const TRANSCRIPT_PROMPT_HEADER = 'Conversations so far like this';
 const TRANSCRIPT_SPEAKER_TAG = 'Them';
-const DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL = '00:00:00';
 
 function normalizeTranscriptPromptText(text) {
   return String(text || '').trim();
-}
-
-function formatTranscriptElapsedTimestamp(elapsedMs = 0) {
-  const numericElapsedMs = Number(elapsedMs);
-  const safeElapsedMs = Number.isFinite(numericElapsedMs)
-    ? Math.max(0, numericElapsedMs)
-    : 0;
-  const totalSeconds = Math.floor(safeElapsedMs / 1000);
-  const seconds = totalSeconds % 60;
-  const minutes = Math.floor(totalSeconds / 60) % 60;
-  const hours = Math.floor(totalSeconds / 3600);
-
-  return [
-    String(hours).padStart(2, '0'),
-    String(minutes).padStart(2, '0'),
-    String(seconds).padStart(2, '0')
-  ].join(':');
-}
-
-function normalizeTranscriptTimestampLabel(label) {
-  const value = String(label || '').trim();
-  const match = value.match(/^(\d{1,}):([0-5]\d):([0-5]\d)$/);
-  if (!match) {
-    return '';
-  }
-
-  return `${match[1].padStart(2, '0')}:${match[2]}:${match[3]}`;
 }
 
 function normalizeTranscriptSpeakerTag(speakerTag) {
@@ -47,16 +19,13 @@ function normalizeTranscriptSpeakerTag(speakerTag) {
 }
 
 function formatTranscriptEntryMarker(entry = {}, options = {}) {
-  const timestampLabel = normalizeTranscriptTimestampLabel(entry.timestampLabel)
-    || DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL;
   const includeSpeaker = Boolean(options.includeSpeaker);
 
-  if (includeSpeaker) {
-    const speakerTag = normalizeTranscriptSpeakerTag(entry.speakerTag);
-    return `[${timestampLabel} | ${speakerTag}]`;
+  if (!includeSpeaker) {
+    return '';
   }
 
-  return `[${timestampLabel}]`;
+  return `[${normalizeTranscriptSpeakerTag(entry.speakerTag)}]`;
 }
 
 function shouldIncludeTranscriptSpeaker(entry = {}, index = 0, previousEntry = null) {
@@ -75,7 +44,8 @@ function formatTranscriptEntryPromptLine(entry = {}, options = {}) {
     return '';
   }
 
-  return `${formatTranscriptEntryMarker(entry, options)} ${sourceText}`;
+  const marker = formatTranscriptEntryMarker(entry, options);
+  return marker ? `${marker} ${sourceText}` : sourceText;
 }
 
 function getTranscriptEntryPromptLines(transcriptEntries = []) {
@@ -130,14 +100,11 @@ function buildTranscriptPromptText({
 return {
   TRANSCRIPT_PROMPT_HEADER,
   TRANSCRIPT_SPEAKER_TAG,
-  DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
   buildTranscriptPromptText,
-  formatTranscriptElapsedTimestamp,
   formatTranscriptEntryMarker,
   formatTranscriptEntryPromptLine,
   normalizeTranscriptPromptText,
   normalizeTranscriptSpeakerTag,
-  normalizeTranscriptTimestampLabel,
   shouldIncludeTranscriptSpeaker
 };
 }));

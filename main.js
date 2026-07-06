@@ -44,14 +44,11 @@ const {
   isSupportedAssistantUrl: isSupportedAssistantTargetUrl
 } = require('./src/assistantTargets');
 const {
-  DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
   TRANSCRIPT_SPEAKER_TAG,
   buildTranscriptPromptText,
-  formatTranscriptElapsedTimestamp,
   formatTranscriptEntryPromptLine,
   normalizeTranscriptPromptText,
   normalizeTranscriptSpeakerTag,
-  normalizeTranscriptTimestampLabel,
   shouldIncludeTranscriptSpeaker
 } = require('./src/transcriptPrompt');
 const {
@@ -344,8 +341,6 @@ let lastClipboardTranscriptText = '';
 let latestTranscriptEntries = [];
 let lastSubmittedTranscriptEntries = [];
 let lastClipboardTranscriptEntries = [];
-let transcriptSessionStartedAtMs = null;
-const transcriptEntryMetadata = new Map();
 let appQuitRequested = false;
 let liveCaptionsExitCleanupComplete = false;
 let liveCaptionsExitCleanupPromise = null;
@@ -2846,81 +2841,6 @@ function normalizeTranscriptTextForPrompt(text) {
   return normalizeTranscriptPromptText(text);
 }
 
-function normalizeTranscriptEntryTimestampMs(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === 'string' && value.trim()) {
-    const numericValue = Number(value);
-    if (Number.isFinite(numericValue)) {
-      return numericValue;
-    }
-
-    const parsedValue = Date.parse(value);
-    if (Number.isFinite(parsedValue)) {
-      return parsedValue;
-    }
-  }
-
-  return null;
-}
-
-function getIncomingTranscriptEntryTimestampMs(entry) {
-  if (!entry || typeof entry !== 'object') {
-    return null;
-  }
-
-  return normalizeTranscriptEntryTimestampMs(entry.timestampMs)
-    ?? normalizeTranscriptEntryTimestampMs(entry.receivedAtMs)
-    ?? normalizeTranscriptEntryTimestampMs(entry.createdAtMs)
-    ?? normalizeTranscriptEntryTimestampMs(entry.timestamp);
-}
-
-function getIncomingTranscriptTimestampLabel(entry, hasIncomingTimestampMs = false) {
-  const incomingTimestampLabel = normalizeTranscriptTimestampLabel(entry?.timestampLabel);
-  if (!incomingTimestampLabel) {
-    return '';
-  }
-
-  if (hasIncomingTimestampMs && incomingTimestampLabel === DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL) {
-    return '';
-  }
-
-  return incomingTimestampLabel;
-}
-
-function getTranscriptEntryMetadata(entryId, entry = {}) {
-  const existing = transcriptEntryMetadata.get(entryId);
-  const incomingTimestampMs = getIncomingTranscriptEntryTimestampMs(entry);
-  const receivedAtMs = existing?.receivedAtMs
-    ?? incomingTimestampMs
-    ?? Date.now();
-
-  if (transcriptSessionStartedAtMs === null) {
-    transcriptSessionStartedAtMs = receivedAtMs;
-  }
-
-  const incomingTimestampLabel = getIncomingTranscriptTimestampLabel(entry, incomingTimestampMs !== null);
-  const elapsedMs = Math.max(0, receivedAtMs - transcriptSessionStartedAtMs);
-  const timestampLabel = incomingTimestampLabel
-    || existing?.timestampLabel
-    || formatTranscriptElapsedTimestamp(elapsedMs);
-  const metadata = {
-    receivedAtMs,
-    timestampLabel,
-    speakerTag: normalizeTranscriptSpeakerTag(entry.speakerTag || existing?.speakerTag || TRANSCRIPT_SPEAKER_TAG)
-  };
-
-  transcriptEntryMetadata.set(entryId, metadata);
-  return metadata;
-}
-
-function resetTranscriptMetadata() {
-  transcriptSessionStartedAtMs = null;
-  transcriptEntryMetadata.clear();
-}
-
 function normalizeTranscriptEntryForPrompt(entry, index = 0) {
   if (!entry || typeof entry.sourceText !== 'string') {
     return null;
@@ -2935,7 +2855,6 @@ function normalizeTranscriptEntryForPrompt(entry, index = 0) {
   const status = ['pending', 'translated', 'error', 'disabled'].includes(entry.status)
     ? entry.status
     : 'pending';
-  const metadata = getTranscriptEntryMetadata(id, entry);
 
   return {
     id,
@@ -2943,9 +2862,7 @@ function normalizeTranscriptEntryForPrompt(entry, index = 0) {
     translatedText: typeof entry.translatedText === 'string' ? entry.translatedText : '',
     status,
     isFinal: Boolean(entry.isFinal),
-    timestampLabel: metadata.timestampLabel,
-    speakerTag: normalizeTranscriptSpeakerTag(metadata.speakerTag),
-    receivedAtMs: metadata.receivedAtMs
+    speakerTag: normalizeTranscriptSpeakerTag(entry.speakerTag || TRANSCRIPT_SPEAKER_TAG)
   };
 }
 
@@ -3091,10 +3008,6 @@ function applyTranscriptPayload(payload = translationManager.getPayload()) {
     ? normalizeTranscriptTextForPrompt(payload.fullText)
     : getTranscriptTextFromEntries(latestTranscriptEntries);
 
-  if (!latestTranscriptText && latestTranscriptEntries.length === 0) {
-    resetTranscriptMetadata();
-  }
-
   sendCaptionUpdate({
     ...payload,
     fullText: latestTranscriptText,
@@ -3106,7 +3019,6 @@ function resetTranscriptStateForSource(sourcePayload = '') {
   latestTranscriptText = '';
   latestTranscriptEntries = [];
   resetTranscriptCursors();
-  resetTranscriptMetadata();
   applyTranscriptPayload(translationManager.reset(sourcePayload));
 }
 
@@ -5333,7 +5245,6 @@ if (captionSync) {
     latestTranscriptText = '';
     latestTranscriptEntries = [];
     resetTranscriptCursors();
-    resetTranscriptMetadata();
     translationManager.reset('');
     sendCaptionError(error);
   });

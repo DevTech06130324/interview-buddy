@@ -87,11 +87,9 @@ const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 const MODE_RENAME_DOUBLE_CLICK_WINDOW_MS = 260;
 const DEEPGRAM_USAGE_REFRESH_INTERVAL_MS = 60_000;
 const {
-  DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
   TRANSCRIPT_SPEAKER_TAG,
   formatTranscriptEntryMarker,
   normalizeTranscriptSpeakerTag,
-  normalizeTranscriptTimestampLabel,
   shouldIncludeTranscriptSpeaker
 } = window.transcriptPrompt;
 const TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram';
@@ -298,8 +296,6 @@ function normalizeTranscriptEntries(data) {
           translatedText: typeof entry.translatedText === 'string' ? entry.translatedText : '',
           status,
           isFinal: Boolean(entry.isFinal),
-          timestampLabel: normalizeTranscriptTimestampLabel(entry.timestampLabel)
-            || DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
           speakerTag: normalizeTranscriptSpeakerTag(entry.speakerTag)
         };
       });
@@ -316,7 +312,6 @@ function normalizeTranscriptEntries(data) {
     translatedText: '',
     status: 'pending',
     isFinal: false,
-    timestampLabel: DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL,
     speakerTag: TRANSCRIPT_SPEAKER_TAG
   }];
 }
@@ -335,7 +330,6 @@ function getTranscriptSpeakerRoleClass(entry) {
 
 function getTranscriptMarkerSignature(entry, options = {}) {
   return JSON.stringify({
-    timestampLabel: entry.timestampLabel,
     speakerTag: entry.speakerTag,
     includeSpeaker: Boolean(options.includeSpeaker)
   });
@@ -359,7 +353,9 @@ function updateTranscriptMarker(marker, entry, options = {}) {
   }
 
   marker.dataset.markerSignature = signature;
-  marker.textContent = formatTranscriptEntryMarker(entry, options);
+  const markerText = formatTranscriptEntryMarker(entry, options);
+  marker.textContent = markerText;
+  marker.hidden = !markerText;
 }
 
 function updateTranscriptSourceCell(sourceCell, entry) {
@@ -470,9 +466,12 @@ function renderTranscriptEntries(entries) {
 
   if (!transcriptRowsEl) {
     transcriptEl.textContent = displayEntries
-      .map((entry, index) => `${formatTranscriptEntryMarker(entry, {
-        includeSpeaker: shouldIncludeTranscriptSpeaker(entry, index, displayEntries[index - 1])
-      })}\n${entry.sourceText}`)
+      .map((entry, index) => {
+        const marker = formatTranscriptEntryMarker(entry, {
+          includeSpeaker: shouldIncludeTranscriptSpeaker(entry, index, displayEntries[index - 1])
+        });
+        return marker ? `${marker}\n${entry.sourceText}` : entry.sourceText;
+      })
       .join('\n\n');
     return;
   }

@@ -51,19 +51,19 @@ function resolveWebSocketImpl(injectedWebSocketImpl) {
 class DeepgramTranscriptionService extends EventEmitter {
   constructor({
     WebSocketImpl = null,
-    now = () => Date.now(),
     listenUrl = DEEPGRAM_LISTEN_URL
   } = {}) {
     super();
     this.injectedWebSocketImpl = WebSocketImpl;
-    this.now = now;
     this.listenUrl = listenUrl;
     this.sockets = new Map();
     this.entries = [];
     this.partialEntries = new Map();
     this.partialEntryIds = new Map();
+    this.partialEntryOrders = new Map();
     this.entryCounter = 0;
     this.partialEntryCounter = 0;
+    this.entryOrderCounter = 0;
     this.payloadVersion = 0;
     this.active = false;
     this.apiKey = '';
@@ -82,8 +82,10 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.entries = [];
     this.partialEntries.clear();
     this.partialEntryIds.clear();
+    this.partialEntryOrders.clear();
     this.entryCounter = 0;
     this.partialEntryCounter = 0;
+    this.entryOrderCounter = 0;
     this.pendingAudioChunks.clear();
     this.payloadVersion += 1;
 
@@ -116,6 +118,7 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.apiKey = '';
     this.partialEntries.clear();
     this.partialEntryIds.clear();
+    this.partialEntryOrders.clear();
     this.pendingAudioChunks.clear();
   }
 
@@ -123,8 +126,10 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.entries = [];
     this.partialEntries.clear();
     this.partialEntryIds.clear();
+    this.partialEntryOrders.clear();
     this.entryCounter = 0;
     this.partialEntryCounter = 0;
+    this.entryOrderCounter = 0;
     this.payloadVersion += 1;
     this.emitSnapshot();
   }
@@ -139,6 +144,18 @@ class DeepgramTranscriptionService extends EventEmitter {
     const nextId = `deepgram-${normalizedRole.toLowerCase()}-partial-${this.partialEntryCounter++}`;
     this.partialEntryIds.set(normalizedRole, nextId);
     return nextId;
+  }
+
+  getPartialEntryOrder(role) {
+    const normalizedRole = normalizeDeepgramRole(role);
+    const existingOrder = this.partialEntryOrders.get(normalizedRole);
+    if (Number.isFinite(existingOrder)) {
+      return existingOrder;
+    }
+
+    const nextOrder = this.entryOrderCounter++;
+    this.partialEntryOrders.set(normalizedRole, nextOrder);
+    return nextOrder;
   }
 
   createRoleSocket(role) {
@@ -248,8 +265,10 @@ class DeepgramTranscriptionService extends EventEmitter {
     }
 
     const normalizedRole = normalizeDeepgramRole(role);
-    const receivedAtMs = this.now();
     const isFinal = isFinalDeepgramMessage(message);
+    const order = isFinal
+      ? this.partialEntryOrders.get(normalizedRole) ?? this.entryOrderCounter++
+      : this.getPartialEntryOrder(normalizedRole);
     const entry = {
       id: isFinal
         ? `deepgram-${normalizedRole.toLowerCase()}-${this.entryCounter++}`
@@ -259,12 +278,13 @@ class DeepgramTranscriptionService extends EventEmitter {
       status: 'disabled',
       isFinal,
       speakerTag: normalizedRole,
-      receivedAtMs
+      order
     };
 
     if (isFinal) {
       this.partialEntries.delete(normalizedRole);
       this.partialEntryIds.delete(normalizedRole);
+      this.partialEntryOrders.delete(normalizedRole);
       this.entries.push(entry);
     } else {
       this.partialEntries.set(normalizedRole, entry);
@@ -277,11 +297,11 @@ class DeepgramTranscriptionService extends EventEmitter {
   getEntriesSnapshot() {
     return [...this.entries, ...this.partialEntries.values()]
       .sort((left, right) => {
-        const leftTime = Number.isFinite(left.receivedAtMs) ? left.receivedAtMs : 0;
-        const rightTime = Number.isFinite(right.receivedAtMs) ? right.receivedAtMs : 0;
-        return leftTime - rightTime;
+        const leftOrder = Number.isFinite(left.order) ? left.order : 0;
+        const rightOrder = Number.isFinite(right.order) ? right.order : 0;
+        return leftOrder - rightOrder;
       })
-      .map((entry) => ({ ...entry }));
+      .map(({ order, ...entry }) => ({ ...entry }));
   }
 
   getPayload() {

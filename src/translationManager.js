@@ -254,9 +254,7 @@ class TranslationManager extends EventEmitter {
         translatedText: entry.translatedText,
         status: entry.status,
         isFinal: entry.isFinal,
-        speakerTag: entry.speakerTag,
-        timestampLabel: entry.timestampLabel,
-        receivedAtMs: entry.receivedAtMs
+        speakerTag: entry.speakerTag
       }))
     };
   }
@@ -370,8 +368,6 @@ class TranslationManager extends EventEmitter {
       status: this.translationEnabled ? 'pending' : 'disabled',
       isFinal: segment.isFinal,
       speakerTag: segment.speakerTag,
-      timestampLabel: segment.timestampLabel,
-      receivedAtMs: segment.receivedAtMs,
       version: (previousPartial?.version || 0) + 1,
       lastQueuedText: '',
       queuedTranslationText: '',
@@ -385,8 +381,6 @@ class TranslationManager extends EventEmitter {
     entry.sourceText = segment.sourceText;
     entry.isFinal = segment.isFinal;
     entry.speakerTag = segment.speakerTag || entry.speakerTag;
-    entry.timestampLabel = segment.timestampLabel || entry.timestampLabel;
-    entry.receivedAtMs = segment.receivedAtMs ?? entry.receivedAtMs;
     entry.status = this.translationEnabled ? 'pending' : 'disabled';
     entry.version += 1;
     entry.lastQueuedText = '';
@@ -402,8 +396,6 @@ class TranslationManager extends EventEmitter {
       status: this.translationEnabled ? 'pending' : 'disabled',
       isFinal: Boolean(sourceEntry.isFinal),
       speakerTag: sourceEntry.speakerTag,
-      timestampLabel: sourceEntry.timestampLabel,
-      receivedAtMs: sourceEntry.receivedAtMs,
       version: (previousEntry?.version || 0) + 1,
       lastQueuedText: '',
       queuedTranslationText: '',
@@ -426,8 +418,6 @@ class TranslationManager extends EventEmitter {
     entry.sourceText = sourceEntry.sourceText;
     entry.isFinal = Boolean(sourceEntry.isFinal);
     entry.speakerTag = sourceEntry.speakerTag;
-    entry.timestampLabel = sourceEntry.timestampLabel;
-    entry.receivedAtMs = sourceEntry.receivedAtMs;
     entry.status = this.translationEnabled ? (entry.translatedText ? 'translated' : 'pending') : 'disabled';
   }
 
@@ -439,9 +429,7 @@ class TranslationManager extends EventEmitter {
           id: typeof entry.id === 'string' && entry.id ? entry.id : '',
           sourceText: sanitizeCaptionText(entry.sourceText),
           isFinal: Boolean(entry.isFinal),
-          speakerTag: entry.speakerTag,
-          timestampLabel: entry.timestampLabel,
-          receivedAtMs: entry.receivedAtMs
+          speakerTag: entry.speakerTag
         }))
       : [];
 
@@ -450,9 +438,7 @@ class TranslationManager extends EventEmitter {
       id: entry.id,
       sourceText: entry.sourceText,
       isFinal: entry.isFinal,
-      speakerTag: entry.speakerTag,
-      timestampLabel: entry.timestampLabel,
-      receivedAtMs: entry.receivedAtMs
+      speakerTag: entry.speakerTag
     })));
     const nextSignature = JSON.stringify(normalizedSourceEntries);
 

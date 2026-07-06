@@ -14,7 +14,6 @@ test('display groups merge consecutive transcript entries into readable blocks',
       translatedText: '첫 번째 문장.',
       status: 'translated',
       isFinal: true,
-      timestampLabel: '00:00:01',
       speakerTag: 'Them'
     },
     {
@@ -23,7 +22,6 @@ test('display groups merge consecutive transcript entries into readable blocks',
       translatedText: '두 번째 문장.',
       status: 'translated',
       isFinal: true,
-      timestampLabel: '00:00:03',
       speakerTag: 'Them'
     },
     {
@@ -32,7 +30,6 @@ test('display groups merge consecutive transcript entries into readable blocks',
       translatedText: '',
       status: 'pending',
       isFinal: false,
-      timestampLabel: '00:00:05',
       speakerTag: 'Them'
     }
   ], {
@@ -49,7 +46,6 @@ test('display groups merge consecutive transcript entries into readable blocks',
   assert.equal(groups[0].translatedText, `첫 번째 문장.\n두 번째 문장.\n${TRANSCRIPT_DISPLAY_GROUP_TRANSLATING_TEXT}`);
   assert.equal(groups[0].status, 'pending');
   assert.equal(groups[0].isFinal, false);
-  assert.equal(groups[0].timestampLabel, '00:00:01');
   assert.equal(groups[0].speakerTag, 'Them');
 });
 
@@ -128,7 +124,6 @@ test('display groups start a new block when speaker changes', () => {
       translatedText: '',
       status: 'disabled',
       isFinal: true,
-      timestampLabel: '00:00:01',
       speakerTag: 'Them'
     },
     {
@@ -137,7 +132,6 @@ test('display groups start a new block when speaker changes', () => {
       translatedText: '',
       status: 'disabled',
       isFinal: true,
-      timestampLabel: '00:00:03',
       speakerTag: 'Them'
     },
     {
@@ -146,7 +140,6 @@ test('display groups start a new block when speaker changes', () => {
       translatedText: '',
       status: 'disabled',
       isFinal: true,
-      timestampLabel: '00:00:05',
       speakerTag: 'Me'
     }
   ], {

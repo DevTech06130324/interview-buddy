@@ -113,7 +113,6 @@
       translatedText: joinTranslatedText(entries),
       status: getGroupStatus(entries),
       isFinal: entries.every((entry) => Boolean(entry?.isFinal)),
-      timestampLabel: firstEntry.timestampLabel,
       speakerTag: firstEntry.speakerTag,
       entryCount: entries.length
     };

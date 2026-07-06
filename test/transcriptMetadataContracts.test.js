@@ -58,22 +58,25 @@ test('Ctrl+Enter marks submitted transcript text and entries from the same snaps
   assert.doesNotMatch(source, /markTranscriptSubmitted\(transcriptSnapshot\)/);
 });
 
-test('caption updates send normalized entries with transcript metadata to the renderer', () => {
+test('caption updates send normalized entries with speaker metadata to the renderer', () => {
   const source = readRepoFile('main.js');
 
   assert.doesNotMatch(source, /entries:\s*payload\?\.entries\s*\|\|\s*latestTranscriptEntries/);
   assert.match(source, /entries:\s*latestTranscriptEntries/);
 });
 
-test('transcript metadata computes elapsed time for in-progress entries with default labels', () => {
+test('transcript metadata is speaker-only without timestamp state', () => {
   const source = readRepoFile('main.js');
-  const helperSource = getFunctionSource(source, 'getIncomingTranscriptTimestampLabel');
+  const normalizerSource = getFunctionSource(source, 'normalizeTranscriptEntryForPrompt');
 
-  assert.match(source, /DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL/);
-  assert.match(helperSource, /hasIncomingTimestampMs/);
-  assert.match(helperSource, /incomingTimestampLabel === DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL/);
-  assert.match(helperSource, /return '';/);
-  assert.match(source, /formatTranscriptElapsedTimestamp\(elapsedMs\)/);
+  assert.doesNotMatch(source, /DEFAULT_TRANSCRIPT_TIMESTAMP_LABEL/);
+  assert.doesNotMatch(source, /formatTranscriptElapsedTimestamp/);
+  assert.doesNotMatch(source, /normalizeTranscriptTimestampLabel/);
+  assert.doesNotMatch(source, /transcriptSessionStartedAtMs/);
+  assert.doesNotMatch(source, /transcriptEntryMetadata/);
+  assert.doesNotMatch(source, /timestampLabel/);
+  assert.doesNotMatch(source, /receivedAtMs/);
+  assert.match(normalizerSource, /speakerTag: normalizeTranscriptSpeakerTag\(entry\.speakerTag \|\| TRANSCRIPT_SPEAKER_TAG\)/);
 });
 
 test('renderer transcript rows display the speaker marker only on the first row', () => {
@@ -82,7 +85,8 @@ test('renderer transcript rows display the speaker marker only on the first row'
 
   assert.match(source, /formatTranscriptEntryMarker/);
   assert.match(source, /shouldIncludeTranscriptSpeaker/);
-  assert.match(promptHelpers, /return `\[\$\{timestampLabel\} \| \$\{speakerTag\}\]`;/);
+  assert.match(promptHelpers, /return `\[\$\{normalizeTranscriptSpeakerTag\(entry\.speakerTag\)\}\]`;/);
+  assert.doesNotMatch(promptHelpers, /timestampLabel/);
   assert.match(promptHelpers, /function shouldIncludeTranscriptSpeaker/);
   assert.match(source, /transcript-entry-marker/);
   assert.match(source, /sourceCell\.replaceChildren/);
