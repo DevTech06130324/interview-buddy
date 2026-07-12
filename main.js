@@ -52,8 +52,7 @@ const {
   shouldIncludeTranscriptSpeaker
 } = require('./src/transcriptPrompt');
 const {
-  getPendingTranscriptEntriesForCursor,
-  getPendingTranscriptTextForCursor
+  resolvePendingTranscriptCursor
 } = require('./src/transcriptCursor');
 
 // Constants
@@ -83,6 +82,7 @@ const APP_PREFERENCES_STORE_FILE = 'app-preferences.json';
 const TEMP_UPLOAD_DIR_NAME = 'assistant-temp-uploads';
 const DEFAULT_PROMPT_MODE_NAME = 'Default';
 const TRANSCRIPT_SAVE_DEFAULT_BASENAME = 'company name-meeting name';
+const TRANSCRIPT_CURSOR_MISMATCH_ERROR = 'Transcript cursor mismatch. Retry after the transcript stabilizes, or clear the transcript to reset.';
 const TRANSCRIPT_SOURCE_LIVE_CAPTIONS = 'live-captions';
 const TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram';
 const DEFAULT_TRANSCRIPT_SOURCE = TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
@@ -3170,6 +3170,17 @@ function applyTranscriptSourceChange(nextSource, { resetTranscript = true } = {}
     stopLiveCaptionTranscriptSource();
   }
 
+  if (
+    resetTranscript
+    && deepgramTranscriptionService
+    && (
+      transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM
+      || normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM
+    )
+  ) {
+    deepgramTranscriptionService.clear();
+  }
+
   transcriptSource = normalizedSource;
 
   if (resetTranscript) {
@@ -4449,22 +4460,21 @@ async function submitCurrentComposer(webContents, expectedText) {
 async function submitTranscriptToAssistant() {
   const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
   const transcriptEntriesSnapshot = normalizeTranscriptEntriesForPrompt(latestTranscriptEntries);
-  const pendingTranscriptEntries = getPendingTranscriptEntriesForCursor({
-    transcriptText: transcriptSnapshot,
-    transcriptEntries: transcriptEntriesSnapshot,
-    cursorText: lastSubmittedTranscriptText,
-    cursorEntries: lastSubmittedTranscriptEntries
-  });
-  const pendingTranscriptText = getPendingTranscriptTextForCursor({
+  const cursorResult = resolvePendingTranscriptCursor({
     transcriptText: transcriptSnapshot,
     transcriptEntries: transcriptEntriesSnapshot,
     cursorText: lastSubmittedTranscriptText,
     cursorEntries: lastSubmittedTranscriptEntries
   });
 
+  if (cursorResult.status === 'mismatch') {
+    sendCaptionError(TRANSCRIPT_CURSOR_MISMATCH_ERROR);
+    return;
+  }
+
   const composerText = getTranscriptPromptText(
-    pendingTranscriptText,
-    pendingTranscriptEntries || []
+    cursorResult.pendingText,
+    cursorResult.pendingEntries
   );
   if (!composerText.trim()) {
     console.error('[ERROR] No new transcript or prompt text is available for Ctrl+Enter');
@@ -4526,22 +4536,21 @@ async function submitTranscriptToAssistant() {
 async function copyTranscriptPromptToClipboard() {
   const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
   const transcriptEntriesSnapshot = normalizeTranscriptEntriesForPrompt(latestTranscriptEntries);
-  const pendingTranscriptEntries = getPendingTranscriptEntriesForCursor({
-    transcriptText: transcriptSnapshot,
-    transcriptEntries: transcriptEntriesSnapshot,
-    cursorText: lastClipboardTranscriptText,
-    cursorEntries: lastClipboardTranscriptEntries
-  });
-  const pendingTranscriptText = getPendingTranscriptTextForCursor({
+  const cursorResult = resolvePendingTranscriptCursor({
     transcriptText: transcriptSnapshot,
     transcriptEntries: transcriptEntriesSnapshot,
     cursorText: lastClipboardTranscriptText,
     cursorEntries: lastClipboardTranscriptEntries
   });
 
+  if (cursorResult.status === 'mismatch') {
+    sendCaptionError(TRANSCRIPT_CURSOR_MISMATCH_ERROR);
+    return;
+  }
+
   const clipboardText = getTranscriptPromptText(
-    pendingTranscriptText,
-    pendingTranscriptEntries || []
+    cursorResult.pendingText,
+    cursorResult.pendingEntries
   );
   if (!clipboardText.trim()) {
     console.error('[ERROR] No new transcript or prompt text is available for Alt+Enter');

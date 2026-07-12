@@ -86,8 +86,8 @@
 
     const currentSpeakerTag = getCleanText(currentEntries[currentEntries.length - 1]?.speakerTag);
     const nextSpeakerTag = getCleanText(nextEntry?.speakerTag);
-    if (currentSpeakerTag && nextSpeakerTag) {
-      return currentSpeakerTag !== nextSpeakerTag;
+    if (currentSpeakerTag !== nextSpeakerTag) {
+      return true;
     }
 
     if (currentEntries.length >= options.maxEntries) {

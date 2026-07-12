@@ -2,7 +2,12 @@ const {
   normalizeTranscriptPromptText
 } = require('./transcriptPrompt');
 
-function normalizeTranscriptEntryForCursor(entry, index = 0) {
+const TRANSCRIPT_CURSOR_MATCHED_STATUS = 'matched';
+const TRANSCRIPT_CURSOR_MISMATCH_STATUS = 'mismatch';
+const TRANSCRIPT_CURSOR_MISMATCH_REASON = 'unverified-boundary';
+const MIN_EXACT_TRANSCRIPT_OVERLAP_CHARS = 24;
+
+function normalizeTranscriptEntryForCursor(entry) {
   if (!entry) {
     return null;
   }
@@ -14,7 +19,6 @@ function normalizeTranscriptEntryForCursor(entry, index = 0) {
 
   return {
     ...entry,
-    id: typeof entry.id === 'string' && entry.id ? entry.id : `caption-${index}`,
     sourceText
   };
 }
@@ -25,7 +29,7 @@ function normalizeTranscriptEntriesForCursor(entries) {
   }
 
   return entries
-    .map((entry, index) => normalizeTranscriptEntryForCursor(entry, index))
+    .map((entry) => normalizeTranscriptEntryForCursor(entry))
     .filter(Boolean);
 }
 
@@ -36,39 +40,8 @@ function getTranscriptTextFromEntries(entries) {
     .trim();
 }
 
-function getComparableTranscriptText(text) {
-  return normalizeTranscriptPromptText(text)
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function getTranscriptLines(text) {
-  return normalizeTranscriptPromptText(text)
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function getPendingTextFromMatchedEntry(currentSourceText, cursorSourceText) {
-  const currentText = normalizeTranscriptPromptText(currentSourceText);
-  const cursorText = normalizeTranscriptPromptText(cursorSourceText);
-
-  if (!currentText || !cursorText || currentText === cursorText) {
-    return '';
-  }
-
-  if (currentText.startsWith(cursorText)) {
-    return currentText.slice(cursorText.length).trim();
-  }
-
-  const currentComparable = getComparableTranscriptText(currentText);
-  const cursorComparable = getComparableTranscriptText(cursorText);
-  if (currentComparable && cursorComparable && currentComparable.startsWith(cursorComparable)) {
-    return currentText.slice(Math.min(currentText.length, cursorText.length)).trim();
-  }
-
-  return '';
+function getExplicitEntryId(entry) {
+  return typeof entry?.id === 'string' ? entry.id.trim() : '';
 }
 
 function getTranscriptEntryWithSourceText(entry, sourceText) {
@@ -83,93 +56,88 @@ function getTranscriptEntryWithSourceText(entry, sourceText) {
   };
 }
 
-function getPendingTranscriptEntriesFromEntryCursor(currentEntries, cursorEntries) {
-  const normalizedCurrentEntries = normalizeTranscriptEntriesForCursor(currentEntries);
-  const normalizedCursorEntries = normalizeTranscriptEntriesForCursor(cursorEntries);
+function createMatchedCursorResult(pendingText, pendingEntries) {
+  return {
+    status: TRANSCRIPT_CURSOR_MATCHED_STATUS,
+    pendingText: normalizeTranscriptPromptText(pendingText),
+    pendingEntries: normalizeTranscriptEntriesForCursor(pendingEntries)
+  };
+}
 
-  if (normalizedCurrentEntries.length === 0 || normalizedCursorEntries.length === 0) {
+function createCursorMismatchResult() {
+  return {
+    status: TRANSCRIPT_CURSOR_MISMATCH_STATUS,
+    reason: TRANSCRIPT_CURSOR_MISMATCH_REASON,
+    pendingText: '',
+    pendingEntries: []
+  };
+}
+
+function getExactEntryBoundaryResult(currentEntries, cursorEntries) {
+  if (currentEntries.length === 0 || cursorEntries.length === 0) {
     return null;
   }
 
-  for (let cursorIndex = normalizedCursorEntries.length - 1; cursorIndex >= 0; cursorIndex -= 1) {
-    const cursorEntry = normalizedCursorEntries[cursorIndex];
-    const currentIndex = normalizedCurrentEntries.findIndex((entry) => entry.id === cursorEntry.id);
-
-    if (currentIndex === -1) {
-      continue;
-    }
-
-    const currentEntry = normalizedCurrentEntries[currentIndex];
-    const parts = [];
-    const currentEntryRemainder = getPendingTextFromMatchedEntry(
-      currentEntry.sourceText,
-      cursorEntry.sourceText
-    );
-
-    if (currentEntryRemainder) {
-      const remainderEntry = getTranscriptEntryWithSourceText(currentEntry, currentEntryRemainder);
-      if (remainderEntry) {
-        parts.push(remainderEntry);
-      }
-    }
-
-    parts.push(...normalizedCurrentEntries.slice(currentIndex + 1));
-    return parts;
+  const cursorEntry = cursorEntries[cursorEntries.length - 1];
+  const cursorEntryId = getExplicitEntryId(cursorEntry);
+  if (!cursorEntryId) {
+    return null;
   }
 
-  for (let cursorIndex = normalizedCursorEntries.length - 1; cursorIndex >= 0; cursorIndex -= 1) {
-    const cursorEntry = normalizedCursorEntries[cursorIndex];
-    const cursorComparable = getComparableTranscriptText(cursorEntry.sourceText);
-    if (!cursorComparable) {
-      continue;
-    }
+  const currentIndex = currentEntries.findIndex(
+    (entry) => getExplicitEntryId(entry) === cursorEntryId
+  );
+  if (currentIndex === -1) {
+    return null;
+  }
 
-    for (let currentIndex = normalizedCurrentEntries.length - 1; currentIndex >= 0; currentIndex -= 1) {
-      const currentEntry = normalizedCurrentEntries[currentIndex];
-      const currentComparable = getComparableTranscriptText(currentEntry.sourceText);
-      const isSameEntryText = currentEntry.sourceText === cursorEntry.sourceText
-        || currentComparable === cursorComparable
-        || currentComparable.startsWith(cursorComparable);
+  const currentBoundaryEntries = currentEntries.slice(0, currentIndex + 1);
+  if (currentBoundaryEntries.length > cursorEntries.length) {
+    return createCursorMismatchResult();
+  }
 
-      if (!isSameEntryText) {
-        continue;
-      }
+  const cursorBoundaryEntries = cursorEntries.slice(-currentBoundaryEntries.length);
+  for (let index = 0; index < currentBoundaryEntries.length; index += 1) {
+    const currentBoundaryEntry = currentBoundaryEntries[index];
+    const cursorBoundaryEntry = cursorBoundaryEntries[index];
+    const hasSameIdentity = getExplicitEntryId(currentBoundaryEntry)
+      && getExplicitEntryId(currentBoundaryEntry) === getExplicitEntryId(cursorBoundaryEntry);
+    const isLastBoundaryEntry = index === currentBoundaryEntries.length - 1;
+    const hasVerifiedContent = isLastBoundaryEntry
+      ? currentBoundaryEntry.sourceText.startsWith(cursorBoundaryEntry.sourceText)
+      : currentBoundaryEntry.sourceText === cursorBoundaryEntry.sourceText;
 
-      const parts = [];
-      const currentEntryRemainder = getPendingTextFromMatchedEntry(
-        currentEntry.sourceText,
-        cursorEntry.sourceText
-      );
-
-      if (currentEntryRemainder) {
-        const remainderEntry = getTranscriptEntryWithSourceText(currentEntry, currentEntryRemainder);
-        if (remainderEntry) {
-          parts.push(remainderEntry);
-        }
-      }
-
-      parts.push(...normalizedCurrentEntries.slice(currentIndex + 1));
-      return parts;
+    if (!hasSameIdentity || !hasVerifiedContent) {
+      return createCursorMismatchResult();
     }
   }
 
-  return null;
+  const currentEntry = currentEntries[currentIndex];
+
+  const pendingEntries = [];
+  const currentEntryRemainder = normalizeTranscriptPromptText(
+    currentEntry.sourceText.slice(cursorEntry.sourceText.length)
+  );
+  const remainderEntry = getTranscriptEntryWithSourceText(
+    currentEntry,
+    currentEntryRemainder
+  );
+  if (remainderEntry) {
+    pendingEntries.push(remainderEntry);
+  }
+
+  pendingEntries.push(...currentEntries.slice(currentIndex + 1));
+  return createMatchedCursorResult(
+    getTranscriptTextFromEntries(pendingEntries),
+    pendingEntries
+  );
 }
 
-function getPendingTranscriptTextFromEntryCursor(currentEntries, cursorEntries) {
-  const pendingEntries = getPendingTranscriptEntriesFromEntryCursor(currentEntries, cursorEntries);
-  return pendingEntries === null
-    ? null
-    : getTranscriptTextFromEntries(pendingEntries);
-}
+function getLongestExactTranscriptBoundaryOverlap(previousText, currentText) {
+  const maxLength = Math.min(previousText.length, currentText.length);
 
-function getLongestTranscriptBoundaryOverlap(previousText, currentText) {
-  const previous = normalizeTranscriptPromptText(previousText);
-  const current = normalizeTranscriptPromptText(currentText);
-  const maxLength = Math.min(previous.length, current.length);
-
-  for (let length = maxLength; length >= 24; length -= 1) {
-    if (previous.slice(previous.length - length) === current.slice(0, length)) {
+  for (let length = maxLength; length >= MIN_EXACT_TRANSCRIPT_OVERLAP_CHARS; length -= 1) {
+    if (previousText.slice(previousText.length - length) === currentText.slice(0, length)) {
       return length;
     }
   }
@@ -177,79 +145,29 @@ function getLongestTranscriptBoundaryOverlap(previousText, currentText) {
   return 0;
 }
 
-function getPendingTranscriptText(transcriptText, cursorText) {
-  const currentTranscriptText = normalizeTranscriptPromptText(transcriptText);
-  const submittedTranscriptText = normalizeTranscriptPromptText(cursorText);
-
-  if (!currentTranscriptText || !submittedTranscriptText) {
-    return currentTranscriptText;
+function getExactPendingText(currentText, cursorText) {
+  if (!cursorText) {
+    return currentText;
   }
 
-  if (currentTranscriptText === submittedTranscriptText) {
+  if (!currentText) {
+    return null;
+  }
+
+  if (currentText === cursorText) {
     return '';
   }
 
-  if (currentTranscriptText.startsWith(submittedTranscriptText)) {
-    return currentTranscriptText.slice(submittedTranscriptText.length).replace(/^\s*\n?/, '').trim();
+  if (currentText.startsWith(cursorText)) {
+    return normalizeTranscriptPromptText(currentText.slice(cursorText.length));
   }
 
-  const cursorTextIndex = currentTranscriptText.lastIndexOf(submittedTranscriptText);
-  if (cursorTextIndex !== -1) {
-    return currentTranscriptText.slice(cursorTextIndex + submittedTranscriptText.length).trim();
-  }
-
-  const overlapLength = getLongestTranscriptBoundaryOverlap(submittedTranscriptText, currentTranscriptText);
+  const overlapLength = getLongestExactTranscriptBoundaryOverlap(cursorText, currentText);
   if (overlapLength > 0) {
-    return currentTranscriptText.slice(overlapLength).trim();
+    return normalizeTranscriptPromptText(currentText.slice(overlapLength));
   }
 
-  const currentLines = getTranscriptLines(currentTranscriptText);
-  const submittedLines = getTranscriptLines(submittedTranscriptText);
-  for (let submittedLineIndex = submittedLines.length - 1; submittedLineIndex >= 0; submittedLineIndex -= 1) {
-    const submittedLine = submittedLines[submittedLineIndex];
-    const submittedComparable = getComparableTranscriptText(submittedLine);
-    if (!submittedComparable) {
-      continue;
-    }
-
-    for (let currentLineIndex = currentLines.length - 1; currentLineIndex >= 0; currentLineIndex -= 1) {
-      const currentLine = currentLines[currentLineIndex];
-      const currentComparable = getComparableTranscriptText(currentLine);
-      const isSameLine = currentLine === submittedLine
-        || currentComparable === submittedComparable
-        || currentComparable.startsWith(submittedComparable);
-
-      if (!isSameLine) {
-        continue;
-      }
-
-      const lineRemainder = getPendingTextFromMatchedEntry(currentLine, submittedLine);
-      return [
-        lineRemainder,
-        ...currentLines.slice(currentLineIndex + 1)
-      ].filter(Boolean).join('\n').trim();
-    }
-  }
-
-  let firstUnsubmittedLineIndex = 0;
-
-  while (
-    firstUnsubmittedLineIndex < currentLines.length
-    && firstUnsubmittedLineIndex < submittedLines.length
-    && currentLines[firstUnsubmittedLineIndex] === submittedLines[firstUnsubmittedLineIndex]
-  ) {
-    firstUnsubmittedLineIndex += 1;
-  }
-
-  if (firstUnsubmittedLineIndex === 0 && submittedLines.length > 0) {
-    if (currentTranscriptText.length > submittedTranscriptText.length) {
-      return currentTranscriptText.slice(submittedTranscriptText.length).trim();
-    }
-
-    return '';
-  }
-
-  return currentLines.slice(firstUnsubmittedLineIndex).join('\n').trim();
+  return null;
 }
 
 function getPendingFirstEntryText(pendingText, restText) {
@@ -262,45 +180,31 @@ function getPendingFirstEntryText(pendingText, restText) {
     return null;
   }
 
-  return pendingText.slice(0, -restSuffix.length).trim();
+  return normalizeTranscriptPromptText(
+    pendingText.slice(0, -restSuffix.length)
+  );
 }
 
-function getPendingTranscriptEntriesFromText(currentEntries, pendingText) {
-  const normalizedCurrentEntries = normalizeTranscriptEntriesForCursor(currentEntries);
+function getPendingTranscriptEntriesFromExactText(currentEntries, pendingText) {
   const normalizedPendingText = normalizeTranscriptPromptText(pendingText);
-
-  if (!normalizedPendingText) {
+  if (!normalizedPendingText || currentEntries.length === 0) {
     return [];
   }
 
-  if (normalizedCurrentEntries.length === 0) {
-    return [];
-  }
-
-  for (let entryIndex = 0; entryIndex < normalizedCurrentEntries.length; entryIndex += 1) {
-    const entriesFromIndex = normalizedCurrentEntries.slice(entryIndex);
+  for (let entryIndex = 0; entryIndex < currentEntries.length; entryIndex += 1) {
+    const entriesFromIndex = currentEntries.slice(entryIndex);
     if (getTranscriptTextFromEntries(entriesFromIndex) === normalizedPendingText) {
       return entriesFromIndex;
     }
   }
 
-  for (let entryIndex = 0; entryIndex < normalizedCurrentEntries.length; entryIndex += 1) {
-    const currentEntry = normalizedCurrentEntries[entryIndex];
-    const followingEntries = normalizedCurrentEntries.slice(entryIndex + 1);
+  for (let entryIndex = 0; entryIndex < currentEntries.length; entryIndex += 1) {
+    const currentEntry = currentEntries[entryIndex];
+    const followingEntries = currentEntries.slice(entryIndex + 1);
     const followingText = getTranscriptTextFromEntries(followingEntries);
     const firstEntryText = getPendingFirstEntryText(normalizedPendingText, followingText);
 
-    if (!firstEntryText) {
-      continue;
-    }
-
-    const currentText = normalizeTranscriptPromptText(currentEntry.sourceText);
-    const firstEntryComparable = getComparableTranscriptText(firstEntryText);
-    const currentComparable = getComparableTranscriptText(currentText);
-    const isEntryTail = currentText.endsWith(firstEntryText)
-      || (firstEntryComparable && currentComparable.endsWith(firstEntryComparable));
-
-    if (!isEntryTail) {
+    if (!firstEntryText || !currentEntry.sourceText.endsWith(firstEntryText)) {
       continue;
     }
 
@@ -314,64 +218,38 @@ function getPendingTranscriptEntriesFromText(currentEntries, pendingText) {
   return [];
 }
 
-function getPendingTranscriptTextForCursor({
+function resolvePendingTranscriptCursor({
   transcriptText = '',
   transcriptEntries = [],
   cursorText = '',
   cursorEntries = []
 } = {}) {
-  const currentTranscriptText = normalizeTranscriptPromptText(transcriptText);
-  const submittedTranscriptText = normalizeTranscriptPromptText(cursorText);
-
-  if (!currentTranscriptText || !submittedTranscriptText) {
-    return currentTranscriptText;
-  }
-
-  const entryPendingText = getPendingTranscriptTextFromEntryCursor(transcriptEntries, cursorEntries);
-  if (entryPendingText !== null) {
-    return entryPendingText;
-  }
-
-  return getPendingTranscriptText(currentTranscriptText, submittedTranscriptText);
-}
-
-function getPendingTranscriptEntriesForCursor({
-  transcriptText = '',
-  transcriptEntries = [],
-  cursorText = '',
-  cursorEntries = []
-} = {}) {
-  const currentTranscriptText = normalizeTranscriptPromptText(transcriptText);
-  const submittedTranscriptText = normalizeTranscriptPromptText(cursorText);
   const normalizedTranscriptEntries = normalizeTranscriptEntriesForCursor(transcriptEntries);
+  const normalizedCursorEntries = normalizeTranscriptEntriesForCursor(cursorEntries);
+  const currentTranscriptText = normalizeTranscriptPromptText(transcriptText)
+    || getTranscriptTextFromEntries(normalizedTranscriptEntries);
+  const previousCursorText = normalizeTranscriptPromptText(cursorText)
+    || getTranscriptTextFromEntries(normalizedCursorEntries);
 
-  if (!currentTranscriptText) {
-    return [];
-  }
-
-  if (!submittedTranscriptText) {
-    return normalizedTranscriptEntries;
-  }
-
-  const pendingEntries = getPendingTranscriptEntriesFromEntryCursor(
+  const entryBoundaryResult = getExactEntryBoundaryResult(
     normalizedTranscriptEntries,
-    cursorEntries
+    normalizedCursorEntries
   );
-  if (pendingEntries !== null) {
-    return pendingEntries;
+  if (entryBoundaryResult) {
+    return entryBoundaryResult;
   }
 
-  return getPendingTranscriptEntriesFromText(
-    normalizedTranscriptEntries,
-    getPendingTranscriptText(currentTranscriptText, submittedTranscriptText)
+  const pendingText = getExactPendingText(currentTranscriptText, previousCursorText);
+  if (pendingText === null) {
+    return createCursorMismatchResult();
+  }
+
+  return createMatchedCursorResult(
+    pendingText,
+    getPendingTranscriptEntriesFromExactText(normalizedTranscriptEntries, pendingText)
   );
 }
 
 module.exports = {
-  getPendingTranscriptEntriesForCursor,
-  getPendingTranscriptEntriesFromEntryCursor,
-  getPendingTranscriptText,
-  getPendingTranscriptTextForCursor,
-  getPendingTranscriptTextFromEntryCursor,
-  getTranscriptTextFromEntries
+  resolvePendingTranscriptCursor
 };

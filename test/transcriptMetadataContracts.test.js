@@ -23,16 +23,31 @@ function getFunctionSource(source, name) {
   const startIndex = source.indexOf(startMarker);
   assert.notEqual(startIndex, -1, `Expected to find ${name}`);
 
+  const parameterStartIndex = source.indexOf('(', startIndex);
+  let parameterDepth = 0;
+  let bodyStartIndex = -1;
+  for (let index = parameterStartIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '(') {
+      parameterDepth += 1;
+    } else if (char === ')') {
+      parameterDepth -= 1;
+      if (parameterDepth === 0) {
+        bodyStartIndex = source.indexOf('{', index);
+        break;
+      }
+    }
+  }
+  assert.notEqual(bodyStartIndex, -1, `Expected to find the body of ${name}`);
+
   let depth = 0;
-  let sawOpeningBrace = false;
-  for (let index = startIndex; index < source.length; index += 1) {
+  for (let index = bodyStartIndex; index < source.length; index += 1) {
     const char = source[index];
     if (char === '{') {
       depth += 1;
-      sawOpeningBrace = true;
     } else if (char === '}') {
       depth -= 1;
-      if (sawOpeningBrace && depth === 0) {
+      if (depth === 0) {
         return source.slice(startIndex, index + 1);
       }
     }
@@ -45,8 +60,59 @@ test('Ctrl+Enter prompt injection does not stop when there is no pending transcr
   const source = getAsyncFunctionSource('submitTranscriptToAssistant');
 
   assert.doesNotMatch(source, /No new transcript is available for Ctrl\+Enter/);
-  assert.match(source, /getPendingTranscriptEntriesForCursor/);
-  assert.match(source, /getTranscriptPromptText\(\s*pendingTranscriptText,\s*pendingTranscriptEntries/);
+  assert.match(source, /resolvePendingTranscriptCursor/);
+  assert.match(source, /getTranscriptPromptText\(\s*cursorResult\.pendingText,\s*cursorResult\.pendingEntries/);
+});
+
+test('Ctrl+Enter resolves the cursor once and surfaces mismatch before composer mutation', () => {
+  const source = getAsyncFunctionSource('submitTranscriptToAssistant');
+  const resolverCalls = source.match(/resolvePendingTranscriptCursor\(/g) || [];
+
+  assert.equal(resolverCalls.length, 1);
+  assert.match(source, /if \(cursorResult\.status === 'mismatch'\) \{\s*sendCaptionError\(TRANSCRIPT_CURSOR_MISMATCH_ERROR\);\s*return;/);
+  assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('getActiveTabWebContents()'));
+  assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('markTranscriptSubmitted('));
+});
+
+test('Alt+Enter resolves the cursor once and surfaces mismatch before clipboard mutation', () => {
+  const source = getAsyncFunctionSource('copyTranscriptPromptToClipboard');
+  const resolverCalls = source.match(/resolvePendingTranscriptCursor\(/g) || [];
+
+  assert.equal(resolverCalls.length, 1);
+  assert.match(source, /if \(cursorResult\.status === 'mismatch'\) \{\s*sendCaptionError\(TRANSCRIPT_CURSOR_MISMATCH_ERROR\);\s*return;/);
+  assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('clipboard.writeText('));
+  assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('markTranscriptCopiedToClipboard('));
+});
+
+test('cursor mismatch message tells the user to retry or clear to reset', () => {
+  const source = readRepoFile('main.js');
+
+  assert.match(source, /const TRANSCRIPT_CURSOR_MISMATCH_ERROR = '[^']*[Rr]etry[^']*[Cc]lear[^']*reset[^']*';/);
+});
+
+test('clear transcript resets submitted and clipboard cursors before clearing Deepgram', () => {
+  const source = readRepoFile('main.js');
+  const resetSource = getFunctionSource(source, 'resetTranscriptStateForSource');
+  const clearHandlerStart = source.indexOf("ipcMain.handle('clear-transcript'");
+  const nextHandlerStart = source.indexOf('\nipcMain.handle(', clearHandlerStart + 1);
+  const clearHandlerSource = source.slice(clearHandlerStart, nextHandlerStart);
+
+  assert.match(resetSource, /resetTranscriptCursors\(\)/);
+  assert.match(clearHandlerSource, /resetTranscriptStateForSource\(\)/);
+  assert.ok(clearHandlerSource.indexOf('resetTranscriptStateForSource()') < clearHandlerSource.indexOf('deepgramTranscriptionService.clear()'));
+});
+
+test('source switching with transcript reset rotates the stopped Deepgram session', () => {
+  const source = readRepoFile('main.js');
+  const sourceChange = getFunctionSource(source, 'applyTranscriptSourceChange');
+  const stopIndex = sourceChange.indexOf("stopDeepgramTranscriptSource('source-switched')");
+  const clearIndex = sourceChange.indexOf('deepgramTranscriptionService.clear()');
+  const resetIndex = sourceChange.indexOf('resetTranscriptStateForSource()');
+
+  assert.match(sourceChange, /if \(\s*resetTranscript\s*&& deepgramTranscriptionService\s*&& \(\s*transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\|\| normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\)\s*\) \{\s*deepgramTranscriptionService\.clear\(\);\s*\}/);
+  assert.ok(stopIndex >= 0);
+  assert.ok(clearIndex > stopIndex);
+  assert.ok(resetIndex > clearIndex);
 });
 
 test('Ctrl+Enter marks submitted transcript text and entries from the same snapshot', () => {

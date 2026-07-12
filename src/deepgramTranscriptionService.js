@@ -1,4 +1,5 @@
 const EventEmitter = require('events');
+const { randomUUID } = require('crypto');
 
 const { TRANSCRIPT_SPEAKER_TAG } = require('./transcriptPrompt');
 
@@ -48,6 +49,20 @@ function resolveWebSocketImpl(injectedWebSocketImpl) {
   return require('ws');
 }
 
+function createRoleCounterMap() {
+  return new Map([
+    [DEEPGRAM_ROLE_THEM, 0],
+    [DEEPGRAM_ROLE_ME, 0]
+  ]);
+}
+
+function takeNextRoleCounter(counterMap, role) {
+  const normalizedRole = normalizeDeepgramRole(role);
+  const nextCounter = counterMap.get(normalizedRole) || 0;
+  counterMap.set(normalizedRole, nextCounter + 1);
+  return nextCounter;
+}
+
 class DeepgramTranscriptionService extends EventEmitter {
   constructor({
     WebSocketImpl = null,
@@ -57,12 +72,13 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.injectedWebSocketImpl = WebSocketImpl;
     this.listenUrl = listenUrl;
     this.sockets = new Map();
+    this.sessionId = randomUUID();
     this.entries = [];
     this.partialEntries = new Map();
     this.partialEntryIds = new Map();
     this.partialEntryOrders = new Map();
-    this.entryCounter = 0;
-    this.partialEntryCounter = 0;
+    this.entryCounters = createRoleCounterMap();
+    this.partialEntryCounters = createRoleCounterMap();
     this.entryOrderCounter = 0;
     this.payloadVersion = 0;
     this.active = false;
@@ -79,14 +95,6 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.stop();
     this.active = true;
     this.apiKey = normalizedApiKey;
-    this.entries = [];
-    this.partialEntries.clear();
-    this.partialEntryIds.clear();
-    this.partialEntryOrders.clear();
-    this.entryCounter = 0;
-    this.partialEntryCounter = 0;
-    this.entryOrderCounter = 0;
-    this.pendingAudioChunks.clear();
     this.payloadVersion += 1;
 
     this.createRoleSocket(DEEPGRAM_ROLE_THEM);
@@ -95,7 +103,16 @@ class DeepgramTranscriptionService extends EventEmitter {
   }
 
   stop() {
-    for (const socket of this.sockets.values()) {
+    const sockets = [...this.sockets.values()];
+    this.sockets.clear();
+    this.active = false;
+    this.apiKey = '';
+    this.partialEntries.clear();
+    this.partialEntryIds.clear();
+    this.partialEntryOrders.clear();
+    this.pendingAudioChunks.clear();
+
+    for (const socket of sockets) {
       try {
         if (typeof socket.send === 'function') {
           socket.send(DEEPGRAM_CLOSE_MESSAGE);
@@ -112,24 +129,30 @@ class DeepgramTranscriptionService extends EventEmitter {
         // Ignore close errors during shutdown.
       }
     }
-
-    this.sockets.clear();
-    this.active = false;
-    this.apiKey = '';
-    this.partialEntries.clear();
-    this.partialEntryIds.clear();
-    this.partialEntryOrders.clear();
-    this.pendingAudioChunks.clear();
   }
 
   clear() {
+    const shouldResume = this.active;
+    const resumeApiKey = this.apiKey;
+
+    this.stop();
+    this.sessionId = randomUUID();
     this.entries = [];
     this.partialEntries.clear();
     this.partialEntryIds.clear();
     this.partialEntryOrders.clear();
-    this.entryCounter = 0;
-    this.partialEntryCounter = 0;
+    this.entryCounters = createRoleCounterMap();
+    this.partialEntryCounters = createRoleCounterMap();
     this.entryOrderCounter = 0;
+    this.pendingAudioChunks.clear();
+
+    if (shouldResume) {
+      this.active = true;
+      this.apiKey = resumeApiKey;
+      this.createRoleSocket(DEEPGRAM_ROLE_THEM);
+      this.createRoleSocket(DEEPGRAM_ROLE_ME);
+    }
+
     this.payloadVersion += 1;
     this.emitSnapshot();
   }
@@ -141,9 +164,25 @@ class DeepgramTranscriptionService extends EventEmitter {
       return existingId;
     }
 
-    const nextId = `deepgram-${normalizedRole.toLowerCase()}-partial-${this.partialEntryCounter++}`;
+    const nextId = [
+      'deepgram',
+      this.sessionId,
+      normalizedRole.toLowerCase(),
+      'partial',
+      takeNextRoleCounter(this.partialEntryCounters, normalizedRole)
+    ].join('-');
     this.partialEntryIds.set(normalizedRole, nextId);
     return nextId;
+  }
+
+  getFinalEntryId(role) {
+    const normalizedRole = normalizeDeepgramRole(role);
+    return [
+      'deepgram',
+      this.sessionId,
+      normalizedRole.toLowerCase(),
+      takeNextRoleCounter(this.entryCounters, normalizedRole)
+    ].join('-');
   }
 
   getPartialEntryOrder(role) {
@@ -160,6 +199,7 @@ class DeepgramTranscriptionService extends EventEmitter {
 
   createRoleSocket(role) {
     const normalizedRole = normalizeDeepgramRole(role);
+    const socketSessionId = this.sessionId;
     const WebSocketImpl = resolveWebSocketImpl(this.injectedWebSocketImpl);
     this.pendingAudioChunks.set(normalizedRole, []);
     const socket = new WebSocketImpl(this.listenUrl, {
@@ -171,22 +211,38 @@ class DeepgramTranscriptionService extends EventEmitter {
     });
 
     socket.on('open', () => {
+      if (!this.isCurrentSocket(normalizedRole, socket, socketSessionId)) {
+        return;
+      }
       this.flushPendingAudioChunks(normalizedRole, socket);
     });
     socket.on('message', (message) => {
+      if (!this.isCurrentSocket(normalizedRole, socket, socketSessionId)) {
+        return;
+      }
       this.handleSocketMessage(normalizedRole, message);
     });
     socket.on('error', (error) => {
+      if (!this.isCurrentSocket(normalizedRole, socket, socketSessionId)) {
+        return;
+      }
       this.emit('error', error);
     });
     socket.on('close', () => {
-      if (this.sockets.get(normalizedRole) === socket) {
+      if (this.isCurrentSocket(normalizedRole, socket, socketSessionId)) {
         this.sockets.delete(normalizedRole);
       }
     });
 
     this.sockets.set(normalizedRole, socket);
     return socket;
+  }
+
+  isCurrentSocket(role, socket, sessionId) {
+    const normalizedRole = normalizeDeepgramRole(role);
+    return this.active
+      && sessionId === this.sessionId
+      && this.sockets.get(normalizedRole) === socket;
   }
 
   sendAudioChunk(role, chunk) {
@@ -271,7 +327,7 @@ class DeepgramTranscriptionService extends EventEmitter {
       : this.getPartialEntryOrder(normalizedRole);
     const entry = {
       id: isFinal
-        ? `deepgram-${normalizedRole.toLowerCase()}-${this.entryCounter++}`
+        ? this.getFinalEntryId(normalizedRole)
         : this.getPartialEntryId(normalizedRole),
       sourceText,
       translatedText: '',

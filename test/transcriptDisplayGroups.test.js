@@ -154,7 +154,7 @@ test('display groups start a new block when speaker changes', () => {
   assert.equal(groups[1].speakerTag, 'Me');
 });
 
-test('display groups keep a speaker turn together until another speaker starts', () => {
+test('display groups cap same-speaker blocks by entry count', () => {
   const groups = createTranscriptDisplayGroups([
     {
       id: 'caption-1',
@@ -181,11 +181,41 @@ test('display groups keep a speaker turn together until another speaker starts',
       speakerTag: 'Me'
     }
   ], {
-    maxEntries: 1,
-    maxSourceChars: 8
+    maxEntries: 2,
+    maxSourceChars: 200
   });
 
-  assert.equal(groups.length, 1);
-  assert.equal(groups[0].sourceText, 'First part.\nSecond part.\nThird part.');
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].sourceText, 'First part.\nSecond part.');
   assert.equal(groups[0].speakerTag, 'Me');
+  assert.equal(groups[1].sourceText, 'Third part.');
+  assert.equal(groups[1].speakerTag, 'Me');
+});
+
+test('display groups cap same-speaker blocks by source character count', () => {
+  const groups = createTranscriptDisplayGroups([
+    {
+      id: 'caption-1',
+      sourceText: '12345',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      speakerTag: 'Them'
+    },
+    {
+      id: 'caption-2',
+      sourceText: '67890',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      speakerTag: 'Them'
+    }
+  ], {
+    maxEntries: 5,
+    maxSourceChars: 10
+  });
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].sourceText, '12345');
+  assert.equal(groups[1].sourceText, '67890');
 });
