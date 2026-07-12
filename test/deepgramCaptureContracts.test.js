@@ -17,10 +17,21 @@ test('main process grants display capture with Windows loopback audio for Deepgr
 });
 
 test('renderer starts available Deepgram audio streams instead of aborting when system audio is unavailable', () => {
+  const controller = readRepoFile('src/deepgramCaptureController.js');
+
+  assert.doesNotMatch(controller, /if\s*\(\s*!systemAudioStream\s*\|\|\s*!microphoneAudioStream\s*\)/);
+  assert.match(controller, /if\s*\(\s*!microphoneAudioStream\s*\)/);
+  assert.match(controller, /if\s*\(\s*systemAudioStream\s*\)\s*\{\s*this\.createRecorder\(DEEPGRAM_ROLE_THEM/);
+  assert.match(controller, /this\.createRecorder\(DEEPGRAM_ROLE_ME/);
+});
+
+test('renderer delegates acquired media ownership to the tested Deepgram capture controller', () => {
+  const html = readRepoFile('index.html');
   const renderer = readRepoFile('renderer.js');
 
-  assert.doesNotMatch(renderer, /if\s*\(\s*!systemAudioStream\s*\|\|\s*!microphoneAudioStream\s*\)/);
-  assert.match(renderer, /if\s*\(\s*!microphoneAudioStream\s*\)/);
-  assert.match(renderer, /if\s*\(\s*systemAudioStream\s*\)\s*\{\s*recorders\.push\(\s*createDeepgramRecorder\(DEEPGRAM_ROLE_THEM/);
-  assert.match(renderer, /recorders\.push\(\s*createDeepgramRecorder\(DEEPGRAM_ROLE_ME/);
+  assert.match(html, /<script src="src\/deepgramCaptureController\.js"><\/script>[\s\S]*<script src="renderer\.js"><\/script>/);
+  assert.match(renderer, /new window\.deepgramCaptureController\.DeepgramCaptureController/);
+  assert.match(renderer, /deepgramCaptureController\.start\(\)/);
+  assert.match(renderer, /deepgramCaptureController\.stop\(\)/);
+  assert.doesNotMatch(renderer, /let deepgramCaptureResources/);
 });

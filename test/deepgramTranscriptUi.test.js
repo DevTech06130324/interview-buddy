@@ -46,15 +46,16 @@ test('transcript renderer applies role classes for left Them and right Me blocks
 
 test('renderer starts and stops Deepgram capture from main-process source state', () => {
   const renderer = readRepoFile('renderer.js');
+  const captureController = readRepoFile('src/deepgramCaptureController.js');
   const preload = readRepoFile('preload.js');
   const main = readRepoFile('main.js');
 
   assert.match(preload, /sendDeepgramAudioChunk:\s*\(payload\)\s*=>\s*ipcRenderer\.send\('deepgram-audio-chunk', payload\)/);
   assert.match(preload, /onDeepgramCaptureState:\s*\(callback\)\s*=>\s*subscribe\('deepgram-capture-state', callback\)/);
   assert.match(renderer, /function startDeepgramCapture/);
-  assert.match(renderer, /navigator\.mediaDevices\.getDisplayMedia/);
-  assert.match(renderer, /navigator\.mediaDevices\.getUserMedia/);
-  assert.match(renderer, /new MediaRecorder/);
+  assert.match(captureController, /mediaDevices\.getDisplayMedia/);
+  assert.match(captureController, /mediaDevices\.getUserMedia/);
+  assert.match(captureController, /new this\.MediaRecorderImpl/);
   assert.match(renderer, /sendDeepgramAudioChunk/);
   assert.match(renderer, /function stopDeepgramCapture/);
   assert.match(renderer, /function applyDeepgramCaptureState/);
@@ -102,6 +103,27 @@ test('Deepgram transcription starts and stops only through explicit controls', (
   assert.doesNotMatch(syncCapture, /startDeepgramCapture\(/);
   assert.doesNotMatch(startActiveSource, /startDeepgramTranscriptSource\(\)/);
   assert.doesNotMatch(setKeyPreference, /startDeepgramTranscriptSource\(\)/);
+});
+
+test('main and renderer use acknowledged capture commands around the tested lifecycle coordinator', () => {
+  const renderer = readRepoFile('renderer.js');
+  const preload = readRepoFile('preload.js');
+  const main = readRepoFile('main.js');
+
+  assert.match(main, /DeepgramLifecycleCoordinator/);
+  assert.match(main, /DeepgramRendererCommandBroker/);
+  assert.match(main, /render-process-gone/);
+  assert.match(main, /deepgramRendererCommandBroker\?\.cancelAll\(\)/);
+  assert.match(main, /ipcMain\.handle\('deepgram-capture-command-ack'/);
+  assert.match(main, /await getDeepgramLifecycleCoordinator\(\)\.start/);
+  assert.match(main, /await getDeepgramLifecycleCoordinator\(\)\.stop/);
+  assert.match(main, /await deepgramLifecycleCoordinator\.clear\(\)/);
+  assert.match(preload, /acknowledgeDeepgramCaptureCommand:\s*\(payload\)\s*=>\s*ipcRenderer\.invoke\('deepgram-capture-command-ack', payload\)/);
+  assert.match(preload, /onDeepgramCaptureCommand:\s*\(callback\)\s*=>\s*subscribe\('deepgram-capture-command', callback\)/);
+  assert.match(renderer, /onDeepgramCaptureCommand\(async \(command\)\s*=>/);
+  assert.match(renderer, /await startDeepgramCapture\(\)/);
+  assert.match(renderer, /await stopDeepgramCapture\(\)/);
+  assert.match(renderer, /acknowledgeDeepgramCaptureCommand/);
 });
 
 test('Deepgram mode exposes only remaining account balance status', () => {

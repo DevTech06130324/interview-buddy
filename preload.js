@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearDeepgramApiKey: () => ipcRenderer.invoke('clear-deepgram-api-key'),
   startDeepgramTranscription: () => ipcRenderer.invoke('start-deepgram-transcription'),
   stopDeepgramTranscription: () => ipcRenderer.invoke('stop-deepgram-transcription'),
+  acknowledgeDeepgramCaptureCommand: (payload) => ipcRenderer.invoke('deepgram-capture-command-ack', payload),
   refreshDeepgramUsage: () => ipcRenderer.invoke('refresh-deepgram-usage'),
   sendDeepgramAudioChunk: (payload) => ipcRenderer.send('deepgram-audio-chunk', payload),
   addPromptMode: () => ipcRenderer.invoke('add-prompt-mode'),
@@ -65,5 +66,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   onCaptionUpdate: (callback) => subscribe('caption-update', callback),
   onCaptionError: (callback) => subscribe('caption-error', callback),
+  onDeepgramCaptureCommand: (callback) => subscribe('deepgram-capture-command', callback),
   onDeepgramCaptureState: (callback) => subscribe('deepgram-capture-state', callback)
 });

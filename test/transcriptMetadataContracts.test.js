@@ -109,7 +109,7 @@ test('source switching with transcript reset rotates the stopped Deepgram sessio
   const clearIndex = sourceChange.indexOf('deepgramTranscriptionService.clear()');
   const resetIndex = sourceChange.indexOf('resetTranscriptStateForSource()');
 
-  assert.match(sourceChange, /if \(\s*resetTranscript\s*&& deepgramTranscriptionService\s*&& \(\s*transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\|\| normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\)\s*\) \{\s*deepgramTranscriptionService\.clear\(\);\s*\}/);
+  assert.match(sourceChange, /if \(\s*resetTranscript\s*&& deepgramTranscriptionService\s*&& \(\s*transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\|\| normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\)\s*\) \{\s*(?:await\s+)?deepgramTranscriptionService\.clear\(\);\s*\}/);
   assert.ok(stopIndex >= 0);
   assert.ok(clearIndex > stopIndex);
   assert.ok(resetIndex > clearIndex);

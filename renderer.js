@@ -94,15 +94,9 @@ const {
 } = window.transcriptPrompt;
 const TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram';
 const TRANSCRIPT_SOURCE_LIVE_CAPTIONS = 'live-captions';
-const DEEPGRAM_ROLE_THEM = TRANSCRIPT_SPEAKER_TAG;
-const DEEPGRAM_ROLE_ME = 'Me';
-const DEEPGRAM_AUDIO_TIMESLICE_MS = 500;
 const createTranscriptDisplayGroups = typeof window.transcriptDisplayGroups?.createTranscriptDisplayGroups === 'function'
   ? window.transcriptDisplayGroups.createTranscriptDisplayGroups
   : (entries) => entries;
-let deepgramCaptureResources = null;
-let deepgramCaptureStartPromise = null;
-let deepgramCaptureGeneration = 0;
 
 function formatUrl(input) {
   if (!input || input.trim() === '') {
@@ -550,20 +544,6 @@ function setTranslationEnabled(isEnabled) {
   updateTranslationToggleButtonState();
 }
 
-function stopMediaStreamTracks(stream) {
-  if (!stream || typeof stream.getTracks !== 'function') {
-    return;
-  }
-
-  for (const track of stream.getTracks()) {
-    try {
-      track.stop();
-    } catch (error) {
-      console.error('[ERROR] Failed to stop media track:', error);
-    }
-  }
-}
-
 function getDeepgramRecorderMimeType() {
   if (typeof MediaRecorder !== 'function' || typeof MediaRecorder.isTypeSupported !== 'function') {
     return '';
@@ -576,151 +556,31 @@ function getDeepgramRecorderMimeType() {
   ].find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || '';
 }
 
-function createAudioOnlyStream(sourceStream) {
-  const audioTracks = typeof sourceStream?.getAudioTracks === 'function'
-    ? sourceStream.getAudioTracks()
-    : [];
-
-  if (audioTracks.length === 0) {
-    return null;
+const deepgramCaptureController = new window.deepgramCaptureController.DeepgramCaptureController({
+  mediaDevices: navigator.mediaDevices,
+  MediaRecorderImpl: typeof MediaRecorder === 'function' ? MediaRecorder : null,
+  MediaStreamImpl: typeof MediaStream === 'function' ? MediaStream : null,
+  recorderMimeType: getDeepgramRecorderMimeType(),
+  sendAudioChunk: async (role, chunk) => {
+    window.electronAPI?.sendDeepgramAudioChunk?.({ role, chunk });
+  },
+  onFailure: async (error) => {
+    console.error('[ERROR] Deepgram capture failed:', error);
+    await window.electronAPI?.stopDeepgramTranscription?.();
   }
+});
 
-  return new MediaStream(audioTracks);
-}
-
-async function sendDeepgramRecorderBlob(role, blob) {
-  if (!blob || blob.size <= 0 || !window.electronAPI?.sendDeepgramAudioChunk) {
-    return;
-  }
-
-  const chunk = await blob.arrayBuffer();
-  window.electronAPI.sendDeepgramAudioChunk({
-    role,
-    chunk
-  });
-}
-
-function createDeepgramRecorder(role, stream) {
-  const mimeType = getDeepgramRecorderMimeType();
-  const recorder = mimeType
-    ? new MediaRecorder(stream, { mimeType })
-    : new MediaRecorder(stream);
-
-  recorder.addEventListener('dataavailable', (event) => {
-    void sendDeepgramRecorderBlob(role, event.data);
-  });
-  recorder.addEventListener('error', (event) => {
-    console.error('[ERROR] Deepgram recorder error:', event?.error || event);
-  });
-  recorder.start(DEEPGRAM_AUDIO_TIMESLICE_MS);
-  return recorder;
-}
-
-function stopDeepgramCapture() {
-  deepgramCaptureGeneration += 1;
-  const resources = deepgramCaptureResources;
-  deepgramCaptureResources = null;
-
-  if (!resources) {
-    return;
-  }
-
-  for (const recorder of resources.recorders || []) {
-    try {
-      if (recorder && recorder.state !== 'inactive') {
-        recorder.stop();
-      }
-    } catch (error) {
-      console.error('[ERROR] Failed to stop Deepgram recorder:', error);
-    }
-  }
-
-  for (const stream of resources.streams || []) {
-    stopMediaStreamTracks(stream);
-  }
+async function stopDeepgramCapture() {
+  return deepgramCaptureController.stop();
 }
 
 async function startDeepgramCapture() {
-  if (deepgramCaptureResources) {
-    return true;
-  }
-
-  if (deepgramCaptureStartPromise) {
-    return deepgramCaptureStartPromise;
-  }
-
-  const captureGeneration = deepgramCaptureGeneration;
-  deepgramCaptureStartPromise = (async () => {
-    if (!navigator.mediaDevices?.getDisplayMedia || !navigator.mediaDevices?.getUserMedia) {
-      throw new Error('Media capture is not available in this browser context.');
-    }
-
-    const displayStream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: true
-    });
-    const micStream = await navigator.mediaDevices.getUserMedia({
-      audio: true
-    });
-    const systemAudioStream = createAudioOnlyStream(displayStream);
-    const microphoneAudioStream = createAudioOnlyStream(micStream);
-
-    if (!microphoneAudioStream) {
-      stopMediaStreamTracks(displayStream);
-      stopMediaStreamTracks(micStream);
-      throw new Error('Deepgram capture requires microphone access.');
-    }
-
-    if (captureGeneration !== deepgramCaptureGeneration) {
-      stopMediaStreamTracks(displayStream);
-      stopMediaStreamTracks(micStream);
-      return false;
-    }
-
-    const recorders = [];
-    const streams = [micStream, microphoneAudioStream];
-
-    if (systemAudioStream) {
-      recorders.push(createDeepgramRecorder(DEEPGRAM_ROLE_THEM, systemAudioStream));
-      streams.push(displayStream, systemAudioStream);
-    } else {
-      console.warn('[WARNING] System audio is not available for Deepgram capture; microphone capture will continue.');
-      stopMediaStreamTracks(displayStream);
-    }
-
-    recorders.push(createDeepgramRecorder(DEEPGRAM_ROLE_ME, microphoneAudioStream));
-
-    const stopOnTrackEnd = () => {
-      if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
-        stopDeepgramCapture();
-        void window.electronAPI?.stopDeepgramTranscription?.();
-      }
-    };
-
-    if (systemAudioStream) {
-      for (const track of displayStream.getTracks()) {
-        track.addEventListener('ended', stopOnTrackEnd, { once: true });
-      }
-    }
-
-    for (const track of micStream.getTracks()) {
-      track.addEventListener('ended', stopOnTrackEnd, { once: true });
-    }
-
-    deepgramCaptureResources = {
-      recorders,
-      streams
-    };
-    return true;
-  })().catch((error) => {
+  try {
+    return await deepgramCaptureController.start();
+  } catch (error) {
     console.error('[ERROR] Failed to start Deepgram capture:', error);
-    stopDeepgramCapture();
     return false;
-  }).finally(() => {
-    deepgramCaptureStartPromise = null;
-  });
-
-  return deepgramCaptureStartPromise;
+  }
 }
 
 function updateDeepgramUsageStatus(usage = {}) {
@@ -758,13 +618,6 @@ function applyDeepgramCaptureState(state = {}) {
   deepgramCaptureActive = Boolean(state?.active);
   updateDeepgramUsageStatus(state);
   updateTranscriptSourceControlButton();
-
-  if (deepgramCaptureActive) {
-    void startDeepgramCapture();
-    return;
-  }
-
-  stopDeepgramCapture();
 }
 
 function refreshDeepgramUsageStatus() {
@@ -2286,6 +2139,31 @@ window.electronAPI.onAppPreferencesUpdated((preferences) => {
   applyAppPreferences(preferences);
 });
 
+window.electronAPI.onDeepgramCaptureCommand(async (command) => {
+  const action = command?.action;
+  let success = false;
+  try {
+    if (action === 'start') {
+      success = await startDeepgramCapture();
+    } else if (action === 'stop') {
+      await stopDeepgramCapture();
+      success = true;
+    }
+  } catch (error) {
+    console.error(`[ERROR] Deepgram renderer ${String(action || 'unknown')} command failed:`, error);
+  }
+
+  try {
+    await window.electronAPI.acknowledgeDeepgramCaptureCommand({
+      requestId: command?.requestId,
+      action,
+      success
+    });
+  } catch (error) {
+    console.error('[ERROR] Failed to acknowledge Deepgram capture command:', error);
+  }
+});
+
 window.electronAPI.onDeepgramCaptureState((state) => {
   applyDeepgramCaptureState(state);
 });
@@ -2311,7 +2189,7 @@ window.addEventListener('resize', () => {
   applyPanelSplitRatio(currentPanelSplitRatio);
 });
 window.addEventListener('beforeunload', () => {
-  stopDeepgramCapture();
+  void stopDeepgramCapture();
 });
 
 refreshLiveCaptionsToggleButton().then((updated) => {

@@ -35,6 +35,16 @@ const {
   normalizeDeepgramApiKey
 } = require('./src/deepgramTranscriptionService');
 const {
+  DeepgramLifecycleCoordinator
+} = require('./src/deepgramLifecycleCoordinator');
+const {
+  DeepgramRendererCommandBroker
+} = require('./src/deepgramRendererCommandBroker');
+const {
+  decodeDeepgramApiKeyStorage,
+  encodeDeepgramApiKeyForStorage
+} = require('./src/deepgramApiKeyStorage');
+const {
   DEFAULT_ASSISTANT_URLS,
   ASSISTANT_COMPOSER_SELECTORS,
   ASSISTANT_SEND_BUTTON_SELECTORS,
@@ -314,6 +324,8 @@ let transcriptSource = DEFAULT_TRANSCRIPT_SOURCE;
 let deepgramApiKey = '';
 let deepgramApiKeyStorage = null;
 let deepgramTranscriptionService = null;
+let deepgramLifecycleCoordinator = null;
+let deepgramRendererCommandBroker = null;
 let deepgramTranscriptionActive = false;
 let deepgramUsageLastFetchedAtMs = 0;
 let deepgramUsageRefreshPromise = null;
@@ -636,53 +648,9 @@ function getCurrentWindowBoundsSnapshot() {
   };
 }
 
-function canEncryptDeepgramApiKey() {
-  try {
-    return Boolean(safeStorage && safeStorage.isEncryptionAvailable());
-  } catch (_) {
-    return false;
-  }
-}
-
-function encodeDeepgramApiKeyForStorage(apiKey) {
-  const normalizedApiKey = normalizeDeepgramApiKey(apiKey);
-  if (!normalizedApiKey) {
-    return null;
-  }
-
-  if (canEncryptDeepgramApiKey()) {
-    return {
-      encrypted: true,
-      value: safeStorage.encryptString(normalizedApiKey).toString('base64')
-    };
-  }
-
-  return {
-    encrypted: false,
-    value: normalizedApiKey
-  };
-}
-
-function decodeDeepgramApiKeyFromStorage(storage) {
-  if (!storage || typeof storage !== 'object' || typeof storage.value !== 'string') {
-    return '';
-  }
-
-  try {
-    if (storage.encrypted) {
-      return safeStorage.decryptString(Buffer.from(storage.value, 'base64'));
-    }
-
-    return storage.value;
-  } catch (error) {
-    console.error('[WARNING] Failed to decode stored Deepgram API key:', error);
-    return '';
-  }
-}
-
 function setDeepgramApiKeyInMemory(apiKey) {
   deepgramApiKey = normalizeDeepgramApiKey(apiKey);
-  deepgramApiKeyStorage = encodeDeepgramApiKeyForStorage(deepgramApiKey);
+  deepgramApiKeyStorage = encodeDeepgramApiKeyForStorage(deepgramApiKey, safeStorage);
 }
 
 function clearDeepgramApiKeyInMemory() {
@@ -862,7 +830,14 @@ function getAppPreferenceStateSnapshot() {
   return getRendererAppPreferenceStateSnapshot();
 }
 
+function refreshDeepgramApiKeyStorage() {
+  if (deepgramApiKey && !deepgramApiKeyStorage) {
+    deepgramApiKeyStorage = encodeDeepgramApiKeyForStorage(deepgramApiKey, safeStorage);
+  }
+}
+
 function getPersistedAppPreferenceStateSnapshot() {
+  refreshDeepgramApiKeyStorage();
   return {
     ...getRendererAppPreferenceStateSnapshot(),
     deepgramApiKeyStorage
@@ -906,6 +881,7 @@ function flushAppPreferencesPersist() {
 }
 
 function loadAppPreferences() {
+  let shouldRewriteDeepgramStorage = false;
   try {
     const rawData = fs.readFileSync(getAppPreferencesStorePath(), 'utf8');
     const parsed = JSON.parse(rawData);
@@ -922,8 +898,16 @@ function loadAppPreferences() {
     translationEnabled = normalizeBoolean(parsed?.translationEnabled, DEFAULT_TRANSLATION_ENABLED);
     liveCaptionsWindowVisible = normalizeBoolean(parsed?.liveCaptionsWindowVisible, true);
     transcriptSource = normalizeTranscriptSource(parsed?.transcriptSource);
-    deepgramApiKeyStorage = parsed?.deepgramApiKeyStorage || null;
-    deepgramApiKey = normalizeDeepgramApiKey(decodeDeepgramApiKeyFromStorage(deepgramApiKeyStorage));
+    const storedDeepgramKey = parsed?.deepgramApiKeyStorage || (
+      typeof parsed?.deepgramApiKey === 'string'
+        ? { encrypted: false, value: parsed.deepgramApiKey }
+        : null
+    );
+    const deepgramKeyLoadResult = decodeDeepgramApiKeyStorage(storedDeepgramKey, safeStorage);
+    deepgramApiKeyStorage = deepgramKeyLoadResult.storage;
+    deepgramApiKey = normalizeDeepgramApiKey(deepgramKeyLoadResult.apiKey);
+    shouldRewriteDeepgramStorage = deepgramKeyLoadResult.needsRewrite
+      || Object.prototype.hasOwnProperty.call(parsed, 'deepgramApiKey');
     if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && !deepgramApiKey) {
       transcriptSource = TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
     }
@@ -945,6 +929,9 @@ function loadAppPreferences() {
   }
 
   translationManager.setTranslationEnabled(translationEnabled);
+  if (shouldRewriteDeepgramStorage) {
+    persistAppPreferencesSync();
+  }
 }
 
 function broadcastAppPreferences() {
@@ -1708,6 +1695,7 @@ function closeCaptureOverlayWindow() {
 }
 
 function cleanupMainWindowResources() {
+  deepgramRendererCommandBroker?.cancelAll();
   closeModeMenuWindow();
   closeCaptureOverlayWindow();
   clearRuntimeTimersForMainWindowClose();
@@ -1715,6 +1703,12 @@ function cleanupMainWindowResources() {
 }
 
 function bindMainWindowLifecycle(targetWindow) {
+  targetWindow.webContents.on('render-process-gone', () => {
+    deepgramRendererCommandBroker?.cancelAll();
+  });
+  targetWindow.webContents.once('destroyed', () => {
+    deepgramRendererCommandBroker?.cancelAll();
+  });
   targetWindow.once('ready-to-show', () => {
     if (targetWindow.isDestroyed() || mainWindow !== targetWindow) {
       return;
@@ -3027,21 +3021,54 @@ function setDeepgramTranscriptionState(isActive) {
 }
 
 function getDeepgramCaptureStateSnapshot(reason = '') {
+  const lifecycleState = deepgramLifecycleCoordinator?.getState?.() || {
+    active: deepgramTranscriptionActive,
+    phase: deepgramTranscriptionActive ? 'active' : 'inactive',
+    reason: '',
+    error: ''
+  };
   return {
     ...getDeepgramUsageSnapshot(),
-    reason: typeof reason === 'string' ? reason : ''
+    ...lifecycleState,
+    reason: typeof reason === 'string' && reason ? reason : lifecycleState.reason
   };
 }
 
-function broadcastDeepgramCaptureState(isActive, reason = '') {
+function broadcastDeepgramCaptureState(isActive, reason = '', lifecycleState = {}) {
   setDeepgramTranscriptionState(isActive);
-  const snapshot = getDeepgramCaptureStateSnapshot(reason);
+  const snapshot = {
+    ...getDeepgramCaptureStateSnapshot(reason),
+    ...lifecycleState,
+    active: Boolean(isActive),
+    reason: typeof reason === 'string' && reason
+      ? reason
+      : (typeof lifecycleState.reason === 'string' ? lifecycleState.reason : '')
+  };
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('deepgram-capture-state', snapshot);
   }
 
   return snapshot;
+}
+
+function requestDeepgramRendererCommand(action, { operationId } = {}) {
+  if (!deepgramRendererCommandBroker) {
+    deepgramRendererCommandBroker = new DeepgramRendererCommandBroker({
+      sendCommand: (command) => {
+        if (!mainWindow || mainWindow.isDestroyed()) {
+          return false;
+        }
+        mainWindow.webContents.send('deepgram-capture-command', command);
+        return true;
+      }
+    });
+  }
+  return deepgramRendererCommandBroker.request(action, { operationId });
+}
+
+function acknowledgeDeepgramRendererCommand(payload = {}) {
+  return deepgramRendererCommandBroker?.acknowledge(payload) || false;
 }
 
 function normalizeDeepgramAudioChunk(chunk) {
@@ -3086,8 +3113,38 @@ function getDeepgramTranscriptionService() {
       sendCaptionError(`Deepgram transcription error: ${error?.message || String(error)}`);
     }
   });
+  deepgramTranscriptionService.on('fatalError', (error) => {
+    console.error('[ERROR] Deepgram capture failed closed:', error);
+    if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+      sendCaptionError(`Deepgram transcription stopped: ${error?.message || String(error)}`);
+    }
+    if (deepgramLifecycleCoordinator) {
+      void deepgramLifecycleCoordinator.failClosed(error);
+    } else {
+      broadcastDeepgramCaptureState(false, 'backend-failed', {
+        phase: 'inactive',
+        error: error?.message || String(error)
+      });
+    }
+  });
 
   return deepgramTranscriptionService;
+}
+
+function getDeepgramLifecycleCoordinator() {
+  if (deepgramLifecycleCoordinator) {
+    return deepgramLifecycleCoordinator;
+  }
+
+  deepgramLifecycleCoordinator = new DeepgramLifecycleCoordinator({
+    service: getDeepgramTranscriptionService(),
+    requestRendererStart: (context) => requestDeepgramRendererCommand('start', context),
+    requestRendererStop: (context) => requestDeepgramRendererCommand('stop', context),
+    onState: (state) => {
+      broadcastDeepgramCaptureState(state.active, state.reason, state);
+    }
+  });
+  return deepgramLifecycleCoordinator;
 }
 
 function stopLiveCaptionTranscriptSource() {
@@ -3105,15 +3162,15 @@ function stopLiveCaptionTranscriptSource() {
   }
 }
 
-function stopDeepgramTranscriptSource(reason = 'stopped') {
-  if (deepgramTranscriptionService) {
-    deepgramTranscriptionService.stop();
+async function stopDeepgramTranscriptSource(reason = 'stopped') {
+  if (!deepgramLifecycleCoordinator && !deepgramTranscriptionService) {
+    return broadcastDeepgramCaptureState(false, reason, { phase: 'inactive' });
   }
 
-  return broadcastDeepgramCaptureState(false, reason);
+  return await getDeepgramLifecycleCoordinator().stop({ reason });
 }
 
-function startDeepgramTranscriptSource() {
+async function startDeepgramTranscriptSource() {
   if (transcriptSource !== TRANSCRIPT_SOURCE_DEEPGRAM) {
     return broadcastDeepgramCaptureState(false, 'wrong-source');
   }
@@ -3123,13 +3180,12 @@ function startDeepgramTranscriptSource() {
     return broadcastDeepgramCaptureState(false, 'missing-api-key');
   }
 
-  if (deepgramTranscriptionActive) {
+  if (deepgramLifecycleCoordinator?.getState?.().active || deepgramTranscriptionActive) {
     return getDeepgramCaptureStateSnapshot('already-started');
   }
 
   try {
-    getDeepgramTranscriptionService().start({ apiKey: connectionApiKey });
-    const snapshot = broadcastDeepgramCaptureState(true, 'started');
+    const snapshot = await getDeepgramLifecycleCoordinator().start({ apiKey: connectionApiKey });
     void refreshDeepgramAccountUsage().then(() => {
       broadcastDeepgramCaptureState(deepgramTranscriptionActive, 'usage-updated');
     });
@@ -3148,11 +3204,11 @@ function startActiveTranscriptSource() {
     return;
   }
 
-  stopDeepgramTranscriptSource('source-switched');
+  void stopDeepgramTranscriptSource('source-switched');
   scheduleCaptionSyncStart();
 }
 
-function applyTranscriptSourceChange(nextSource, { resetTranscript = true } = {}) {
+async function applyTranscriptSourceChange(nextSource, { resetTranscript = true } = {}) {
   const normalizedSource = normalizeTranscriptSource(nextSource);
 
   if (transcriptSource === normalizedSource) {
@@ -3165,7 +3221,7 @@ function applyTranscriptSourceChange(nextSource, { resetTranscript = true } = {}
   }
 
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
-    stopDeepgramTranscriptSource('source-switched');
+    await stopDeepgramTranscriptSource('source-switched');
   } else {
     stopLiveCaptionTranscriptSource();
   }
@@ -3178,7 +3234,7 @@ function applyTranscriptSourceChange(nextSource, { resetTranscript = true } = {}
       || normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM
     )
   ) {
-    deepgramTranscriptionService.clear();
+    await deepgramTranscriptionService.clear();
   }
 
   transcriptSource = normalizedSource;
@@ -3197,7 +3253,13 @@ function setTranscriptSourcePreference(source) {
   return applyTranscriptSourceChange(source);
 }
 
-function setDeepgramApiKeyPreference(apiKey) {
+async function setDeepgramApiKeyPreference(apiKey) {
+  const previousApiKey = deepgramApiKey;
+  const shouldRotateActiveCapture = Boolean(
+    deepgramLifecycleCoordinator?.getState?.().active
+    && normalizeDeepgramApiKey(apiKey)
+    && normalizeDeepgramApiKey(apiKey) !== previousApiKey
+  );
   setDeepgramApiKeyInMemory(apiKey);
   deepgramUsageLastFetchedAtMs = 0;
   deepgramUsageRefreshApiKey = '';
@@ -3207,6 +3269,9 @@ function setDeepgramApiKeyPreference(apiKey) {
   };
 
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && deepgramApiKey) {
+    if (shouldRotateActiveCapture) {
+      await getDeepgramLifecycleCoordinator().rotateApiKey({ apiKey: deepgramApiKey });
+    }
     void refreshDeepgramAccountUsage().then(() => {
       broadcastDeepgramCaptureState(deepgramTranscriptionActive, 'usage-updated');
     });
@@ -3217,12 +3282,12 @@ function setDeepgramApiKeyPreference(apiKey) {
   return getAppPreferenceStateSnapshot();
 }
 
-function clearDeepgramApiKeyPreference() {
+async function clearDeepgramApiKeyPreference() {
   clearDeepgramApiKeyInMemory();
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
-    applyTranscriptSourceChange(TRANSCRIPT_SOURCE_LIVE_CAPTIONS);
+    await applyTranscriptSourceChange(TRANSCRIPT_SOURCE_LIVE_CAPTIONS);
   } else {
-    stopDeepgramTranscriptSource('api-key-cleared');
+    await stopDeepgramTranscriptSource('api-key-cleared');
     scheduleAppPreferencesPersist();
     broadcastAppPreferences();
   }
@@ -4619,7 +4684,7 @@ async function closeLiveCaptionsForAppExit() {
 
   liveCaptionsExitCleanupPromise = (async () => {
     try {
-      stopDeepgramTranscriptSource('app-exit');
+      await stopDeepgramTranscriptSource('app-exit');
       if (captionSync && typeof captionSync.stopAndCloseLiveCaptions === 'function') {
         await captionSync.stopAndCloseLiveCaptions();
       } else if (captionSync && typeof captionSync.stop === 'function') {
@@ -4693,6 +4758,14 @@ ipcMain.on('deepgram-audio-chunk', (event, payload = {}) => {
   getDeepgramTranscriptionService().sendAudioChunk(payload?.role, chunk);
 });
 
+ipcMain.handle('deepgram-capture-command-ack', (event, payload = {}) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('deepgram-capture-command-ack', false);
+  }
+
+  return acknowledgeDeepgramRendererCommand(payload);
+});
+
 app.whenReady().then(async () => {
   loadPromptModeState();
   loadGlobalHotkeyState();
@@ -4711,7 +4784,6 @@ app.on('will-quit', () => {
     clearTimeout(defaultTabWarmupTimer);
     defaultTabWarmupTimer = null;
   }
-  stopDeepgramTranscriptSource('app-exit');
   if (hotkeySettingsWindow && !hotkeySettingsWindow.isDestroyed()) {
     hotkeySettingsWindow.close();
   }
@@ -5092,8 +5164,10 @@ ipcMain.handle('clear-transcript', async (event) => {
   resetTranscriptStateForSource();
 
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
-    if (deepgramTranscriptionService) {
-      deepgramTranscriptionService.clear();
+    if (deepgramLifecycleCoordinator) {
+      await deepgramLifecycleCoordinator.clear();
+    } else if (deepgramTranscriptionService) {
+      await deepgramTranscriptionService.clear();
     }
 
     return {

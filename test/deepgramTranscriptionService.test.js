@@ -14,6 +14,11 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.CONNECTING;
     this.sent = [];
     this.closed = false;
+    this.clientCloseCount = 0;
+    this.autoCloseOnClient = true;
+    this.autoServerCloseOnCloseStream = true;
+    this.sendCount = 0;
+    this.throwOnSendCount = 0;
     this.listeners = new Map();
     FakeWebSocket.instances.push(this);
   }
@@ -37,13 +42,33 @@ class FakeWebSocket {
   }
 
   send(chunk) {
+    this.sendCount += 1;
+    if (this.throwOnSendCount === this.sendCount) {
+      throw new Error('socket send failed');
+    }
     this.sent.push(chunk);
+    if (chunk === JSON.stringify({ type: 'CloseStream' }) && this.autoServerCloseOnCloseStream) {
+      this.serverClose();
+    }
   }
 
   close() {
+    this.clientCloseCount += 1;
+    this.closed = true;
+    this.readyState = FakeWebSocket.CLOSED;
+    if (this.autoCloseOnClient) {
+      this.emit('close');
+    }
+  }
+
+  serverClose() {
     this.closed = true;
     this.readyState = FakeWebSocket.CLOSED;
     this.emit('close');
+  }
+
+  unexpectedClose() {
+    this.serverClose();
   }
 }
 
@@ -51,7 +76,19 @@ FakeWebSocket.CONNECTING = 0;
 FakeWebSocket.OPEN = 1;
 FakeWebSocket.CLOSED = 3;
 
-test('Deepgram service opens one authorized stream per speaker role', () => {
+function openLatestRoleSockets() {
+  for (const socket of FakeWebSocket.instances.filter((candidate) => candidate.readyState === FakeWebSocket.CONNECTING)) {
+    socket.open();
+  }
+}
+
+async function startReady(service, apiKey) {
+  const startPromise = service.start({ apiKey });
+  openLatestRoleSockets();
+  await startPromise;
+}
+
+test('Deepgram service opens one authorized stream per speaker role', async () => {
   const {
     DeepgramTranscriptionService,
     DEEPGRAM_AUDIO_MIME_TYPE,
@@ -64,7 +101,7 @@ test('Deepgram service opens one authorized stream per speaker role', () => {
     WebSocketImpl: FakeWebSocket
   });
 
-  service.start({ apiKey: 'dg_test_key_123456' });
+  await startReady(service, 'dg_test_key_123456');
 
   assert.equal(DEEPGRAM_AUDIO_MIME_TYPE, 'audio/webm;codecs=opus');
   assert.equal(FakeWebSocket.instances.length, 2);
@@ -83,7 +120,7 @@ test('Deepgram service opens one authorized stream per speaker role', () => {
   );
 });
 
-test('Deepgram service emits ordered Them and Me transcript entries', () => {
+test('Deepgram service emits ordered Them and Me transcript entries', async () => {
   const {
     DeepgramTranscriptionService,
     DEEPGRAM_ROLE_ME,
@@ -96,7 +133,7 @@ test('Deepgram service emits ordered Them and Me transcript entries', () => {
   });
   const payloads = [];
   service.on('captionUpdate', (payload) => payloads.push(payload));
-  service.start({ apiKey: 'dg_test_key_abcdef' });
+  await startReady(service, 'dg_test_key_abcdef');
 
   const themSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
   const meSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
@@ -122,7 +159,7 @@ test('Deepgram service emits ordered Them and Me transcript entries', () => {
   assert.ok(latestPayload.payloadVersion >= 2);
 });
 
-test('Deepgram service keeps partial IDs stable only within one active utterance', () => {
+test('Deepgram service keeps partial IDs stable only within one active utterance', async () => {
   const {
     DeepgramTranscriptionService,
     DEEPGRAM_ROLE_THEM
@@ -134,7 +171,7 @@ test('Deepgram service keeps partial IDs stable only within one active utterance
   });
   const payloads = [];
   service.on('captionUpdate', (payload) => payloads.push(payload));
-  service.start({ apiKey: 'dg_test_key_partials' });
+  await startReady(service, 'dg_test_key_partials');
 
   const themSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
 
@@ -165,7 +202,7 @@ test('Deepgram service keeps partial IDs stable only within one active utterance
   assert.match(nextPartialId, /^deepgram-[0-9a-f-]{36}-them-partial-\d+$/);
 });
 
-test('Deepgram service preserves transcript and monotonic role counters across stop and resume', () => {
+test('Deepgram service preserves transcript and monotonic role counters across stop and resume', async () => {
   const {
     DeepgramTranscriptionService,
     DEEPGRAM_ROLE_THEM
@@ -175,7 +212,7 @@ test('Deepgram service preserves transcript and monotonic role counters across s
   const service = new DeepgramTranscriptionService({
     WebSocketImpl: FakeWebSocket
   });
-  service.start({ apiKey: 'dg_test_key_resume' });
+  await startReady(service, 'dg_test_key_resume');
 
   const firstSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
   firstSocket.emit('message', JSON.stringify({
@@ -184,8 +221,8 @@ test('Deepgram service preserves transcript and monotonic role counters across s
   }));
   const firstEntry = service.getPayload().entries[0];
 
-  service.stop();
-  service.start({ apiKey: 'dg_test_key_resume' });
+  await service.stop();
+  await startReady(service, 'dg_test_key_resume');
 
   const resumedSocket = FakeWebSocket.instances
     .filter((socket) => socket.options.role === DEEPGRAM_ROLE_THEM)
@@ -208,7 +245,7 @@ test('Deepgram service preserves transcript and monotonic role counters across s
   assert.equal(Number(resumedMatch[2]), Number(firstMatch[2]) + 1);
 });
 
-test('Deepgram clear creates an isolated session with reset role counters and fresh sockets', () => {
+test('Deepgram clear creates an isolated session with reset role counters and fresh sockets', async () => {
   const {
     DeepgramTranscriptionService,
     DEEPGRAM_ROLE_THEM
@@ -218,7 +255,7 @@ test('Deepgram clear creates an isolated session with reset role counters and fr
   const service = new DeepgramTranscriptionService({
     WebSocketImpl: FakeWebSocket
   });
-  service.start({ apiKey: 'dg_test_key_clear' });
+  await startReady(service, 'dg_test_key_clear');
 
   const oldSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
   oldSocket.emit('message', JSON.stringify({
@@ -228,7 +265,9 @@ test('Deepgram clear creates an isolated session with reset role counters and fr
   const oldEntryId = service.getPayload().entries[0].id;
   assert.equal(service.sendAudioChunk(DEEPGRAM_ROLE_THEM, Buffer.from([7, 7, 7])), true);
 
-  service.clear();
+  const clearPromise = service.clear();
+  openLatestRoleSockets();
+  await clearPromise;
 
   assert.equal(service.getPayload().entries.length, 0);
   assert.equal(FakeWebSocket.instances.length, 4);
@@ -247,10 +286,10 @@ test('Deepgram clear creates an isolated session with reset role counters and fr
   assert.ok(freshMatch);
   assert.notEqual(freshMatch[1], oldMatch[1]);
   assert.equal(freshMatch[2], '0');
-  assert.deepEqual(oldSocket.sent, [JSON.stringify({ type: 'CloseStream' })]);
+  assert.equal(oldSocket.sent.at(-1), JSON.stringify({ type: 'CloseStream' }));
 });
 
-test('Deepgram clear ignores late messages from old-session sockets', () => {
+test('Deepgram clear ignores late messages from old-session sockets', async () => {
   const {
     DeepgramTranscriptionService,
     DEEPGRAM_ROLE_ME
@@ -260,10 +299,12 @@ test('Deepgram clear ignores late messages from old-session sockets', () => {
   const service = new DeepgramTranscriptionService({
     WebSocketImpl: FakeWebSocket
   });
-  service.start({ apiKey: 'dg_test_key_late' });
+  await startReady(service, 'dg_test_key_late');
 
   const oldSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
-  service.clear();
+  const clearPromise = service.clear();
+  openLatestRoleSockets();
+  await clearPromise;
   oldSocket.emit('message', JSON.stringify({
     channel: { alternatives: [{ transcript: 'Late old-session result.' }] },
     is_final: true
@@ -273,7 +314,7 @@ test('Deepgram clear ignores late messages from old-session sockets', () => {
   assert.equal(service.getPayload().fullText, '');
 });
 
-test('Deepgram service sends audio chunks without waiting for response IPC', () => {
+test('Deepgram service sends audio chunks without waiting for response IPC', async () => {
   const {
     DeepgramTranscriptionService,
     DEEPGRAM_ROLE_ME
@@ -283,7 +324,7 @@ test('Deepgram service sends audio chunks without waiting for response IPC', () 
   const service = new DeepgramTranscriptionService({
     WebSocketImpl: FakeWebSocket
   });
-  service.start({ apiKey: 'dg_test_key_audio' });
+  await startReady(service, 'dg_test_key_audio');
 
   const meSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
   meSocket.open();
@@ -292,7 +333,7 @@ test('Deepgram service sends audio chunks without waiting for response IPC', () 
   assert.deepEqual(meSocket.sent, [Buffer.from([1, 2, 3])]);
 });
 
-test('Deepgram service buffers startup audio chunks until the socket opens', () => {
+test('Deepgram service buffers startup audio chunks until the socket opens', async () => {
   const {
     DeepgramTranscriptionService,
     DEEPGRAM_ROLE_THEM
@@ -302,7 +343,7 @@ test('Deepgram service buffers startup audio chunks until the socket opens', () 
   const service = new DeepgramTranscriptionService({
     WebSocketImpl: FakeWebSocket
   });
-  service.start({ apiKey: 'dg_test_key_buffer' });
+  const startPromise = service.start({ apiKey: 'dg_test_key_buffer' });
 
   const themSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
   const firstChunk = Buffer.from([9, 8, 7]);
@@ -313,6 +354,279 @@ test('Deepgram service buffers startup audio chunks until the socket opens', () 
   assert.deepEqual(themSocket.sent, []);
 
   themSocket.open();
+  FakeWebSocket.instances.find((socket) => socket.options.role === 'Me').open();
+  await startPromise;
 
   assert.deepEqual(themSocket.sent, [firstChunk, secondChunk]);
+});
+
+test('Deepgram service retains only unsent buffered chunks when a startup flush fails', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_ME,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    retryDelaysMs: [2, 3, 4],
+    openTimeoutMs: 30
+  });
+  const startPromise = service.start({ apiKey: 'dg_flush_retry' });
+  const themSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
+  const meSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
+  const firstChunk = Buffer.from([1]);
+  const secondChunk = Buffer.from([2]);
+  service.sendAudioChunk(DEEPGRAM_ROLE_THEM, firstChunk);
+  service.sendAudioChunk(DEEPGRAM_ROLE_THEM, secondChunk);
+  themSocket.throwOnSendCount = 2;
+  meSocket.open();
+  themSocket.open();
+
+  await new Promise((resolve) => setTimeout(resolve, 4));
+  const replacement = FakeWebSocket.instances
+    .filter((socket) => socket.options.role === DEEPGRAM_ROLE_THEM)
+    .at(-1);
+  replacement.open();
+  await startPromise;
+
+  assert.deepEqual(themSocket.sent, [firstChunk]);
+  assert.deepEqual(replacement.sent, [secondChunk]);
+});
+
+test('Deepgram service start resolves only after both roles open and exposes exact production timing defaults', async () => {
+  const {
+    DEEPGRAM_OPEN_TIMEOUT_MS,
+    DEEPGRAM_RETRY_DELAYS_MS,
+    DEEPGRAM_CLOSE_GRACE_MS,
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_ME,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({ WebSocketImpl: FakeWebSocket });
+  let resolved = false;
+  const startPromise = service.start({ apiKey: 'dg_ready' }).then(() => {
+    resolved = true;
+  });
+  const themSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
+  const meSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
+
+  themSocket.open();
+  await Promise.resolve();
+  assert.equal(resolved, false);
+  meSocket.open();
+  await startPromise;
+
+  assert.equal(resolved, true);
+  assert.equal(DEEPGRAM_OPEN_TIMEOUT_MS, 10_000);
+  assert.deepEqual(DEEPGRAM_RETRY_DELAYS_MS, [500, 1000, 2000]);
+  assert.equal(DEEPGRAM_CLOSE_GRACE_MS, 1500);
+});
+
+test('Deepgram service reconnects only the failed role while its healthy peer continues and flushes buffered chunks', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_ME,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    retryDelaysMs: [5, 10, 20],
+    openTimeoutMs: 50
+  });
+  const startPromise = service.start({ apiKey: 'dg_retry' });
+  const originalThem = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
+  const originalMe = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
+  originalThem.open();
+  originalMe.open();
+  await startPromise;
+
+  originalThem.unexpectedClose();
+  const buffered = Buffer.from([4, 5, 6]);
+  const healthy = Buffer.from([1, 2, 3]);
+  assert.equal(service.sendAudioChunk(DEEPGRAM_ROLE_THEM, buffered), true);
+  assert.equal(service.sendAudioChunk(DEEPGRAM_ROLE_ME, healthy), true);
+  assert.deepEqual(originalMe.sent, [healthy]);
+
+  await new Promise((resolve) => setTimeout(resolve, 8));
+  const replacementThem = FakeWebSocket.instances
+    .filter((socket) => socket.options.role === DEEPGRAM_ROLE_THEM)
+    .at(-1);
+  assert.notEqual(replacementThem, originalThem);
+  replacementThem.open();
+  await Promise.resolve();
+
+  assert.deepEqual(replacementThem.sent, [buffered]);
+  assert.equal(service.sockets.get(DEEPGRAM_ROLE_ME), originalMe);
+});
+
+test('Deepgram service fails the whole capture closed when a failed role exceeds 16 buffered chunks', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_ME,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    retryDelaysMs: [50, 100, 200],
+    closeGraceMs: 5
+  });
+  const fatalErrors = [];
+  service.on('fatalError', (error) => fatalErrors.push(error.message));
+  const startPromise = service.start({ apiKey: 'dg_overflow' });
+  const themSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
+  const meSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
+  themSocket.open();
+  meSocket.open();
+  await startPromise;
+
+  themSocket.unexpectedClose();
+  for (let index = 0; index < 16; index += 1) {
+    assert.equal(service.sendAudioChunk(DEEPGRAM_ROLE_THEM, Buffer.from([index])), true);
+  }
+  assert.equal(service.sendAudioChunk(DEEPGRAM_ROLE_THEM, Buffer.from([16])), false);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(service.active, false);
+  assert.equal(meSocket.closed, true);
+  assert.deepEqual(fatalErrors, ['Deepgram Them audio buffer overflowed.']);
+});
+
+test('Deepgram service exhausts three delayed retries after per-attempt open timeouts and fails start closed', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_ME,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    retryDelaysMs: [2, 3, 4],
+    openTimeoutMs: 3,
+    closeGraceMs: 2
+  });
+  service.on('fatalError', () => {});
+  const startPromise = service.start({ apiKey: 'dg_exhaust' });
+  FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME).open();
+
+  await assert.rejects(startPromise, /failed after 3 retries/i);
+
+  assert.equal(
+    FakeWebSocket.instances.filter((socket) => socket.options.role === DEEPGRAM_ROLE_THEM).length,
+    4
+  );
+  assert.equal(service.active, false);
+});
+
+test('Deepgram service graceful stop accepts final messages then force-closes after 1500 ms production grace', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_ME,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    closeGraceMs: 15
+  });
+  const startPromise = service.start({ apiKey: 'dg_stop' });
+  const themSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
+  const meSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
+  themSocket.open();
+  meSocket.open();
+  await startPromise;
+  themSocket.autoCloseOnClient = false;
+  meSocket.autoCloseOnClient = false;
+  themSocket.autoServerCloseOnCloseStream = false;
+  meSocket.autoServerCloseOnCloseStream = false;
+
+  const stopPromise = service.stop();
+  themSocket.emit('message', JSON.stringify({
+    channel: { alternatives: [{ transcript: 'Final during drain.' }] },
+    is_final: true
+  }));
+  themSocket.serverClose();
+  await stopPromise;
+
+  assert.deepEqual(themSocket.sent, [JSON.stringify({ type: 'CloseStream' })]);
+  assert.deepEqual(meSocket.sent, [JSON.stringify({ type: 'CloseStream' })]);
+  assert.equal(meSocket.clientCloseCount, 1);
+  assert.deepEqual(service.getPayload().entries.map((entry) => entry.sourceText), ['Final during drain.']);
+});
+
+test('Deepgram service cancels the grace timer when every server closes promptly', async () => {
+  const { DeepgramTranscriptionService } = require('../src/deepgramTranscriptionService');
+  const scheduledTimers = new Set();
+  const setTimeoutFn = (callback, delayMs) => {
+    const timer = { callback, delayMs };
+    scheduledTimers.add(timer);
+    return timer;
+  };
+  const clearTimeoutFn = (timer) => scheduledTimers.delete(timer);
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    setTimeoutFn,
+    clearTimeoutFn
+  });
+  const startPromise = service.start({ apiKey: 'dg_timer_cleanup' });
+  openLatestRoleSockets();
+  await startPromise;
+  await service.stop();
+
+  assert.equal(scheduledTimers.size, 0);
+});
+
+test('Deepgram API-key rotation replaces both sockets without changing session entries or counters', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_ME,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({ WebSocketImpl: FakeWebSocket });
+  const startPromise = service.start({ apiKey: 'dg_old_key' });
+  const oldThem = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
+  const oldMe = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
+  oldThem.open();
+  oldMe.open();
+  await startPromise;
+  oldThem.emit('message', JSON.stringify({
+    channel: { alternatives: [{ transcript: 'Before rotation.' }] },
+    is_final: true
+  }));
+  const firstId = service.getPayload().entries[0].id;
+
+  const rotationPromise = service.rotateApiKey({ apiKey: 'dg_new_key' });
+  const newThem = FakeWebSocket.instances.filter((socket) => socket.options.role === DEEPGRAM_ROLE_THEM).at(-1);
+  const newMe = FakeWebSocket.instances.filter((socket) => socket.options.role === DEEPGRAM_ROLE_ME).at(-1);
+  newThem.open();
+  newMe.open();
+  await rotationPromise;
+  newThem.emit('message', JSON.stringify({
+    channel: { alternatives: [{ transcript: 'After rotation.' }] },
+    is_final: true
+  }));
+
+  const entries = service.getPayload().entries;
+  const firstMatch = firstId.match(/^deepgram-([0-9a-f-]{36})-them-(\d+)$/);
+  const secondMatch = entries[1].id.match(/^deepgram-([0-9a-f-]{36})-them-(\d+)$/);
+  assert.equal(entries.length, 2);
+  assert.equal(secondMatch[1], firstMatch[1]);
+  assert.equal(Number(secondMatch[2]), Number(firstMatch[2]) + 1);
+  assert.deepEqual(
+    [newThem, newMe].map((socket) => socket.options.headers.Authorization),
+    ['Token dg_new_key', 'Token dg_new_key']
+  );
+  assert.equal(typeof service.finalize, 'undefined');
 });
