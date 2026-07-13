@@ -12,6 +12,11 @@ const FORBIDDEN_ARCHIVE_ENTRY_PATTERNS = [
   /^native\/build(?:\/|$)/,
   /^native\/(?:binding\.gyp|package\.json|[^/]+\.(?:cpp|h))$/
 ];
+// ASAR keeps directory entries and the unpacked .node file in its archive
+// index even though their payloads live under app.asar.unpacked. These are
+// runtime entries, not development artifacts, and must remain allowed.
+const ALLOWED_UNPACKED_NATIVE_ARCHIVE_ENTRY_PATTERN =
+  /^native\/build(?:$|\/Release(?:$|\/[^/]+\.node$))/;
 
 function normalizeArchiveEntry(entry) {
   return String(entry || '')
@@ -73,7 +78,8 @@ async function validatePackagedContent(appDirectory, options = {}) {
   }
 
   const forbiddenEntries = entries.filter((entry) => (
-    FORBIDDEN_ARCHIVE_ENTRY_PATTERNS.some((pattern) => pattern.test(entry))
+    !ALLOWED_UNPACKED_NATIVE_ARCHIVE_ENTRY_PATTERN.test(entry)
+    && FORBIDDEN_ARCHIVE_ENTRY_PATTERNS.some((pattern) => pattern.test(entry))
   ));
   if (forbiddenEntries.length > 0) {
     throw new Error(`Development artifacts were packaged: ${forbiddenEntries.join(', ')}`);

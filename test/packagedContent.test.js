@@ -31,6 +31,25 @@ test('packaged-content validation accepts runtime files and an unpacked native a
   }
 });
 
+test('packaged-content validation permits ASAR entries for unpacked native addon', async () => {
+  const root = createPackageFixture();
+  try {
+    const result = await validatePackagedContent(root, {
+      archiveEntries: [
+        'main.js',
+        'package.json',
+        'native',
+        'native/build',
+        'native/build/Release',
+        'native/build/Release/livecaptions_native.node'
+      ]
+    });
+    assert.equal(result.nativeAddons.length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('packaged-content validation rejects a missing native addon', async () => {
   const root = createPackageFixture({ addon: false });
   try {
@@ -49,6 +68,24 @@ test('packaged-content validation rejects development artifacts', async () => {
     await assert.rejects(
       validatePackagedContent(root, {
         archiveEntries: ['main.js', 'package.json', 'test/fixtures/example.test.js']
+      }),
+      /Development artifacts/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('packaged-content validation rejects native build metadata beside the addon', async () => {
+  const root = createPackageFixture();
+  try {
+    await assert.rejects(
+      validatePackagedContent(root, {
+        archiveEntries: [
+          'main.js',
+          'package.json',
+          'native/build/Release/livecaptions_native.pdb'
+        ]
       }),
       /Development artifacts/
     );
