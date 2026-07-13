@@ -9,8 +9,14 @@ function buildNative() {
   }
 
   const electronVersion = require('electron/package.json').version;
-  const command = process.platform === 'win32' ? 'node-gyp.cmd' : 'node-gyp';
-  const result = childProcess.spawnSync(command, [
+  // `node-gyp.cmd` is an npm shell shim. Windows can reject a direct
+  // spawnSync of that shim with EINVAL before node-gyp gets a chance to run.
+  // Invoke node-gyp's JavaScript entry point with the current Node executable
+  // instead. This avoids shell quoting and works with npm-installed copies
+  // of node-gyp regardless of where npm put its .cmd shim.
+  const nodeGypEntry = require.resolve('node-gyp/bin/node-gyp.js');
+  const result = childProcess.spawnSync(process.execPath, [
+    nodeGypEntry,
     'rebuild',
     `--target=${electronVersion}`,
     '--arch=x64',

@@ -22,6 +22,9 @@ test('packaging scripts retain the Windows x64 and native addon contracts', () =
   const releaseScript = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'verify-windows-release.ps1'), 'utf8');
 
   assert.match(buildScript, /Windows x64/);
+  assert.match(buildScript, /process\.execPath/);
+  assert.match(buildScript, /node-gyp\/bin\/node-gyp\.js/);
+  assert.doesNotMatch(buildScript, /spawnSync\(['"]node-gyp\.cmd/);
   assert.match(buildScript, /--arch=x64/);
   assert.match(packageScript, /platform: 'win32'/);
   assert.match(packageScript, /arch: 'x64'/);
