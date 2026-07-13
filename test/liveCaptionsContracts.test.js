@@ -25,6 +25,8 @@ test('native caption boundary returns explicit ok and unavailable snapshots', ()
     assert.match(source, /CreateCaptionUnavailableSnapshot[\s\S]*"status"[\s\S]*"unavailable"[\s\S]*"code"[\s\S]*"message"/);
     assert.match(getCaptions, /CreateCaptionOkSnapshot\(env, utf8_text\)/);
     assert.match(getCaptions, /CreateCaptionUnavailableSnapshot/);
+    assert.match(getCaptions, /CAPTIONS_TEXT_ELEMENT_RETRY_ATTEMPTS/);
+    assert.match(getCaptions, /CAPTIONS_TEXT_ELEMENT_RETRY_DELAY_MS/);
     assert.doesNotMatch(getCaptions, /return Napi::String::New/);
 });
 

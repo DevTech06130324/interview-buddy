@@ -18,6 +18,8 @@ static HANDLE g_appOwnedProcessHandle = nullptr;
 static DWORD g_appOwnedProcessId = 0;
 static constexpr DWORD PROCESS_EXIT_GRACE_MS = 2000;
 static constexpr DWORD PROCESS_TERMINATE_WAIT_MS = 2000;
+static constexpr int CAPTIONS_TEXT_ELEMENT_RETRY_ATTEMPTS = 10;
+static constexpr int CAPTIONS_TEXT_ELEMENT_RETRY_DELAY_MS = 50;
 
 bool GetLiveCaptionsWindowHandle(HWND* windowHandle, bool allowLaunch);
 bool AttachToLiveCaptionsWindow(DWORD processId);
@@ -429,11 +431,26 @@ Napi::Value GetCaptions(const Napi::CallbackInfo& info) {
 
     // Find text block if not cached
     if (!g_textBlock) {
-        HRESULT hr = Win32Automation::FindElementByAutomationId(
-            g_window,
-            L"CaptionsTextBlock",
-            &g_textBlock
-        );
+        HRESULT hr = E_FAIL;
+        // The top-level Live Captions window becomes discoverable before its
+        // caption TextBlock is inserted into the UI Automation tree. Retry
+        // briefly on the worker thread so normal startup does not publish a
+        // burst of false unavailable reads to the main process.
+        for (int attempt = 0; attempt < CAPTIONS_TEXT_ELEMENT_RETRY_ATTEMPTS; ++attempt) {
+            hr = Win32Automation::FindElementByAutomationId(
+                g_window,
+                L"CaptionsTextBlock",
+                &g_textBlock
+            );
+            if (SUCCEEDED(hr) && g_textBlock) {
+                break;
+            }
+            if (attempt + 1 < CAPTIONS_TEXT_ELEMENT_RETRY_ATTEMPTS) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(CAPTIONS_TEXT_ELEMENT_RETRY_DELAY_MS)
+                );
+            }
+        }
         if (FAILED(hr) || !g_textBlock) {
             return CreateCaptionUnavailableSnapshot(
                 env,
