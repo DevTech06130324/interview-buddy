@@ -12,9 +12,27 @@ function getFunctionSource(source, name) {
   const startIndex = source.indexOf(startMarker);
   assert.notEqual(startIndex, -1, `Expected to find ${name}`);
 
+  let parameterDepth = 0;
+  let bodyStartIndex = -1;
+  const parameterStartIndex = startIndex + startMarker.length - 1;
+  for (let index = parameterStartIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '(') {
+      parameterDepth += 1;
+    } else if (char === ')') {
+      parameterDepth -= 1;
+      if (parameterDepth === 0) {
+        bodyStartIndex = source.indexOf('{', index);
+        break;
+      }
+    }
+  }
+
+  assert.notEqual(bodyStartIndex, -1, `Expected to find the body of ${name}`);
+
   let depth = 0;
   let sawOpeningBrace = false;
-  for (let index = startIndex; index < source.length; index += 1) {
+  for (let index = bodyStartIndex; index < source.length; index += 1) {
     const char = source[index];
     if (char === '{') {
       depth += 1;
@@ -39,18 +57,18 @@ test('transcript renderer applies role classes with consistent transcript row al
   assert.match(renderer, /transcript-row-role-me/);
   assert.match(css, /\.transcript-row-role-them/);
   assert.match(css, /\.transcript-row-role-me/);
+  assert.match(css, /\.transcript-row-role-them\s*\{[^}]*--speaker-role-color:\s*var\(--accent/s);
+  assert.match(css, /\.transcript-row-role-me\s*\{[^}]*--speaker-role-color:\s*var\(--success/s);
   assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\s*\{[^}]*--transcript-row-bg:/s);
   assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\s*\{[^}]*--transcript-row-bg:/s);
   assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\s*\{[^}]*var\(--text/s);
   assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\s*\{[^}]*var\(--text/s);
-  assert.doesNotMatch(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\s*\{[^}]*var\(--accent/s);
-  assert.doesNotMatch(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\s*\{[^}]*var\(--success/s);
-  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\s+\.transcript-entry-marker\s*\{[^}]*var\(--accent/s);
-  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\s+\.transcript-entry-marker\s*\{[^}]*var\(--success/s);
+  assert.doesNotMatch(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\s*\{[^}]*--transcript-row-bg:[^;]*var\(--accent/s);
+  assert.doesNotMatch(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\s*\{[^}]*--transcript-row-bg:[^;]*var\(--success/s);
+  assert.match(css, /\.transcript-entry-marker\s*\{[^}]*var\(--speaker-role-color/s);
+  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row\s+\.transcript-entry-marker\s*\{[^}]*var\(--speaker-role-color/s);
   assert.match(renderer, /is-speaker-start/);
-  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row\.is-speaker-start\s*\{/);
-  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\.is-speaker-start\s*\{[^}]*var\(--accent/s);
-  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\.is-speaker-start\s*\{[^}]*var\(--success/s);
+  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row\.is-speaker-start\s*\{[^}]*var\(--speaker-role-color/s);
   assert.match(css, /\.transcript-row-role-me\s+\.transcript-entry-body/);
   assert.match(css, /\.transcript-row-role-me\s+\.transcript-entry-header/);
   assert.match(css, /text-align:\s*left/);
@@ -124,6 +142,23 @@ test('Deepgram transcription starts and stops only through explicit controls', (
   assert.doesNotMatch(syncCapture, /startDeepgramCapture\(/);
   assert.doesNotMatch(startActiveSource, /startDeepgramTranscriptSource\(\)/);
   assert.doesNotMatch(setKeyPreference, /startDeepgramTranscriptSource\(\)/);
+});
+
+test('renderer centralizes Deepgram source UI refresh after capture state changes', () => {
+  const renderer = readRepoFile('renderer.js');
+  const updateSourceUi = getFunctionSource(renderer, 'updateTranscriptSourceUi');
+  const updateUsage = getFunctionSource(renderer, 'updateDeepgramUsageStatus');
+  const syncCapture = getFunctionSource(renderer, 'syncDeepgramCaptureFromPreferences');
+  const applyCaptureState = getFunctionSource(renderer, 'applyDeepgramCaptureState');
+  const applyPreferences = getFunctionSource(renderer, 'applyAppPreferences');
+
+  assert.match(updateSourceUi, /updateTranscriptSourceControlButton\(\)/);
+  assert.match(updateSourceUi, /updateTranscriptSourcePill\(\)/);
+  assert.match(updateSourceUi, /updateTranscriptEmptyState\(\)/);
+  assert.match(updateUsage, /updateTranscriptSourceUi\(\)/);
+  assert.doesNotMatch(syncCapture, /updateTranscriptSourceControlButton\(\)|updateTranscriptSourcePill\(\)|updateTranscriptEmptyState\(\)/);
+  assert.doesNotMatch(applyCaptureState, /updateTranscriptSourceControlButton\(\)|updateTranscriptSourcePill\(\)|updateTranscriptEmptyState\(\)/);
+  assert.doesNotMatch(applyPreferences, /updateTranscriptSourceControlButton\(\)|updateTranscriptSourcePill\(\)|updateTranscriptEmptyState\(\)/);
 });
 
 test('Deepgram API-key edits always update desired lifecycle state without phase inspection', () => {

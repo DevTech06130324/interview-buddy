@@ -795,6 +795,12 @@ async function startDeepgramCapture() {
   }
 }
 
+function updateTranscriptSourceUi() {
+  updateTranscriptSourceControlButton();
+  updateTranscriptSourcePill();
+  updateTranscriptEmptyState();
+}
+
 function updateDeepgramUsageStatus(usage = {}) {
   if (usage && typeof usage === 'object') {
     if (usage.active !== undefined) {
@@ -815,8 +821,7 @@ function updateDeepgramUsageStatus(usage = {}) {
     deepgramRemainingUsageValue.textContent = deepgramRemainingText;
   }
 
-  updateTranscriptSourcePill();
-  updateTranscriptEmptyState();
+  updateTranscriptSourceUi();
 }
 
 function syncDeepgramCaptureFromPreferences() {
@@ -826,17 +831,11 @@ function syncDeepgramCaptureFromPreferences() {
   }
 
   updateDeepgramUsageStatus();
-  updateTranscriptSourceControlButton();
-  updateTranscriptSourcePill();
-  updateTranscriptEmptyState();
 }
 
 function applyDeepgramCaptureState(state = {}) {
   deepgramCaptureActive = Boolean(state?.active);
   updateDeepgramUsageStatus(state);
-  updateTranscriptSourceControlButton();
-  updateTranscriptSourcePill();
-  updateTranscriptEmptyState();
 }
 
 function refreshDeepgramUsageStatus() {
@@ -860,7 +859,6 @@ function refreshDeepgramUsageStatus() {
   deepgramUsageRefreshInFlight = window.electronAPI.refreshDeepgramUsage()
     .then((usage) => {
       updateDeepgramUsageStatus(usage);
-      updateTranscriptSourceControlButton();
     })
     .catch((error) => {
       console.error('[ERROR] Failed to refresh Deepgram usage:', error);
@@ -1039,9 +1037,6 @@ function applyAppPreferences(preferences = {}) {
     syncDeepgramCaptureFromPreferences();
   }
 
-  updateTranscriptSourceControlButton();
-  updateTranscriptSourcePill();
-  updateTranscriptEmptyState();
   refreshDeepgramUsageStatus();
 
   if (Number.isFinite(preferences.horizontalTranscriptPanelRatio)) {

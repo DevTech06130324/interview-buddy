@@ -599,9 +599,11 @@ body {
 }
 
 .transcript-row-role-them {
+  --speaker-role-color: var(--accent, #4a9eff);
+  --speaker-marker-fg: #c9def6;
   align-self: flex-start;
   margin-right: 0;
-  border-left-color: color-mix(in srgb, var(--accent, #4a9eff) 50%, transparent);
+  border-left-color: color-mix(in srgb, var(--speaker-role-color) 50%, transparent);
 }
 
 .transcript-content.is-deepgram-source .transcript-row-role-them {
@@ -611,9 +613,11 @@ body {
 }
 
 .transcript-row-role-me {
+  --speaker-role-color: var(--success, #42c46f);
+  --speaker-marker-fg: #cdf3dc;
   align-self: flex-start;
   margin-left: 0;
-  border-left-color: color-mix(in srgb, var(--success, #42c46f) 54%, transparent);
+  border-left-color: color-mix(in srgb, var(--speaker-role-color) 54%, transparent);
 }
 
 .transcript-content.is-deepgram-source .transcript-row-role-me {
@@ -623,18 +627,9 @@ body {
 }
 
 .transcript-content.is-deepgram-source .transcript-row.is-speaker-start {
-  border-top: 1px solid var(--speaker-start-border, transparent);
-  box-shadow: inset 0 1px 0 var(--speaker-start-border, transparent);
-}
-
-.transcript-content.is-deepgram-source .transcript-row-role-them.is-speaker-start {
-  --speaker-start-border: color-mix(in srgb, var(--accent, #4a9eff) 42%, transparent);
-  border-left-color: color-mix(in srgb, var(--accent, #4a9eff) 46%, transparent);
-}
-
-.transcript-content.is-deepgram-source .transcript-row-role-me.is-speaker-start {
-  --speaker-start-border: color-mix(in srgb, var(--success, #42c46f) 42%, transparent);
-  border-left-color: color-mix(in srgb, var(--success, #42c46f) 46%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--speaker-role-color) 42%, transparent);
+  border-left-color: color-mix(in srgb, var(--speaker-role-color) 46%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--speaker-role-color) 42%, transparent);
 }
 
 .transcript-row-role-me .transcript-entry-body {
@@ -683,38 +678,20 @@ body {
   align-items: center;
   min-height: 19px;
   padding: 1px 7px;
-  border: 1px solid color-mix(in srgb, var(--accent, #4a9eff) 32%, transparent);
+  border: 1px solid color-mix(in srgb, var(--speaker-role-color, var(--accent, #4a9eff)) 32%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent, #4a9eff) 13%, transparent);
-  color: #c9def6;
+  background: color-mix(in srgb, var(--speaker-role-color, var(--accent, #4a9eff)) 13%, transparent);
+  color: var(--speaker-marker-fg, #c9def6);
   font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
   line-height: 1.35;
   white-space: nowrap;
 }
 
-.transcript-row-role-me .transcript-entry-marker {
-  border-color: color-mix(in srgb, var(--success, #42c46f) 34%, transparent);
-  background: color-mix(in srgb, var(--success, #42c46f) 13%, transparent);
-  color: #cdf3dc;
-}
-
-.transcript-content.is-deepgram-source .transcript-entry-marker {
-  border-color: color-mix(in srgb, var(--text-muted, #a9a9a9) 28%, transparent);
-  background: color-mix(in srgb, var(--text, #ffffff) 5%, transparent);
-  color: var(--text-soft, #cfcfcf);
-}
-
-.transcript-content.is-deepgram-source .transcript-row-role-them .transcript-entry-marker {
-  border-color: color-mix(in srgb, var(--accent, #4a9eff) 34%, transparent);
-  background: color-mix(in srgb, var(--accent, #4a9eff) 12%, transparent);
-  color: #c9def6;
-}
-
-.transcript-content.is-deepgram-source .transcript-row-role-me .transcript-entry-marker {
-  border-color: color-mix(in srgb, var(--success, #42c46f) 36%, transparent);
-  background: color-mix(in srgb, var(--success, #42c46f) 12%, transparent);
-  color: #cdf3dc;
+.transcript-content.is-deepgram-source .transcript-row .transcript-entry-marker {
+  border-color: color-mix(in srgb, var(--speaker-role-color) 35%, transparent);
+  background: color-mix(in srgb, var(--speaker-role-color) 12%, transparent);
+  color: var(--speaker-marker-fg, var(--text-soft, #cfcfcf));
 }
 
 .transcript-live-status {
