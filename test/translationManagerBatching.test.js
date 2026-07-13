@@ -79,3 +79,25 @@ test('cached translations emit one consolidated update while transcript entries 
 
   resetTranslationManager();
 });
+
+test('Live Captions revision history collapses repeated growing hypotheses', () => {
+  resetTranslationManager();
+
+  const payload = translationManager.update([
+    'While you were.',
+    'While you were joining.',
+    'While you were joining which which language do you want to use?',
+    'While you were joining which which language do you want to use we have like While you were joining which which language do you want to use?',
+    'We have like Python.'
+  ].join('\n'));
+
+  assert.deepEqual(
+    payload.entries.map((entry) => entry.sourceText),
+    [
+      'While you were joining which which language do you want to use?',
+      'We have like Python.'
+    ]
+  );
+
+  resetTranslationManager();
+});

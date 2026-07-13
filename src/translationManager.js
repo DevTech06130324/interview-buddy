@@ -13,6 +13,7 @@ const PARTIAL_CHANGE_THRESHOLD = 3;
 const PARTIAL_IDLE_MS = 700;
 const RECONCILE_MIN_LOOKBACK = 12;
 const RECONCILE_EXTRA_LOOKBACK = 4;
+const MIN_LIVE_CAPTIONS_REVISION_CHARS = 12;
 const CONTROL_CHARS_EXCEPT_WHITESPACE_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
 function sanitizeCaptionText(text) {
@@ -35,9 +36,9 @@ function getUsableTranslationText(text) {
 }
 
 function parseCaptionSegments(fullText) {
-  const text = sanitizeCaptionText(fullText)
+  const text = collapseLiveCaptionsRevisionLines(sanitizeCaptionText(fullText)
     .replace(/\r\n?/g, '\n')
-    .trim();
+    .trim());
 
   if (!text) {
     return [];
@@ -79,6 +80,65 @@ function getRevisionComparableText(text) {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .toLowerCase();
+}
+
+function isLikelyLiveCaptionsLineRevision(previousText, nextText) {
+  const previous = getRevisionComparableText(previousText);
+  const next = getRevisionComparableText(nextText);
+
+  if (
+    !previous
+    || !next
+    || previous.length < MIN_LIVE_CAPTIONS_REVISION_CHARS
+    || next.length <= previous.length
+  ) {
+    return false;
+  }
+
+  return next.startsWith(previous);
+}
+
+function isLikelyLiveCaptionsEchoRevision(previousText, nextText) {
+  if (!isLikelyLiveCaptionsLineRevision(previousText, nextText)) {
+    return false;
+  }
+
+  const previous = getRevisionComparableText(previousText);
+  const next = getRevisionComparableText(nextText);
+  return next.endsWith(previous);
+}
+
+function collapseLiveCaptionsRevisionLines(text) {
+  const lines = String(text || '')
+    .split('\n')
+    .map((line) => normalizeSegmentText(line))
+    .filter(Boolean);
+
+  if (lines.length <= 1) {
+    return lines.join('\n');
+  }
+
+  const collapsedLines = [];
+  for (const line of lines) {
+    const previousLine = collapsedLines[collapsedLines.length - 1];
+    if (!previousLine) {
+      collapsedLines.push(line);
+      continue;
+    }
+
+    if (isLikelyLiveCaptionsEchoRevision(previousLine, line)) {
+      continue;
+    }
+
+    if (isLikelyLiveCaptionsLineRevision(previousLine, line)) {
+      collapsedLines[collapsedLines.length - 1] = line;
+      continue;
+    }
+
+    collapsedLines.push(line);
+  }
+
+  return collapsedLines.join('\n');
 }
 
 function isLikelyRevision(previousText, nextText) {
