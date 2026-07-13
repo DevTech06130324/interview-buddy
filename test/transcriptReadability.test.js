@@ -58,7 +58,7 @@ test('fixed horizontal transcript panel starts expanded without collapse control
   assert.doesNotMatch(renderer, /updateTranscriptPanelCollapsed/);
 });
 
-test('transcript rows show metadata above text with side-by-side translation', () => {
+test('transcript rows show metadata above text with responsive secondary translation', () => {
   const css = readRepoFile('styles.css');
   const renderer = readRepoFile('renderer.js');
   const html = readRepoFile('index.html');
@@ -68,11 +68,13 @@ test('transcript rows show metadata above text with side-by-side translation', (
   assert.match(css, /\.transcript-cell\s*\{[^}]*padding:\s*12px 16px;/s);
   assert.match(css, /\.transcript-entry-header\s*\{/);
   assert.match(css, /\.transcript-entry-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/s);
+  assert.match(css, /@container transcript-panel \(max-width: 520px\)[\s\S]*\.transcript-row\s+\.transcript-entry-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
   assert.match(css, /\.transcript-content\.is-translation-disabled\s+\.transcript-entry-body,/);
   assert.match(css, /\.transcript-content\.is-translation-hidden\s+\.transcript-entry-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
   assert.match(css, /\.transcript-entry-text\s*\{[^}]*max-width:\s*78ch;/s);
   assert.match(css, /\.transcript-cell-translation\s*\{[^}]*max-width:\s*78ch;/s);
-  assert.doesNotMatch(css, /\.transcript-cell-translation\s*\{[^}]*border-top:/s);
+  assert.match(css, /\.transcript-cell-translation\s*\{[^}]*background:\s*color-mix/s);
+  assert.match(css, /@container transcript-panel \(max-width: 520px\)[\s\S]*\.transcript-row\s+\.transcript-cell-translation\s*\{[^}]*border-top:/s);
   assert.match(html, /src="src\/transcriptDisplayGroups\.js"/);
   assert.match(renderer, /createTranscriptDisplayGroups/);
   assert.match(renderer, /const displayEntries = createTranscriptDisplayGroups\(entries\)/);
@@ -83,10 +85,13 @@ test('transcript rows show metadata above text with side-by-side translation', (
   assert.match(updateSourceCell, /sourceCell\.dataset\.sourceSignature/);
   assert.match(updateSourceCell, /sourceCell\.replaceChildren\(sourceText\)/);
   assert.match(updateRow, /updateTranscriptMarker/);
+  assert.match(updateRow, /updateTranscriptLiveStatus/);
   assert.match(updateRow, /updateTranscriptTranslationCell/);
   assert.doesNotMatch(updateRow, /entrySignature/);
   assert.match(createTranscriptRow, /transcript-entry-header/);
   assert.match(createTranscriptRow, /transcript-entry-body/);
+  assert.match(createTranscriptRow, /transcript-live-status/);
+  assert.match(createTranscriptRow, /row\.setAttribute\('role', 'article'\)/);
   assert.match(createTranscriptRow, /row\.append\(header,\s*body\)/);
   assert.doesNotMatch(updateSourceCell, /createElement\('button'\)/);
   assert.doesNotMatch(updateSourceCell, /document\.createTextNode\(' '\)/);
@@ -104,6 +109,8 @@ test('transcript rendering keeps stable row order and shows a new transcript ind
   assert.doesNotMatch(renderTranscriptEntries, /row !== transcriptRowsEl\.lastElementChild/);
 
   assert.match(html, /id="newTranscriptIndicator"/);
+  assert.match(html, />\s*Jump to latest\s*<\/button>/);
+  assert.match(html, /aria-label="Jump to latest transcript"/);
   assert.match(css, /\.new-transcript-indicator/);
   assert.match(renderer, /const newTranscriptIndicator = document\.getElementById\('newTranscriptIndicator'\)/);
   assert.match(renderer, /function setNewTranscriptIndicatorVisible/);
@@ -118,6 +125,9 @@ test('partial transcript updates keep stable text color and diff cells independe
   assert.match(renderer, /function getTranscriptMarkerSignature/);
   assert.match(renderer, /function getTranscriptSourceSignature/);
   assert.match(renderer, /function getTranscriptTranslationSignature/);
+  assert.match(renderer, /function getTranscriptLiveSignature/);
+  assert.match(renderer, /function updateTranscriptLiveStatus/);
+  assert.match(css, /\.transcript-live-status\s*\{/);
   assert.match(renderer, /marker\.dataset\.markerSignature/);
   assert.match(renderer, /sourceCell\.dataset\.sourceSignature/);
   assert.match(renderer, /translatedCell\.dataset\.translationSignature/);

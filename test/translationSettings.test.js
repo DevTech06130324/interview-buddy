@@ -70,13 +70,13 @@ test('translation starts opt-in so speech is not sent to translation by default'
   assert.match(settings, /updateTranslationEnabledToggle\(false\)/);
 });
 
-test('transcript UI places translation beside each source sentence', () => {
+test('transcript UI places translation beside each source sentence and stacks it on compact panels', () => {
   const css = readRepoFile('styles.css');
   const renderer = readRepoFile('renderer.js');
 
   assert.match(css, /\.transcript-entry-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/s);
   assert.match(css, /\.transcript-cell-translation\s*\{[^}]*border-left:/s);
-  assert.doesNotMatch(css, /\.transcript-cell-translation\s*\{[^}]*border-top:/s);
+  assert.match(css, /@container transcript-panel \(max-width: 520px\)[\s\S]*\.transcript-row\s+\.transcript-cell-translation\s*\{[^}]*border-top:/s);
   assert.match(renderer, /'disabled'/);
   assert.match(renderer, /is-translation-disabled/);
 });

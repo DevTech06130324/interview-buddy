@@ -109,16 +109,21 @@ test('mode menus use roving focus and preserve the rename double-click window fo
   assert.match(modeMenu, /event\.key === 'End'/);
 });
 
-test('the compact layout keeps browser workspace available, scrolls mode content, wraps transcript controls, and distinguishes speakers', () => {
+test('the compact layout keeps browser workspace available, scrolls mode content, and keeps transcript rows readable', () => {
   const css = readRepoFile('styles.css');
+  const html = readRepoFile('index.html');
+  const renderer = readRepoFile('renderer.js');
 
   assert.match(css, /\.browser-container\s*\{[^}]*min-height:\s*var\(--minimum-browser-workspace-height\);/s);
   assert.match(css, /\.mode-panel\s*\{[^}]*flex:\s*0\s+1\s+var\(--mode-panel-expanded-height\);/s);
   assert.match(css, /\.mode-panel\s*\{[^}]*max-height:\s*calc\(100%\s*-\s*var\(--app-headbar-height\)\s*-\s*var\(--minimum-browser-workspace-height\)\);/s);
   assert.match(css, /\.mode-content\s*\{[^}]*overflow-y:\s*auto;/s);
   assert.match(css, /@container\s+transcript-panel\s*\(max-width:\s*520px\)/);
-  assert.match(css, /\.transcript-actions\s*\{[^}]*flex-wrap:\s*wrap;/s);
-  assert.match(css, /\.transcript-row\s*\{[^}]*max-width:\s*82%;/s);
+  assert.match(html, /id="transcript"[^>]*role="log"[^>]*aria-live="polite"[^>]*aria-relevant="additions text"/s);
+  assert.match(renderer, /row\.setAttribute\('aria-label', getTranscriptRowAriaLabel\(entry\)\)/);
+  assert.match(css, /\.transcript-row\s*\{[^}]*width:\s*100%;/s);
+  assert.match(css, /\.transcript-row\s*\{[^}]*max-width:\s*none;/s);
   assert.match(css, /\.transcript-row-role-them\s*\{[^}]*align-self:\s*flex-start;/s);
-  assert.match(css, /\.transcript-row-role-me\s*\{[^}]*align-self:\s*flex-end;/s);
+  assert.match(css, /\.transcript-row-role-me\s*\{[^}]*align-self:\s*flex-start;/s);
+  assert.doesNotMatch(css, /\.transcript-row-role-me\s*\{[^}]*align-self:\s*flex-end;/s);
 });

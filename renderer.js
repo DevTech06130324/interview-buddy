@@ -377,6 +377,19 @@ function getTranscriptTranslationSignature(entry) {
   });
 }
 
+function getTranscriptLiveSignature(entry) {
+  return JSON.stringify({
+    isFinal: Boolean(entry?.isFinal)
+  });
+}
+
+function getTranscriptRowAriaLabel(entry) {
+  const speaker = normalizeTranscriptSpeakerTag(entry?.speakerTag);
+  return entry?.isFinal
+    ? `${speaker} transcript entry`
+    : `${speaker} live transcript entry`;
+}
+
 function updateTranscriptMarker(marker, entry, options = {}) {
   const signature = getTranscriptMarkerSignature(entry, options);
   if (marker.dataset.markerSignature === signature) {
@@ -387,6 +400,18 @@ function updateTranscriptMarker(marker, entry, options = {}) {
   const markerText = formatTranscriptEntryMarker(entry, options);
   marker.textContent = markerText;
   marker.hidden = !markerText;
+}
+
+function updateTranscriptLiveStatus(liveStatus, entry) {
+  const signature = getTranscriptLiveSignature(entry);
+  if (liveStatus.dataset.liveSignature === signature) {
+    return;
+  }
+
+  liveStatus.dataset.liveSignature = signature;
+  const isLive = !entry.isFinal;
+  liveStatus.textContent = isLive ? 'Live' : '';
+  liveStatus.hidden = !isLive;
 }
 
 function updateTranscriptSourceCell(sourceCell, entry) {
@@ -430,13 +455,18 @@ function updateTranscriptTranslationCell(translatedCell, entry) {
 function createTranscriptRow(entry, index = 0, previousEntry = null) {
   const row = document.createElement('div');
   row.dataset.captionId = entry.id;
+  row.setAttribute('role', 'article');
 
   const header = document.createElement('div');
   header.className = 'transcript-entry-header';
 
   const marker = document.createElement('span');
   marker.className = 'transcript-entry-marker';
-  header.appendChild(marker);
+
+  const liveStatus = document.createElement('span');
+  liveStatus.className = 'transcript-live-status';
+  liveStatus.hidden = true;
+  header.append(marker, liveStatus);
 
   const body = document.createElement('div');
   body.className = 'transcript-entry-body';
@@ -468,10 +498,16 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
   if (row.className !== rowClassName) {
     row.className = rowClassName;
   }
+  row.setAttribute('aria-label', getTranscriptRowAriaLabel(entry));
 
   const marker = row.querySelector('.transcript-entry-marker');
   if (marker) {
     updateTranscriptMarker(marker, entry, markerOptions);
+  }
+
+  const liveStatus = row.querySelector('.transcript-live-status');
+  if (liveStatus) {
+    updateTranscriptLiveStatus(liveStatus, entry);
   }
 
   const sourceCell = row.querySelector('.transcript-cell-source');

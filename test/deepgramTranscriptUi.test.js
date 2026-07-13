@@ -30,7 +30,7 @@ function getFunctionSource(source, name) {
   assert.fail(`Expected to find the end of ${name}`);
 }
 
-test('transcript renderer applies role classes for left Them and right Me blocks', () => {
+test('transcript renderer applies role classes with consistent transcript row alignment', () => {
   const renderer = readRepoFile('renderer.js');
   const css = readRepoFile('styles.css');
 
@@ -42,6 +42,7 @@ test('transcript renderer applies role classes for left Them and right Me blocks
   assert.match(css, /\.transcript-row-role-me\s+\.transcript-entry-body/);
   assert.match(css, /\.transcript-row-role-me\s+\.transcript-entry-header/);
   assert.match(css, /text-align:\s*left/);
+  assert.doesNotMatch(css, /\.transcript-row-role-me\s*\{[^}]*align-self:\s*flex-end;/s);
 });
 
 test('transcript role rendering declares the Me speaker token used by caption updates', () => {

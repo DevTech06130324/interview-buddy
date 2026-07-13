@@ -445,6 +445,23 @@ body {
   .transcript-header.is-deepgram-source .transcript-actions {
     gap: 6px;
   }
+
+  .transcript-row .transcript-entry-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .transcript-row .transcript-cell-source {
+    padding-bottom: 8px;
+  }
+
+  .transcript-row .transcript-cell-translation {
+    margin: 0 16px 12px;
+    padding: 10px 12px;
+    max-width: none;
+    border-left: none;
+    border-top: 1px solid var(--border, #3a3a3a);
+    border-radius: 6px;
+  }
 }
 
 @container transcript-panel (max-width: 360px) {
@@ -529,7 +546,7 @@ body {
 .new-transcript-indicator {
   position: absolute;
   left: 50%;
-  bottom: 12px;
+  bottom: 18px;
   transform: translateX(-50%);
   z-index: 5;
   max-width: calc(100% - 24px);
@@ -568,25 +585,29 @@ body {
 .transcript-rows {
   position: relative;
   min-height: 100%;
+  padding-bottom: 56px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
 }
 
 .transcript-row {
-  width: min(82%, 120ch);
-  max-width: 82%;
+  width: 100%;
+  max-width: none;
   border-bottom: 1px solid #2d2d2d;
+  border-left: 3px solid transparent;
 }
 
 .transcript-row-role-them {
   align-self: flex-start;
-  margin-right: auto;
+  margin-right: 0;
+  border-left-color: color-mix(in srgb, var(--accent, #4a9eff) 50%, transparent);
 }
 
 .transcript-row-role-me {
-  align-self: flex-end;
-  margin-left: auto;
+  align-self: flex-start;
+  margin-left: 0;
+  border-left-color: color-mix(in srgb, var(--success, #42c46f) 54%, transparent);
 }
 
 .transcript-row-role-me .transcript-entry-body {
@@ -594,7 +615,7 @@ body {
 }
 
 .transcript-row-role-me .transcript-entry-header {
-  text-align: right;
+  text-align: left;
 }
 
 .transcript-row:last-child {
@@ -603,6 +624,9 @@ body {
 
 .transcript-entry-header {
   padding: 12px 16px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .transcript-entry-body {
@@ -623,11 +647,43 @@ body {
 }
 
 .transcript-entry-marker {
-  color: #9fb6d8;
+  display: inline-flex;
+  align-items: center;
+  min-height: 19px;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent, #4a9eff) 32%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, #4a9eff) 13%, transparent);
+  color: #c9def6;
   font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
   line-height: 1.35;
   white-space: nowrap;
+}
+
+.transcript-row-role-me .transcript-entry-marker {
+  border-color: color-mix(in srgb, var(--success, #42c46f) 34%, transparent);
+  background: color-mix(in srgb, var(--success, #42c46f) 13%, transparent);
+  color: #cdf3dc;
+}
+
+.transcript-live-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 19px;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, #ffd36a 32%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, #ffd36a 12%, transparent);
+  color: #ffd98f;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.transcript-live-status[hidden] {
+  display: none;
 }
 
 .transcript-entry-text {
@@ -638,7 +694,8 @@ body {
 
 .transcript-cell-translation {
   border-left: 1px solid #252525;
-  color: #dfe9f7;
+  background: color-mix(in srgb, var(--panel-bg, #2b2b2b) 26%, transparent);
+  color: color-mix(in srgb, var(--text-soft, #cfcfcf) 84%, var(--text-muted, #a9a9a9));
   max-width: 78ch;
 }
 

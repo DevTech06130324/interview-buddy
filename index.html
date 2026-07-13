@@ -140,7 +140,14 @@
               aria-atomic="true"
               hidden
             ></p>
-            <div class="transcript-content is-translation-hidden" id="transcript">
+            <div
+              class="transcript-content is-translation-hidden"
+              id="transcript"
+              role="log"
+              aria-live="polite"
+              aria-relevant="additions text"
+              aria-label="Transcript"
+            >
               <div
                 class="transcript-empty-state"
                 id="transcriptEmptyState"
@@ -156,10 +163,10 @@
               class="new-transcript-indicator"
               id="newTranscriptIndicator"
               type="button"
-              aria-label="Show latest transcript"
+              aria-label="Jump to latest transcript"
               hidden
             >
-              New transcript below
+              Jump to latest
             </button>
           </div>
         </div>
