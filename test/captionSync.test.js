@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const EventEmitter = require('node:events');
 
 const { CaptionSyncService } = require('../src/captionSync');
+const {
+    getCaptionSyncErrorLifecycleState
+} = require('../src/captionSyncErrorState');
 
 class FakeWorkerClient extends EventEmitter {
     constructor() {
@@ -76,6 +79,39 @@ test('empty successful and unavailable reads preserve accumulated transcript; ex
     assert.deepEqual(clearResult, {
         success: true,
         liveCaptionsVisible: false
+    });
+});
+
+test('visibility controls start Live Captions when called during renderer startup', async () => {
+    const workerClient = new FakeWorkerClient();
+    const service = new CaptionSyncService({ workerClient });
+
+    assert.equal(await service.getLiveCaptionsVisibility(), false);
+    assert.deepEqual(workerClient.calls, ['start', 'getVisibility']);
+
+    assert.equal(await service.setLiveCaptionsVisibility(true), true);
+    assert.deepEqual(workerClient.calls, ['start', 'getVisibility', ['setVisibility', true]]);
+});
+
+test('recoverable read errors keep an active Live Captions source active', () => {
+    const state = getCaptionSyncErrorLifecycleState({
+        code: 'LIVECAPTIONS_ELEMENT_UNAVAILABLE',
+        message: 'The Live Captions text element is unavailable.',
+        recoverable: true
+    }, {
+        phase: 'active',
+        active: true,
+        sessionId: 'caption-session-1',
+        retryAttempt: 0
+    });
+
+    assert.deepEqual(state, {
+        phase: 'active',
+        active: true,
+        sessionId: 'caption-session-1',
+        retryAttempt: 0,
+        error: 'The Live Captions text element is unavailable.',
+        reason: 'LIVECAPTIONS_ELEMENT_UNAVAILABLE'
     });
 });
 

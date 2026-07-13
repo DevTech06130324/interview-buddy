@@ -133,7 +133,14 @@ class CaptionSyncService extends EventEmitter {
         }
     }
 
-    getLiveCaptionsVisibility() {
+    async getLiveCaptionsVisibility() {
+        // Renderer initialization can ask for the persisted visibility before
+        // the ready-to-show hook has started the worker. Start the source on
+        // demand so this harmless read cannot race worker startup.
+        if (!this.isRunning && !(await this.start())) {
+            return null;
+        }
+
         return this.workerClient.getVisibility();
     }
 
@@ -142,7 +149,11 @@ class CaptionSyncService extends EventEmitter {
         return this.setLiveCaptionsVisibility(!isVisible);
     }
 
-    setLiveCaptionsVisibility(isVisible) {
+    async setLiveCaptionsVisibility(isVisible) {
+        if (!this.isRunning && !(await this.start())) {
+            return null;
+        }
+
         return this.workerClient.setVisibility(Boolean(isVisible));
     }
 

@@ -96,6 +96,9 @@ const {
 const {
   normalizeTranscriptSourceLifecycle
 } = require('./src/transcriptSourceLifecycle');
+const {
+  getCaptionSyncErrorLifecycleState
+} = require('./src/captionSyncErrorState');
 
 // Constants
 const BORDER_WIDTH = 3;
@@ -6080,18 +6083,16 @@ if (captionSync) {
   });
 
   captionSync.on('error', (error) => {
-    console.error('[ERROR] Caption sync error:', error);
+    const isRecoverable = error?.recoverable === true;
+    const logMethod = isRecoverable ? 'warn' : 'error';
+    console[logMethod](`[${isRecoverable ? 'WARNING' : 'ERROR'}] Caption sync ${isRecoverable ? 'warning' : 'error'}:`, error);
     if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
       return;
     }
 
     sendCaptionError(error, { source: TRANSCRIPT_SOURCE_LIVE_CAPTIONS });
     broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
-      ...(captionSync.getState?.() || {}),
-      phase: 'error',
-      active: false,
-      error: error?.message || String(error),
-      reason: error?.code || 'source-error'
+      ...getCaptionSyncErrorLifecycleState(error, captionSync.getState?.() || {})
     });
   });
 }
