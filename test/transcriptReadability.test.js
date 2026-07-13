@@ -99,9 +99,12 @@ test('transcript rows show metadata above text with responsive secondary transla
   assert.match(updateRow, /updateTranscriptHeaderVisibility\(row\)/);
   assert.match(css, /\.transcript-entry-marker\[hidden\],\s*\.transcript-entry-header\[hidden\]\s*\{[^}]*display:\s*none;/s);
   assert.match(updateRow, /has-translation/);
-  assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation\s+\.transcript-cell-translation\s*\{[^}]*display:\s*none;/s);
-  assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation:hover\s+\.transcript-cell-source\s*\{[^}]*display:\s*none;/s);
-  assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation:hover\s+\.transcript-cell-translation\s*\{[^}]*display:\s*block;/s);
+  assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation\s+\.transcript-entry-body\s*\{[^}]*position:\s*relative;/s);
+  assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation\s+\.transcript-cell-translation\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*visibility:\s*hidden;[^}]*opacity:\s*0;[^}]*overflow:\s*auto;/s);
+  assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation:hover\s+\.transcript-cell-source\s*\{[^}]*opacity:\s*0;/s);
+  assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation:hover\s+\.transcript-cell-translation\s*\{[^}]*visibility:\s*visible;[^}]*opacity:\s*1;/s);
+  assert.doesNotMatch(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-row\.has-translation:hover\s+\.transcript-cell-source\s*\{[^}]*display:\s*none;/s);
+  assert.doesNotMatch(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-row\.has-translation:hover\s+\.transcript-cell-translation\s*\{[^}]*display:\s*block;/s);
   assert.doesNotMatch(updateSourceCell, /createElement\('button'\)/);
   assert.doesNotMatch(updateSourceCell, /document\.createTextNode\(' '\)/);
   assert.doesNotMatch(createTranscriptRow, /addEventListener\('click'/);

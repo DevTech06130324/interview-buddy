@@ -738,21 +738,35 @@ body {
 @container transcript-panel (max-width: 360px) {
   .transcript-content:not(.is-translation-hidden):not(.is-translation-disabled) .transcript-row.has-translation .transcript-entry-body {
     grid-template-columns: minmax(0, 1fr);
+    position: relative;
   }
 
   .transcript-content:not(.is-translation-hidden):not(.is-translation-disabled) .transcript-row.has-translation .transcript-cell-translation {
-    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 1;
     max-width: none;
     margin: 0;
     border-left: none;
+    visibility: hidden;
+    opacity: 0;
+    overflow: auto;
+    pointer-events: none;
+    transition: opacity 0.12s ease, visibility 0.12s ease;
+  }
+
+  .transcript-content:not(.is-translation-hidden):not(.is-translation-disabled) .transcript-row.has-translation .transcript-cell-source {
+    transition: opacity 0.12s ease;
   }
 
   .transcript-content:not(.is-translation-hidden):not(.is-translation-disabled) .transcript-row.has-translation:hover .transcript-cell-source {
-    display: none;
+    opacity: 0;
   }
 
   .transcript-content:not(.is-translation-hidden):not(.is-translation-disabled) .transcript-row.has-translation:hover .transcript-cell-translation {
-    display: block;
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 
