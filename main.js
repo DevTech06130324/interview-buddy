@@ -3432,6 +3432,46 @@ function getTranscriptTextFromEntries(entries) {
     .trim();
 }
 
+function getSubmittedTranscriptLineSet(submittedText = lastSubmittedTranscriptText) {
+  return new Set(
+    normalizeTranscriptTextForPrompt(submittedText)
+      .split('\n')
+      .map((line) => normalizeTranscriptTextForPrompt(line))
+      .filter(Boolean)
+  );
+}
+
+function isTranscriptEntrySubmitted(entry, {
+  submittedText = lastSubmittedTranscriptText,
+  submittedEntries = lastSubmittedTranscriptEntries
+} = {}) {
+  const sourceText = normalizeTranscriptTextForPrompt(entry?.sourceText);
+  if (!sourceText) {
+    return false;
+  }
+
+  const entryId = typeof entry?.id === 'string' ? entry.id.trim() : '';
+  if (entryId) {
+    const matchingSubmittedEntry = normalizeTranscriptEntriesForPrompt(submittedEntries)
+      .find((submittedEntry) => submittedEntry.id === entryId);
+    const submittedSourceText = normalizeTranscriptTextForPrompt(matchingSubmittedEntry?.sourceText);
+
+    if (submittedSourceText) {
+      return submittedSourceText === sourceText || submittedSourceText.endsWith(sourceText);
+    }
+  }
+
+  return getSubmittedTranscriptLineSet(submittedText).has(sourceText);
+}
+
+function annotateTranscriptEntriesForRenderer(entries = latestTranscriptEntries) {
+  return normalizeTranscriptEntriesForPrompt(entries)
+    .map((entry) => ({
+      ...entry,
+      isSubmitted: isTranscriptEntrySubmitted(entry)
+    }));
+}
+
 function formatTranscriptSaveDate(date = new Date()) {
   const candidateDate = date instanceof Date ? date : new Date(date);
   const safeDate = Number.isNaN(candidateDate.getTime()) ? new Date() : candidateDate;
@@ -3503,6 +3543,7 @@ function markTranscriptSubmitted(
 ) {
   lastSubmittedTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
   lastSubmittedTranscriptEntries = normalizeTranscriptEntriesForPrompt(transcriptEntries);
+  refreshTranscriptSubmittedState();
 }
 
 function markTranscriptCopiedToClipboard(
@@ -3541,8 +3582,18 @@ function getTranscriptPromptText(
 
 function sendCaptionUpdate(payload = translationManager.getPayload()) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('caption-update', payload);
+    mainWindow.webContents.send('caption-update', {
+      ...payload,
+      entries: annotateTranscriptEntriesForRenderer(payload?.entries)
+    });
   }
+}
+
+function refreshTranscriptSubmittedState() {
+  sendCaptionUpdate({
+    fullText: latestTranscriptText,
+    entries: latestTranscriptEntries
+  });
 }
 
 function getLiveCaptionsTranscriptSessionId() {

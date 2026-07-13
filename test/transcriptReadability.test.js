@@ -88,12 +88,12 @@ test('transcript rows show metadata above text with responsive secondary transla
   assert.match(updateSourceCell, /sourceCell\.dataset\.sourceSignature/);
   assert.match(updateSourceCell, /sourceCell\.replaceChildren\(sourceText\)/);
   assert.match(updateRow, /updateTranscriptMarker/);
-  assert.match(updateRow, /updateTranscriptLiveStatus/);
   assert.match(updateRow, /updateTranscriptTranslationCell/);
   assert.doesNotMatch(updateRow, /entrySignature/);
   assert.match(createTranscriptRow, /transcript-entry-header/);
   assert.match(createTranscriptRow, /transcript-entry-body/);
-  assert.match(createTranscriptRow, /transcript-live-status/);
+  assert.doesNotMatch(renderer, /transcript-live-status/);
+  assert.doesNotMatch(css, /\.transcript-live-status/);
   assert.match(createTranscriptRow, /row\.setAttribute\('role', 'article'\)/);
   assert.match(createTranscriptRow, /row\.append\(header,\s*body\)/);
   assert.match(updateRow, /updateTranscriptHeaderVisibility\(row\)/);
@@ -144,12 +144,25 @@ test('partial transcript updates keep stable text color and diff cells independe
   assert.match(renderer, /function getTranscriptMarkerSignature/);
   assert.match(renderer, /function getTranscriptSourceSignature/);
   assert.match(renderer, /function getTranscriptTranslationSignature/);
-  assert.match(renderer, /function getTranscriptLiveSignature/);
-  assert.match(renderer, /function updateTranscriptLiveStatus/);
-  assert.match(css, /\.transcript-live-status\s*\{/);
+  assert.doesNotMatch(renderer, /function getTranscriptLiveSignature/);
+  assert.doesNotMatch(renderer, /function updateTranscriptLiveStatus/);
+  assert.doesNotMatch(css, /\.transcript-live-status\s*\{/);
   assert.match(renderer, /marker\.dataset\.markerSignature/);
   assert.match(renderer, /sourceCell\.dataset\.sourceSignature/);
   assert.match(renderer, /translatedCell\.dataset\.translationSignature/);
+});
+
+test('submitted transcript rows use a subtle neutral treatment', () => {
+  const css = readRepoFile('styles.css');
+  const renderer = readRepoFile('renderer.js');
+  const updateRow = getFunctionSource(renderer, 'updateTranscriptRow');
+  const normalizeEntries = getFunctionSource(renderer, 'normalizeTranscriptEntries');
+
+  assert.match(normalizeEntries, /isSubmitted:\s*Boolean\(entry\.isSubmitted\)/);
+  assert.match(updateRow, /entry\.isSubmitted \? 'is-submitted' : ''/);
+  assert.match(css, /\.transcript-row\.is-submitted\s*\{[^}]*--transcript-row-bg:\s*color-mix\(in srgb,\s*var\(--text,\s*#ffffff\)\s*4%,\s*transparent\)/s);
+  assert.match(css, /\.transcript-row\.is-submitted\s+\.transcript-cell-source\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--text,\s*#ffffff\)\s*86%,\s*var\(--text-muted,\s*#a9a9a9\)\)/s);
+  assert.doesNotMatch(css, /\.transcript-row\.is-submitted\s*\{[^}]*var\(--accent/s);
 });
 
 test('panel divider has a visible default grip affordance', () => {

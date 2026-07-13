@@ -328,6 +328,7 @@ function normalizeTranscriptEntries(data) {
           translatedText: typeof entry.translatedText === 'string' ? entry.translatedText : '',
           status,
           isFinal: Boolean(entry.isFinal),
+          isSubmitted: Boolean(entry.isSubmitted),
           speakerTag: normalizeTranscriptSpeakerTag(entry.speakerTag)
         };
       });
@@ -344,6 +345,7 @@ function normalizeTranscriptEntries(data) {
     translatedText: '',
     status: 'pending',
     isFinal: false,
+    isSubmitted: false,
     speakerTag: TRANSCRIPT_SPEAKER_TAG
   }];
 }
@@ -375,12 +377,6 @@ function getTranscriptTranslationSignature(entry) {
   return JSON.stringify({
     translatedText: entry.translatedText,
     status: entry.status
-  });
-}
-
-function getTranscriptLiveSignature(entry) {
-  return JSON.stringify({
-    isFinal: Boolean(entry?.isFinal)
   });
 }
 
@@ -472,18 +468,6 @@ function updateTranscriptMarker(marker, entry, options = {}) {
   marker.hidden = !markerText;
 }
 
-function updateTranscriptLiveStatus(liveStatus, entry) {
-  const signature = getTranscriptLiveSignature(entry);
-  if (liveStatus.dataset.liveSignature === signature) {
-    return;
-  }
-
-  liveStatus.dataset.liveSignature = signature;
-  const isLive = !entry.isFinal;
-  liveStatus.textContent = isLive ? 'Live' : '';
-  liveStatus.hidden = !isLive;
-}
-
 function updateTranscriptHeaderVisibility(row) {
   const header = row.querySelector('.transcript-entry-header');
   if (!header) {
@@ -491,8 +475,7 @@ function updateTranscriptHeaderVisibility(row) {
   }
 
   const marker = header.querySelector('.transcript-entry-marker');
-  const liveStatus = header.querySelector('.transcript-live-status');
-  header.hidden = Boolean(marker?.hidden) && Boolean(liveStatus?.hidden);
+  header.hidden = Boolean(marker?.hidden);
 }
 
 function updateTranscriptSourceCell(sourceCell, entry) {
@@ -548,10 +531,7 @@ function createTranscriptRow(entry, index = 0, previousEntry = null) {
   const marker = document.createElement('span');
   marker.className = 'transcript-entry-marker';
 
-  const liveStatus = document.createElement('span');
-  liveStatus.className = 'transcript-live-status';
-  liveStatus.hidden = true;
-  header.append(marker, liveStatus);
+  header.append(marker);
 
   const body = document.createElement('div');
   body.className = 'transcript-entry-body';
@@ -579,6 +559,7 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
     getTranscriptSpeakerRoleClass(entry),
     markerOptions.includeSpeaker ? 'is-speaker-start' : '',
     hasVisibleTranscriptTranslation(entry) ? 'has-translation' : '',
+    entry.isSubmitted ? 'is-submitted' : '',
     entry.isFinal ? '' : 'is-partial',
     row.classList.contains('is-hover-height-locked') ? 'is-hover-height-locked' : ''
   ].filter(Boolean).join(' ');
@@ -591,11 +572,6 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
   const marker = row.querySelector('.transcript-entry-marker');
   if (marker) {
     updateTranscriptMarker(marker, entry, markerOptions);
-  }
-
-  const liveStatus = row.querySelector('.transcript-live-status');
-  if (liveStatus) {
-    updateTranscriptLiveStatus(liveStatus, entry);
   }
 
   updateTranscriptHeaderVisibility(row);

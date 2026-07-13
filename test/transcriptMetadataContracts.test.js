@@ -140,11 +140,25 @@ test('Ctrl+Enter marks submitted transcript text and entries from the same snaps
   assert.doesNotMatch(source, /markTranscriptSubmitted\(transcriptSnapshot\)/);
 });
 
+test('submitted transcript cursor refreshes renderer row styling without reusing payload version', () => {
+  const source = readRepoFile('main.js');
+  const markerSource = getFunctionSource(source, 'markTranscriptSubmitted');
+  const refreshSource = getFunctionSource(source, 'refreshTranscriptSubmittedState');
+
+  assert.match(markerSource, /refreshTranscriptSubmittedState\(\)/);
+  assert.match(refreshSource, /sendCaptionUpdate\(\{\s*fullText:\s*latestTranscriptText,\s*entries:\s*latestTranscriptEntries\s*\}\)/);
+  assert.doesNotMatch(refreshSource, /payloadVersion/);
+});
+
 test('caption updates send normalized entries with speaker metadata to the renderer', () => {
   const source = readRepoFile('main.js');
+  const sendCaptionUpdateSource = getFunctionSource(source, 'sendCaptionUpdate');
+  const annotationSource = getFunctionSource(source, 'annotateTranscriptEntriesForRenderer');
 
   assert.doesNotMatch(source, /entries:\s*payload\?\.entries\s*\|\|\s*latestTranscriptEntries/);
   assert.match(source, /entries:\s*latestTranscriptEntries/);
+  assert.match(sendCaptionUpdateSource, /annotateTranscriptEntriesForRenderer/);
+  assert.match(annotationSource, /isSubmitted:\s*isTranscriptEntrySubmitted\(entry\)/);
 });
 
 test('transcript metadata is speaker-only without timestamp state', () => {
