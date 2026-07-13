@@ -245,15 +245,14 @@ body {
 .transcript-title-row {
   display: flex;
   align-items: center;
-  gap: 8px;
   min-width: 0;
 }
 
 .transcript-source-pill {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: 180px;
-  padding: 3px 7px;
+  max-width: 100%;
+  padding: 4px 8px;
   border: 1px solid rgba(74, 158, 255, 0.24);
   border-radius: 999px;
   background: rgba(74, 158, 255, 0.1);
@@ -446,15 +445,15 @@ body {
     gap: 6px;
   }
 
-  .transcript-row .transcript-entry-body {
+  .transcript-content.is-deepgram-source .transcript-row .transcript-entry-body {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .transcript-row .transcript-cell-source {
+  .transcript-content.is-deepgram-source .transcript-row .transcript-cell-source {
     padding-bottom: 8px;
   }
 
-  .transcript-row .transcript-cell-translation {
+  .transcript-content.is-deepgram-source .transcript-row .transcript-cell-translation {
     margin: 0 16px 12px;
     padding: 10px 12px;
     max-width: none;
@@ -472,10 +471,6 @@ body {
 
   .transcript-header.is-live-captions-source .transcript-title-row {
     gap: 6px;
-  }
-
-  .transcript-header.is-live-captions-source .transcript-source-pill {
-    display: none;
   }
 
   .transcript-header.is-live-captions-source .transcript-actions {
@@ -596,6 +591,7 @@ body {
   max-width: none;
   border-bottom: 1px solid #2d2d2d;
   border-left: 3px solid transparent;
+  background: var(--transcript-row-bg, transparent);
 }
 
 .transcript-row-role-them {
@@ -604,10 +600,20 @@ body {
   border-left-color: color-mix(in srgb, var(--accent, #4a9eff) 50%, transparent);
 }
 
+.transcript-content.is-deepgram-source .transcript-row-role-them {
+  --transcript-row-bg: color-mix(in srgb, var(--accent, #4a9eff) 7%, transparent);
+  --transcript-translation-bg: color-mix(in srgb, var(--accent, #4a9eff) 10%, transparent);
+}
+
 .transcript-row-role-me {
   align-self: flex-start;
   margin-left: 0;
   border-left-color: color-mix(in srgb, var(--success, #42c46f) 54%, transparent);
+}
+
+.transcript-content.is-deepgram-source .transcript-row-role-me {
+  --transcript-row-bg: color-mix(in srgb, var(--success, #42c46f) 7%, transparent);
+  --transcript-translation-bg: color-mix(in srgb, var(--success, #42c46f) 10%, transparent);
 }
 
 .transcript-row-role-me .transcript-entry-body {
@@ -627,6 +633,11 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.transcript-entry-marker[hidden],
+.transcript-entry-header[hidden] {
+  display: none;
 }
 
 .transcript-entry-body {
@@ -694,7 +705,10 @@ body {
 
 .transcript-cell-translation {
   border-left: 1px solid #252525;
-  background: color-mix(in srgb, var(--panel-bg, #2b2b2b) 26%, transparent);
+  background: var(
+    --transcript-translation-bg,
+    color-mix(in srgb, var(--panel-bg, #2b2b2b) 26%, transparent)
+  );
   color: color-mix(in srgb, var(--text-soft, #cfcfcf) 84%, var(--text-muted, #a9a9a9));
   max-width: 78ch;
 }

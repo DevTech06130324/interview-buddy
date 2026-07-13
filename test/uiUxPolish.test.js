@@ -29,6 +29,19 @@ test('transcript panel has a source pill and source-aware empty state', () => {
   assert.match(renderer, /Start Deepgram transcription to capture audio\./);
 });
 
+test('transcript header uses status tags instead of a static title', () => {
+  const html = readRepoFile('index.html');
+  const css = readRepoFile('styles.css');
+
+  const titleRowMatch = html.match(/<div class="transcript-title-row">([\s\S]*?)<\/div>/);
+  assert.ok(titleRowMatch, 'Expected transcript title row');
+  assert.doesNotMatch(titleRowMatch[1], />\s*Transcript\s*</);
+  assert.match(titleRowMatch[1], /id="transcriptSourcePill"/);
+
+  assert.match(css, /\.transcript-source-pill\s*\{[^}]*max-width:\s*100%;/s);
+  assert.doesNotMatch(css, /\.transcript-header\.is-live-captions-source\s+\.transcript-source-pill\s*\{[^}]*display:\s*none;/s);
+});
+
 test('transcript header layout adapts to live captions and deepgram sources', () => {
   const html = readRepoFile('index.html');
   const css = readRepoFile('styles.css');

@@ -36,11 +36,15 @@
     };
   }
 
-  function joinSourceText(entries) {
-    return entries
-      .map((entry) => getCleanText(entry?.sourceText))
+  function joinReadableText(parts) {
+    return parts
+      .map((part) => getCleanText(part))
       .filter(Boolean)
-      .join('\n');
+      .join(' ');
+  }
+
+  function joinSourceText(entries) {
+    return joinReadableText(entries.map((entry) => entry?.sourceText));
   }
 
   function joinTranslatedText(entries) {
@@ -60,7 +64,7 @@
       translatedLines.push(TRANSCRIPT_DISPLAY_GROUP_TRANSLATING_TEXT);
     }
 
-    return translatedLines.join('\n');
+    return joinReadableText(translatedLines);
   }
 
   function getGroupStatus(entries) {

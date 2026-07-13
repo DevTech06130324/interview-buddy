@@ -73,11 +73,14 @@ test('transcript rows show metadata above text with responsive secondary transla
   assert.match(css, /\.transcript-content\.is-translation-hidden\s+\.transcript-entry-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
   assert.match(css, /\.transcript-entry-text\s*\{[^}]*max-width:\s*78ch;/s);
   assert.match(css, /\.transcript-cell-translation\s*\{[^}]*max-width:\s*78ch;/s);
-  assert.match(css, /\.transcript-cell-translation\s*\{[^}]*background:\s*color-mix/s);
-  assert.match(css, /@container transcript-panel \(max-width: 520px\)[\s\S]*\.transcript-row\s+\.transcript-cell-translation\s*\{[^}]*border-top:/s);
+  assert.match(css, /\.transcript-cell-translation\s*\{[^}]*background:\s*var\(\s*--transcript-translation-bg,/s);
+  assert.match(css, /@container transcript-panel \(max-width: 520px\)[\s\S]*\.transcript-content\.is-deepgram-source\s+\.transcript-row\s+\.transcript-cell-translation\s*\{[^}]*border-top:/s);
+  assert.doesNotMatch(css, /@container transcript-panel \(max-width: 520px\)[\s\S]*\.transcript-content\.is-live-captions-source\s+\.transcript-row\s+\.transcript-cell-translation\s*\{[^}]*border-top:/s);
   assert.match(html, /src="src\/transcriptDisplayGroups\.js"/);
   assert.match(renderer, /createTranscriptDisplayGroups/);
   assert.match(renderer, /const displayEntries = createTranscriptDisplayGroups\(entries\)/);
+  assert.match(renderer, /transcriptEl\.classList\.toggle\('is-deepgram-source', isDeepgramSource\)/);
+  assert.match(renderer, /transcriptEl\.classList\.toggle\('is-live-captions-source', !isDeepgramSource\)/);
 
   const updateSourceCell = getFunctionSource(renderer, 'updateTranscriptSourceCell');
   const createTranscriptRow = getFunctionSource(renderer, 'createTranscriptRow');
@@ -93,6 +96,8 @@ test('transcript rows show metadata above text with responsive secondary transla
   assert.match(createTranscriptRow, /transcript-live-status/);
   assert.match(createTranscriptRow, /row\.setAttribute\('role', 'article'\)/);
   assert.match(createTranscriptRow, /row\.append\(header,\s*body\)/);
+  assert.match(updateRow, /updateTranscriptHeaderVisibility\(row\)/);
+  assert.match(css, /\.transcript-entry-marker\[hidden\],\s*\.transcript-entry-header\[hidden\]\s*\{[^}]*display:\s*none;/s);
   assert.doesNotMatch(updateSourceCell, /createElement\('button'\)/);
   assert.doesNotMatch(updateSourceCell, /document\.createTextNode\(' '\)/);
   assert.doesNotMatch(createTranscriptRow, /addEventListener\('click'/);

@@ -39,6 +39,8 @@ test('transcript renderer applies role classes with consistent transcript row al
   assert.match(renderer, /transcript-row-role-me/);
   assert.match(css, /\.transcript-row-role-them/);
   assert.match(css, /\.transcript-row-role-me/);
+  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\s*\{[^}]*--transcript-row-bg:/s);
+  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\s*\{[^}]*--transcript-row-bg:/s);
   assert.match(css, /\.transcript-row-role-me\s+\.transcript-entry-body/);
   assert.match(css, /\.transcript-row-role-me\s+\.transcript-entry-header/);
   assert.match(css, /text-align:\s*left/);

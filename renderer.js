@@ -414,6 +414,17 @@ function updateTranscriptLiveStatus(liveStatus, entry) {
   liveStatus.hidden = !isLive;
 }
 
+function updateTranscriptHeaderVisibility(row) {
+  const header = row.querySelector('.transcript-entry-header');
+  if (!header) {
+    return;
+  }
+
+  const marker = header.querySelector('.transcript-entry-marker');
+  const liveStatus = header.querySelector('.transcript-live-status');
+  header.hidden = Boolean(marker?.hidden) && Boolean(liveStatus?.hidden);
+}
+
 function updateTranscriptSourceCell(sourceCell, entry) {
   const signature = getTranscriptSourceSignature(entry);
   if (sourceCell.dataset.sourceSignature === signature) {
@@ -509,6 +520,8 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
   if (liveStatus) {
     updateTranscriptLiveStatus(liveStatus, entry);
   }
+
+  updateTranscriptHeaderVisibility(row);
 
   const sourceCell = row.querySelector('.transcript-cell-source');
   if (sourceCell) {
@@ -635,6 +648,11 @@ function updateTranscriptHeaderLayout() {
   const isDeepgramSource = transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM;
   transcriptHeader.classList.toggle('is-deepgram-source', isDeepgramSource);
   transcriptHeader.classList.toggle('is-live-captions-source', !isDeepgramSource);
+
+  if (transcriptEl) {
+    transcriptEl.classList.toggle('is-deepgram-source', isDeepgramSource);
+    transcriptEl.classList.toggle('is-live-captions-source', !isDeepgramSource);
+  }
 }
 
 function updateTranscriptSourcePill() {
