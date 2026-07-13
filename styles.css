@@ -249,8 +249,10 @@ body {
 }
 
 .transcript-source-pill {
-  flex: 1 1 auto;
+  display: inline-flex;
+  flex: 0 1 auto;
   min-width: 0;
+  width: fit-content;
   max-width: 100%;
   padding: 4px 8px;
   border: 1px solid rgba(74, 158, 255, 0.24);
@@ -601,8 +603,9 @@ body {
 }
 
 .transcript-content.is-deepgram-source .transcript-row-role-them {
-  --transcript-row-bg: color-mix(in srgb, var(--accent, #4a9eff) 7%, transparent);
-  --transcript-translation-bg: color-mix(in srgb, var(--accent, #4a9eff) 10%, transparent);
+  --transcript-row-bg: color-mix(in srgb, var(--text, #ffffff) 3%, transparent);
+  --transcript-translation-bg: color-mix(in srgb, var(--text, #ffffff) 4%, transparent);
+  border-left-color: color-mix(in srgb, var(--text-muted, #a9a9a9) 28%, transparent);
 }
 
 .transcript-row-role-me {
@@ -612,8 +615,9 @@ body {
 }
 
 .transcript-content.is-deepgram-source .transcript-row-role-me {
-  --transcript-row-bg: color-mix(in srgb, var(--success, #42c46f) 7%, transparent);
-  --transcript-translation-bg: color-mix(in srgb, var(--success, #42c46f) 10%, transparent);
+  --transcript-row-bg: color-mix(in srgb, var(--text, #ffffff) 5%, transparent);
+  --transcript-translation-bg: color-mix(in srgb, var(--text, #ffffff) 6%, transparent);
+  border-left-color: color-mix(in srgb, var(--text-muted, #a9a9a9) 40%, transparent);
 }
 
 .transcript-row-role-me .transcript-entry-body {
@@ -678,6 +682,18 @@ body {
   color: #cdf3dc;
 }
 
+.transcript-content.is-deepgram-source .transcript-entry-marker {
+  border-color: color-mix(in srgb, var(--text-muted, #a9a9a9) 28%, transparent);
+  background: color-mix(in srgb, var(--text, #ffffff) 5%, transparent);
+  color: var(--text-soft, #cfcfcf);
+}
+
+.transcript-content.is-deepgram-source .transcript-row-role-me .transcript-entry-marker {
+  border-color: color-mix(in srgb, var(--text-muted, #a9a9a9) 38%, transparent);
+  background: color-mix(in srgb, var(--text, #ffffff) 7%, transparent);
+  color: var(--text, #ffffff);
+}
+
 .transcript-live-status {
   display: inline-flex;
   align-items: center;
@@ -717,6 +733,27 @@ body {
 .transcript-cell-translation.is-refreshing {
   color: #8f8f8f;
   font-style: italic;
+}
+
+@container transcript-panel (max-width: 360px) {
+  .transcript-content:not(.is-translation-hidden):not(.is-translation-disabled) .transcript-row.has-translation .transcript-entry-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .transcript-content:not(.is-translation-hidden):not(.is-translation-disabled) .transcript-row.has-translation .transcript-cell-translation {
+    display: none;
+    max-width: none;
+    margin: 0;
+    border-left: none;
+  }
+
+  .transcript-content:not(.is-translation-hidden):not(.is-translation-disabled) .transcript-row.has-translation:hover .transcript-cell-source {
+    display: none;
+  }
+
+  .transcript-content:not(.is-translation-hidden):not(.is-translation-disabled) .transcript-row.has-translation:hover .transcript-cell-translation {
+    display: block;
+  }
 }
 
 .transcript-source-status {

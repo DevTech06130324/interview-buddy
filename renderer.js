@@ -383,6 +383,15 @@ function getTranscriptLiveSignature(entry) {
   });
 }
 
+function hasVisibleTranscriptTranslation(entry) {
+  if (entry?.status === 'disabled') {
+    return false;
+  }
+
+  return entry?.status === 'pending'
+    || (typeof entry?.translatedText === 'string' && Boolean(entry.translatedText.trim()));
+}
+
 function getTranscriptRowAriaLabel(entry) {
   const speaker = normalizeTranscriptSpeakerTag(entry?.speakerTag);
   return entry?.isFinal
@@ -503,6 +512,7 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
     'transcript-row',
     `transcript-row-${entry.status}`,
     getTranscriptSpeakerRoleClass(entry),
+    hasVisibleTranscriptTranslation(entry) ? 'has-translation' : '',
     entry.isFinal ? '' : 'is-partial'
   ].filter(Boolean).join(' ');
 

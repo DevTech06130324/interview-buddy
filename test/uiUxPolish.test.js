@@ -39,6 +39,8 @@ test('transcript header uses status tags instead of a static title', () => {
   assert.match(titleRowMatch[1], /id="transcriptSourcePill"/);
 
   assert.match(css, /\.transcript-source-pill\s*\{[^}]*max-width:\s*100%;/s);
+  assert.match(css, /\.transcript-source-pill\s*\{[^}]*flex:\s*0 1 auto;/s);
+  assert.match(css, /\.transcript-source-pill\s*\{[^}]*width:\s*fit-content;/s);
   assert.doesNotMatch(css, /\.transcript-header\.is-live-captions-source\s+\.transcript-source-pill\s*\{[^}]*display:\s*none;/s);
 });
 
