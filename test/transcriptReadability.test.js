@@ -103,6 +103,13 @@ test('transcript rows show metadata above text with responsive secondary transla
   assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation\s+\.transcript-cell-translation\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*visibility:\s*hidden;[^}]*opacity:\s*0;[^}]*overflow:\s*auto;/s);
   assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation:hover\s+\.transcript-cell-source\s*\{[^}]*opacity:\s*0;/s);
   assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-content:not\(\.is-translation-hidden\):not\(\.is-translation-disabled\)\s+\.transcript-row\.has-translation:hover\s+\.transcript-cell-translation\s*\{[^}]*visibility:\s*visible;[^}]*opacity:\s*1;/s);
+  assert.match(css, /\.transcript-row\.is-hover-height-locked\s*\{[^}]*height:\s*var\(--transcript-hover-lock-height\);[^}]*overflow:\s*hidden;/s);
+  assert.match(renderer, /const COMPACT_TRANSLATION_HOVER_MAX_WIDTH = 360;/);
+  assert.match(renderer, /function shouldLockTranscriptRowHoverHeight/);
+  assert.match(renderer, /function lockTranscriptRowHoverHeight/);
+  assert.match(renderer, /function unlockTranscriptRowHoverHeight/);
+  assert.match(createTranscriptRow, /pointerenter/);
+  assert.match(createTranscriptRow, /pointerleave/);
   assert.doesNotMatch(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-row\.has-translation:hover\s+\.transcript-cell-source\s*\{[^}]*display:\s*none;/s);
   assert.doesNotMatch(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-row\.has-translation:hover\s+\.transcript-cell-translation\s*\{[^}]*display:\s*block;/s);
   assert.doesNotMatch(updateSourceCell, /createElement\('button'\)/);

@@ -598,6 +598,12 @@ body {
   background: var(--transcript-row-bg, transparent);
 }
 
+.transcript-row.is-hover-height-locked {
+  height: var(--transcript-hover-lock-height);
+  min-height: var(--transcript-hover-lock-height);
+  overflow: hidden;
+}
+
 .transcript-row-role-them {
   --speaker-role-color: var(--accent, #4a9eff);
   --speaker-marker-fg: #c9def6;

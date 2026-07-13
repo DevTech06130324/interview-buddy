@@ -6,6 +6,9 @@ const TRANSCRIPT_CURSOR_MATCHED_STATUS = 'matched';
 const TRANSCRIPT_CURSOR_MISMATCH_STATUS = 'mismatch';
 const TRANSCRIPT_CURSOR_MISMATCH_REASON = 'unverified-boundary';
 const MIN_EXACT_TRANSCRIPT_OVERLAP_CHARS = 24;
+const MIN_SAME_ENTRY_REVISION_BOUNDARY_CHARS = 8;
+const TERMINAL_BOUNDARY_PUNCTUATION_PATTERN = /[.!?\u3002\uff1f\uff01]\s*$/u;
+const TRAILING_BOUNDARY_PATTERN = /[\s.!?\u3002\uff1f\uff01]+$/u;
 
 function normalizeTranscriptEntryForCursor(entry) {
   if (!entry) {
@@ -56,6 +59,52 @@ function getTranscriptEntryWithSourceText(entry, sourceText) {
   };
 }
 
+function hasTerminalBoundaryPunctuation(text) {
+  return TERMINAL_BOUNDARY_PUNCTUATION_PATTERN.test(String(text || ''));
+}
+
+function trimTerminalBoundary(text) {
+  return normalizeTranscriptPromptText(text).replace(TRAILING_BOUNDARY_PATTERN, '').trim();
+}
+
+function isTerminalBoundaryPunctuation(character) {
+  return character === '.'
+    || character === '!'
+    || character === '?'
+    || character === '\u3002'
+    || character === '\uff1f'
+    || character === '\uff01';
+}
+
+function isWordCharacter(character) {
+  return typeof character === 'string'
+    && character.length > 0
+    && /[\p{L}\p{N}]/u.test(character);
+}
+
+function getVerifiedEntryBoundaryLength(currentText, cursorText) {
+  if (currentText.startsWith(cursorText)) {
+    return cursorText.length;
+  }
+
+  const cursorBoundaryText = trimTerminalBoundary(cursorText);
+  if (
+    cursorBoundaryText.length < MIN_SAME_ENTRY_REVISION_BOUNDARY_CHARS
+    || !currentText.startsWith(cursorBoundaryText)
+  ) {
+    return -1;
+  }
+
+  let boundaryLength = cursorBoundaryText.length;
+  if (hasTerminalBoundaryPunctuation(cursorText)) {
+    while (isTerminalBoundaryPunctuation(currentText[boundaryLength])) {
+      boundaryLength += 1;
+    }
+  }
+
+  return isWordCharacter(currentText[boundaryLength]) ? -1 : boundaryLength;
+}
+
 function createMatchedCursorResult(pendingText, pendingEntries) {
   return {
     status: TRANSCRIPT_CURSOR_MATCHED_STATUS,
@@ -97,14 +146,18 @@ function getExactEntryBoundaryResult(currentEntries, cursorEntries) {
   }
 
   const cursorBoundaryEntries = cursorEntries.slice(-currentBoundaryEntries.length);
+  let currentEntryBoundaryLength = -1;
   for (let index = 0; index < currentBoundaryEntries.length; index += 1) {
     const currentBoundaryEntry = currentBoundaryEntries[index];
     const cursorBoundaryEntry = cursorBoundaryEntries[index];
     const hasSameIdentity = getExplicitEntryId(currentBoundaryEntry)
       && getExplicitEntryId(currentBoundaryEntry) === getExplicitEntryId(cursorBoundaryEntry);
     const isLastBoundaryEntry = index === currentBoundaryEntries.length - 1;
+    currentEntryBoundaryLength = isLastBoundaryEntry
+      ? getVerifiedEntryBoundaryLength(currentBoundaryEntry.sourceText, cursorBoundaryEntry.sourceText)
+      : -1;
     const hasVerifiedContent = isLastBoundaryEntry
-      ? currentBoundaryEntry.sourceText.startsWith(cursorBoundaryEntry.sourceText)
+      ? currentEntryBoundaryLength >= 0
       : currentBoundaryEntry.sourceText === cursorBoundaryEntry.sourceText;
 
     if (!hasSameIdentity || !hasVerifiedContent) {
@@ -116,7 +169,7 @@ function getExactEntryBoundaryResult(currentEntries, cursorEntries) {
 
   const pendingEntries = [];
   const currentEntryRemainder = normalizeTranscriptPromptText(
-    currentEntry.sourceText.slice(cursorEntry.sourceText.length)
+    currentEntry.sourceText.slice(currentEntryBoundaryLength)
   );
   const remainderEntry = getTranscriptEntryWithSourceText(
     currentEntry,

@@ -179,6 +179,49 @@ test('cursor accepts an exact same-ID content extension', () => {
   });
 });
 
+test('cursor accepts a same-entry Live Captions revision that drops terminal punctuation while extending', () => {
+  const currentEntry = {
+    id: 'caption-0-0',
+    sourceText: 'While you were joining which language do you want to use?',
+    speakerTag: 'Them',
+    isFinal: true
+  };
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: currentEntry.sourceText,
+    transcriptEntries: [currentEntry],
+    cursorText: 'While you were joining.',
+    cursorEntries: [{
+      ...currentEntry,
+      sourceText: 'While you were joining.'
+    }]
+  }), {
+    status: 'matched',
+    pendingText: 'which language do you want to use?',
+    pendingEntries: [{
+      ...currentEntry,
+      sourceText: 'which language do you want to use?'
+    }]
+  });
+});
+
+test('cursor rejects same-entry punctuation fallback inside a word', () => {
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: 'High confidence answer continues.',
+    transcriptEntries: [{
+      id: 'caption-0-0',
+      sourceText: 'High confidence answer continues.',
+      speakerTag: 'Them'
+    }],
+    cursorText: 'Hi.',
+    cursorEntries: [{
+      id: 'caption-0-0',
+      sourceText: 'Hi.',
+      speakerTag: 'Them'
+    }]
+  }), CURSOR_MISMATCH);
+});
+
 test('cursor accepts a latest entry extension after a fully verified entry sequence', () => {
   const firstEntry = {
     id: 'deepgram-session-them-0',

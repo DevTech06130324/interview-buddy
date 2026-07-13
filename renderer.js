@@ -99,6 +99,7 @@ const PANEL_DIVIDER_WIDTH = 10;
 const PANEL_KEYBOARD_RESIZE_STEP_PX = 10;
 const MIN_TRANSCRIPT_PANEL_WIDTH = 280;
 const MIN_BROWSER_PANEL_WIDTH = 220;
+const COMPACT_TRANSLATION_HOVER_MAX_WIDTH = 360;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 const MODE_RENAME_DOUBLE_CLICK_WINDOW_MS = 260;
 const DEEPGRAM_USAGE_REFRESH_INTERVAL_MS = 60_000;
@@ -392,6 +393,66 @@ function hasVisibleTranscriptTranslation(entry) {
     || (typeof entry?.translatedText === 'string' && Boolean(entry.translatedText.trim()));
 }
 
+function isCompactTranslationHoverMode() {
+  if (!transcriptEl) {
+    return false;
+  }
+
+  return transcriptEl.getBoundingClientRect().width <= COMPACT_TRANSLATION_HOVER_MAX_WIDTH;
+}
+
+function shouldLockTranscriptRowHoverHeight(row) {
+  return Boolean(
+    row
+    && transcriptEl
+    && transcriptEl.classList.contains('is-live-captions-source')
+    && !transcriptEl.classList.contains('is-translation-hidden')
+    && !transcriptEl.classList.contains('is-translation-disabled')
+    && row.classList.contains('is-partial')
+    && row.classList.contains('has-translation')
+    && isCompactTranslationHoverMode()
+  );
+}
+
+function lockTranscriptRowHoverHeight(row) {
+  if (!shouldLockTranscriptRowHoverHeight(row) || row.classList.contains('is-hover-height-locked')) {
+    return;
+  }
+
+  const height = Math.ceil(row.getBoundingClientRect().height);
+  if (height <= 0) {
+    return;
+  }
+
+  row.style.setProperty('--transcript-hover-lock-height', `${height}px`);
+  row.classList.add('is-hover-height-locked');
+}
+
+function unlockTranscriptRowHoverHeight(row) {
+  if (!row) {
+    return;
+  }
+
+  row.classList.remove('is-hover-height-locked');
+  row.style.removeProperty('--transcript-hover-lock-height');
+}
+
+function reconcileTranscriptRowHoverHeightLock(row) {
+  if (row?.classList.contains('is-hover-height-locked') && !shouldLockTranscriptRowHoverHeight(row)) {
+    unlockTranscriptRowHoverHeight(row);
+  }
+}
+
+function clearTranscriptHoverHeightLocks() {
+  if (!transcriptRowsEl) {
+    return;
+  }
+
+  for (const row of transcriptRowsEl.querySelectorAll('.transcript-row.is-hover-height-locked')) {
+    unlockTranscriptRowHoverHeight(row);
+  }
+}
+
 function getTranscriptRowAriaLabel(entry) {
   const speaker = normalizeTranscriptSpeakerTag(entry?.speakerTag);
   return entry?.isFinal
@@ -476,6 +537,10 @@ function createTranscriptRow(entry, index = 0, previousEntry = null) {
   const row = document.createElement('div');
   row.dataset.captionId = entry.id;
   row.setAttribute('role', 'article');
+  row.addEventListener('pointerenter', () => lockTranscriptRowHoverHeight(row));
+  row.addEventListener('pointerleave', () => unlockTranscriptRowHoverHeight(row));
+  row.addEventListener('focusin', () => lockTranscriptRowHoverHeight(row));
+  row.addEventListener('focusout', () => unlockTranscriptRowHoverHeight(row));
 
   const header = document.createElement('div');
   header.className = 'transcript-entry-header';
@@ -514,7 +579,8 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
     getTranscriptSpeakerRoleClass(entry),
     markerOptions.includeSpeaker ? 'is-speaker-start' : '',
     hasVisibleTranscriptTranslation(entry) ? 'has-translation' : '',
-    entry.isFinal ? '' : 'is-partial'
+    entry.isFinal ? '' : 'is-partial',
+    row.classList.contains('is-hover-height-locked') ? 'is-hover-height-locked' : ''
   ].filter(Boolean).join(' ');
 
   if (row.className !== rowClassName) {
@@ -538,6 +604,8 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
   if (sourceCell) {
     updateTranscriptSourceCell(sourceCell, entry);
   }
+
+  reconcileTranscriptRowHoverHeightLock(row);
 
   const translatedCell = row.querySelector('.transcript-cell-translation');
   if (!translatedCell) {
@@ -606,6 +674,10 @@ function setTranslationVisibility(isVisible) {
     transcriptEl.classList.toggle('is-translation-hidden', !translationsVisible);
   }
 
+  if (!translationsVisible) {
+    clearTranscriptHoverHeightLocks();
+  }
+
   updateTranslationToggleButtonState();
 }
 
@@ -640,6 +712,10 @@ function setTranslationEnabled(isEnabled) {
     transcriptEl.classList.toggle('is-translation-disabled', !translationEnabled);
   }
 
+  if (!translationEnabled) {
+    clearTranscriptHoverHeightLocks();
+  }
+
   updateTranslationToggleButtonState();
 }
 
@@ -657,6 +733,10 @@ function updateTranscriptHeaderLayout() {
   }
 
   const isDeepgramSource = transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM;
+  if (isDeepgramSource) {
+    clearTranscriptHoverHeightLocks();
+  }
+
   transcriptHeader.classList.toggle('is-deepgram-source', isDeepgramSource);
   transcriptHeader.classList.toggle('is-live-captions-source', !isDeepgramSource);
 
@@ -1123,6 +1203,7 @@ function applyPanelSplitRatio(ratio) {
     return;
   }
 
+  clearTranscriptHoverHeightLocks();
   currentPanelSplitRatio = clampPanelSplitRatio(ratio);
   setCurrentSplitRatio(currentPanelSplitRatio);
 
@@ -2764,6 +2845,7 @@ window.electronAPI.getTabs().then((snapshot) => {
 updateModeHotkeyInput();
 applyPanelSplitRatio(currentPanelSplitRatio);
 window.addEventListener('resize', () => {
+  clearTranscriptHoverHeightLocks();
   applyPanelSplitRatio(currentPanelSplitRatio);
 });
 window.addEventListener('beforeunload', () => {
