@@ -29,6 +29,25 @@ test('transcript panel has a source pill and source-aware empty state', () => {
   assert.match(renderer, /Start Deepgram transcription to capture audio\./);
 });
 
+test('transcript header layout adapts to live captions and deepgram sources', () => {
+  const html = readRepoFile('index.html');
+  const css = readRepoFile('styles.css');
+  const renderer = readRepoFile('renderer.js');
+
+  assert.match(html, /id="transcriptHeader"/);
+  assert.match(html, /class="transcript-header is-live-captions-source"/);
+
+  assert.match(renderer, /const transcriptHeader = document\.getElementById\('transcriptHeader'\)/);
+  assert.match(renderer, /function updateTranscriptHeaderLayout/);
+  assert.match(renderer, /transcriptHeader\.classList\.toggle\('is-deepgram-source', isDeepgramSource\)/);
+  assert.match(renderer, /transcriptHeader\.classList\.toggle\('is-live-captions-source', !isDeepgramSource\)/);
+
+  assert.match(css, /\.transcript-header\.is-live-captions-source\s*\{[^}]*flex-wrap:\s*nowrap;/s);
+  assert.match(css, /\.transcript-header\.is-deepgram-source\s+\.deepgram-usage-status\s*\{[^}]*white-space:\s*normal;/s);
+  assert.match(css, /@container transcript-panel \(max-width: 520px\)[\s\S]*\.transcript-header\.is-deepgram-source[\s\S]*\.transcript-header\.is-deepgram-source\s+\.transcript-actions/s);
+  assert.doesNotMatch(css, /@container transcript-panel \(max-width: 520px\)\s*\{\s*\.transcript-header\s*\{/);
+});
+
 test('settings window is framed as settings with transcript, deepgram, and shortcut groups', () => {
   const mainHtml = readRepoFile('index.html');
   const html = readRepoFile('hotkey-settings.html');

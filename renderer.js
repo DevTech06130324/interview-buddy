@@ -9,6 +9,7 @@ const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
 const newTranscriptIndicator = document.getElementById('newTranscriptIndicator');
 const transcriptSourceStatus = document.getElementById('transcriptSourceStatus');
+const transcriptHeader = document.getElementById('transcriptHeader');
 const transcriptSourcePill = document.getElementById('transcriptSourcePill');
 const transcriptEmptyState = document.getElementById('transcriptEmptyState');
 const transcriptEmptyTitle = document.getElementById('transcriptEmptyTitle');
@@ -590,7 +591,19 @@ function getCurrentTranscriptLifecyclePhase() {
   return transcriptSourceLifecycle.phase;
 }
 
+function updateTranscriptHeaderLayout() {
+  if (!transcriptHeader) {
+    return;
+  }
+
+  const isDeepgramSource = transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM;
+  transcriptHeader.classList.toggle('is-deepgram-source', isDeepgramSource);
+  transcriptHeader.classList.toggle('is-live-captions-source', !isDeepgramSource);
+}
+
 function updateTranscriptSourcePill() {
+  updateTranscriptHeaderLayout();
+
   if (!transcriptSourcePill) {
     return;
   }

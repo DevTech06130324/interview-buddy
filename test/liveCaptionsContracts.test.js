@@ -30,6 +30,23 @@ test('native caption boundary returns explicit ok and unavailable snapshots', ()
     assert.doesNotMatch(getCaptions, /return Napi::String::New/);
 });
 
+test('native snapshot factories do not throw while building plain result objects', () => {
+    const source = read('native/livecaptions.cpp');
+    const factoriesStart = source.indexOf('Napi::Value CreateUndefinedValue');
+    const factoriesEnd = source.indexOf('void ReleaseCachedLiveCaptionsElements');
+
+    assert.notEqual(factoriesStart, -1, 'caption result factories should use raw N-API helpers');
+    assert.notEqual(factoriesEnd, -1, 'caption result factories should remain before cleanup helpers');
+
+    const factories = source.slice(factoriesStart, factoriesEnd);
+    assert.match(source, /Napi::Value CreateLifecycleResult/);
+    assert.match(factories, /napi_create_object/);
+    assert.match(factories, /napi_set_named_property/);
+    assert.doesNotMatch(factories, /Napi::Object::New/);
+    assert.doesNotMatch(factories, /\.Set\(/);
+    assert.doesNotMatch(factories, /ThrowAsJavaScriptException/);
+});
+
 test('native close validates exact registered handle ownership before WM_CLOSE', () => {
     const source = read('native/livecaptions.cpp');
     const closeTracked = functionSource(source, 'bool CloseTrackedLiveCaptions', 'bool AttachToLiveCaptionsWindow');
@@ -223,7 +240,7 @@ test('owned close waits for exact process-handle exit before clearing ownership'
     const terminate = functionSource(
         source,
         'HRESULT TerminateRegisteredOwnedProcess',
-        'Napi::Object CreateCaptionOkSnapshot'
+        'Napi::Value CreateUndefinedValue'
     );
 
     assert.match(closeTracked, /WaitForRegisteredOwnedProcessExit\(\s*trackedProcessId/);

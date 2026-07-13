@@ -230,10 +230,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   -webkit-app-region: no-drag;
 }
 
 .transcript-heading {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -249,6 +251,7 @@ body {
 
 .transcript-source-pill {
   flex: 0 1 auto;
+  min-width: 0;
   max-width: 180px;
   padding: 3px 7px;
   border: 1px solid rgba(74, 158, 255, 0.24);
@@ -282,6 +285,7 @@ body {
 .transcript-actions {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 8px;
   -webkit-app-region: no-drag;
 }
@@ -396,17 +400,82 @@ body {
   box-shadow: 0 -5px 0 -3px currentColor;
 }
 
+.transcript-header.is-live-captions-source {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.transcript-header.is-live-captions-source .transcript-actions {
+  flex-wrap: nowrap;
+}
+
+.transcript-header.is-deepgram-source {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title actions"
+    "usage actions";
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.transcript-header.is-deepgram-source .transcript-heading {
+  display: contents;
+}
+
+.transcript-header.is-deepgram-source .transcript-title-row {
+  grid-area: title;
+}
+
+.transcript-header.is-deepgram-source .deepgram-usage-status {
+  grid-area: usage;
+  white-space: normal;
+}
+
+.transcript-header.is-deepgram-source .transcript-actions {
+  grid-area: actions;
+  align-self: center;
+}
+
 @container transcript-panel (max-width: 520px) {
-  .transcript-header {
-    align-items: flex-start;
-    flex-wrap: wrap;
-    gap: 10px;
+  .transcript-header.is-deepgram-source {
+    gap: 5px 8px;
   }
 
-  .transcript-actions {
-    width: 100%;
-    flex-wrap: wrap;
+  .transcript-header.is-deepgram-source .transcript-actions {
     gap: 6px;
+  }
+}
+
+@container transcript-panel (max-width: 360px) {
+  .transcript-header.is-live-captions-source {
+    padding-inline: 12px;
+    gap: 6px;
+  }
+
+  .transcript-header.is-live-captions-source .transcript-title-row {
+    gap: 6px;
+  }
+
+  .transcript-header.is-live-captions-source .transcript-source-pill {
+    display: none;
+  }
+
+  .transcript-header.is-live-captions-source .transcript-actions {
+    gap: 4px;
+  }
+
+  .transcript-header.is-deepgram-source {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "title"
+      "usage"
+      "actions";
+  }
+
+  .transcript-header.is-deepgram-source .transcript-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }
 

@@ -142,36 +142,116 @@ HRESULT TerminateRegisteredOwnedProcess(
     return HRESULT_FROM_WIN32(GetLastError());
 }
 
-Napi::Object CreateCaptionOkSnapshot(Napi::Env env, const std::string& text) {
-    Napi::Object snapshot = Napi::Object::New(env);
-    snapshot.Set("status", Napi::String::New(env, "ok"));
-    snapshot.Set("text", Napi::String::New(env, text));
-    return snapshot;
+Napi::Value CreateUndefinedValue(Napi::Env env) {
+    napi_value value = nullptr;
+    if (napi_get_undefined(env, &value) != napi_ok) {
+        return Napi::Value();
+    }
+    return Napi::Value(env, value);
 }
 
-Napi::Object CreateCaptionUnavailableSnapshot(
+bool SetStringProperty(
+    napi_env env,
+    napi_value object,
+    const char* name,
+    const std::string& value
+) {
+    napi_value propertyValue = nullptr;
+    if (napi_create_string_utf8(env, value.c_str(), value.size(), &propertyValue) != napi_ok) {
+        return false;
+    }
+    return napi_set_named_property(env, object, name, propertyValue) == napi_ok;
+}
+
+bool SetStringProperty(
+    napi_env env,
+    napi_value object,
+    const char* name,
+    const char* value
+) {
+    napi_value propertyValue = nullptr;
+    if (napi_create_string_utf8(env, value ? value : "", NAPI_AUTO_LENGTH, &propertyValue) != napi_ok) {
+        return false;
+    }
+    return napi_set_named_property(env, object, name, propertyValue) == napi_ok;
+}
+
+bool SetBooleanProperty(napi_env env, napi_value object, const char* name, bool value) {
+    napi_value propertyValue = nullptr;
+    if (napi_get_boolean(env, value, &propertyValue) != napi_ok) {
+        return false;
+    }
+    return napi_set_named_property(env, object, name, propertyValue) == napi_ok;
+}
+
+bool SetNumberProperty(napi_env env, napi_value object, const char* name, double value) {
+    napi_value propertyValue = nullptr;
+    if (napi_create_double(env, value, &propertyValue) != napi_ok) {
+        return false;
+    }
+    return napi_set_named_property(env, object, name, propertyValue) == napi_ok;
+}
+
+Napi::Value CreateCaptionOkSnapshot(Napi::Env env, const std::string& text) {
+    napi_env rawEnv = env;
+    napi_value snapshot = nullptr;
+    if (napi_create_object(rawEnv, &snapshot) != napi_ok) {
+        return CreateUndefinedValue(env);
+    }
+
+    if (
+        !SetStringProperty(rawEnv, snapshot, "status", "ok")
+        || !SetStringProperty(rawEnv, snapshot, "text", text)
+    ) {
+        return CreateUndefinedValue(env);
+    }
+
+    return Napi::Value(env, snapshot);
+}
+
+Napi::Value CreateCaptionUnavailableSnapshot(
     Napi::Env env,
     const char* code,
     const char* message
 ) {
-    Napi::Object snapshot = Napi::Object::New(env);
-    snapshot.Set("status", Napi::String::New(env, "unavailable"));
-    snapshot.Set("code", Napi::String::New(env, code));
-    snapshot.Set("message", Napi::String::New(env, message));
-    return snapshot;
+    napi_env rawEnv = env;
+    napi_value snapshot = nullptr;
+    if (napi_create_object(rawEnv, &snapshot) != napi_ok) {
+        return CreateUndefinedValue(env);
+    }
+
+    if (
+        !SetStringProperty(rawEnv, snapshot, "status", "unavailable")
+        || !SetStringProperty(rawEnv, snapshot, "code", code)
+        || !SetStringProperty(rawEnv, snapshot, "message", message)
+    ) {
+        return CreateUndefinedValue(env);
+    }
+
+    return Napi::Value(env, snapshot);
 }
 
-Napi::Object CreateLifecycleResult(
+Napi::Value CreateLifecycleResult(
     Napi::Env env,
     bool success,
     DWORD processId,
     bool owned
 ) {
-    Napi::Object result = Napi::Object::New(env);
-    result.Set("success", Napi::Boolean::New(env, success));
-    result.Set("processId", Napi::Number::New(env, static_cast<double>(processId)));
-    result.Set("owned", Napi::Boolean::New(env, owned));
-    return result;
+    napi_env rawEnv = env;
+    napi_value result = nullptr;
+    if (napi_create_object(rawEnv, &result) != napi_ok) {
+        return CreateUndefinedValue(env);
+    }
+
+    if (
+        !SetBooleanProperty(rawEnv, result, "success", success)
+        || !SetNumberProperty(rawEnv, result, "processId", static_cast<double>(processId))
+        || !SetBooleanProperty(rawEnv, result, "owned", owned)
+    ) {
+        return CreateUndefinedValue(env);
+    }
+
+    return Napi::Value(env, result);
 }
 
 void ReleaseCachedLiveCaptionsElements() {
