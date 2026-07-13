@@ -64,21 +64,22 @@ class CaptionSyncService extends EventEmitter {
     }
 
     async start() {
-        if (this.isRunning) {
-            return true;
-        }
         if (this.startPromise) {
             return this.startPromise;
         }
 
+        const closeBeforeStart = this.isRunning || this.requiresFreshSessionBoundary;
         const startPromise = (async () => {
             try {
+                if (closeBeforeStart) {
+                    await this.closeLiveCaptionsForFreshStart();
+                }
+
                 const state = await this.workerClient.start();
-                if (state?.active && this.requiresFreshSessionBoundary) {
-                    await this.workerClient.restart();
+                this.isRunning = Boolean(state?.active);
+                if (this.isRunning) {
                     this.requiresFreshSessionBoundary = false;
                 }
-                this.isRunning = Boolean(state?.active);
                 return this.isRunning;
             } catch (error) {
                 this.isRunning = false;
@@ -95,6 +96,12 @@ class CaptionSyncService extends EventEmitter {
                 this.startPromise = null;
             }
         }
+    }
+
+    async closeLiveCaptionsForFreshStart() {
+        this.isRunning = false;
+        this.resetUnavailableEpisode();
+        return this.workerClient.close();
     }
 
     stop() {
@@ -117,6 +124,7 @@ class CaptionSyncService extends EventEmitter {
 
     async clearTranscript() {
         this.beginNewSession();
+        let closedBeforeFailure = false;
 
         this.emit('captionUpdate', {
             fullText: '',
@@ -124,7 +132,18 @@ class CaptionSyncService extends EventEmitter {
         });
 
         try {
-            await this.workerClient.restart();
+            const closeResult = await this.closeLiveCaptionsForFreshStart();
+            closedBeforeFailure = closeResult?.closed !== false;
+
+            const state = await this.workerClient.start();
+            this.isRunning = Boolean(state?.active);
+            if (!this.isRunning) {
+                const error = new Error('Live Captions could not restart after clearing the transcript.');
+                error.code = 'LIVECAPTIONS_CLEAR_RESTART_FAILED';
+                throw error;
+            }
+            this.requiresFreshSessionBoundary = false;
+
             const liveCaptionsVisible = await this.getLiveCaptionsVisibility();
             return {
                 success: true,
@@ -132,7 +151,7 @@ class CaptionSyncService extends EventEmitter {
             };
         } catch (error) {
             this.isRunning = false;
-            this.requiresFreshSessionBoundary = true;
+            this.requiresFreshSessionBoundary = !closedBeforeFailure;
             this.emit('error', error);
             return {
                 success: false,

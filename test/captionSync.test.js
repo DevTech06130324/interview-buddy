@@ -75,7 +75,7 @@ test('empty successful and unavailable reads preserve accumulated transcript; ex
     const clearResult = await service.clearTranscript();
 
     assert.deepEqual(updates.at(-1), { fullText: '', entries: [] });
-    assert.deepEqual(workerClient.calls, ['start', 'restart', 'getVisibility']);
+    assert.deepEqual(workerClient.calls, ['start', 'close', 'start', 'getVisibility']);
     assert.deepEqual(clearResult, {
         success: true,
         liveCaptionsVisible: false
@@ -91,6 +91,16 @@ test('visibility controls start Live Captions when called during renderer startu
 
     assert.equal(await service.setLiveCaptionsVisibility(true), true);
     assert.deepEqual(workerClient.calls, ['start', 'getVisibility', ['setVisibility', true]]);
+});
+
+test('starting an already-running Live Captions source closes it before relaunching', async () => {
+    const workerClient = new FakeWorkerClient();
+    const service = new CaptionSyncService({ workerClient });
+
+    assert.equal(await service.start(), true);
+    assert.equal(await service.start(), true);
+
+    assert.deepEqual(workerClient.calls, ['start', 'close', 'start']);
 });
 
 test('recoverable read errors keep an active Live Captions source active', () => {
@@ -211,19 +221,18 @@ test('worker manual-retry errors propagate without fabricating an empty transcri
     assert.deepEqual(errors, [workerError]);
 });
 
-test('a failed Clear restart allows a later explicit source start', async () => {
+test('a failed Clear relaunch allows a later explicit source start', async () => {
     const workerClient = new FakeWorkerClient();
-    const originalRestart = workerClient.restart;
-    let restartAttempts = 0;
-    workerClient.restart = async function restart() {
-        this.calls.push('restart');
-        restartAttempts += 1;
-        if (restartAttempts === 1) {
-            const error = new Error('native restart failed');
-            error.code = 'LIVECAPTIONS_RESTART_FAILED';
+    let startAttempts = 0;
+    workerClient.start = async function start() {
+        this.calls.push('start');
+        startAttempts += 1;
+        if (startAttempts === 2) {
+            const error = new Error('native relaunch failed');
+            error.code = 'LIVECAPTIONS_RELAUNCH_FAILED';
             throw error;
         }
-        return originalRestart.call(this);
+        return { active: true };
     };
     const service = new CaptionSyncService({ workerClient });
     service.on('error', () => {});
@@ -237,7 +246,7 @@ test('a failed Clear restart allows a later explicit source start', async () => 
         liveCaptionsVisible: null
     });
     assert.equal(restarted, true);
-    assert.deepEqual(workerClient.calls, ['start', 'restart', 'start', 'restart', 'restart']);
+    assert.deepEqual(workerClient.calls, ['start', 'close', 'start', 'start']);
 });
 
 test('Clear baseline snapshots never restore old text and remain cumulative after rolling overlap', async () => {
@@ -262,7 +271,7 @@ test('Clear baseline snapshots never restore old text and remain cumulative afte
     ]);
 });
 
-test('source switching rotates a Live Captions session and establishes a fresh native boundary before resume', async () => {
+test('source switching rotates a Live Captions session and relaunches before resume', async () => {
     const workerClient = new FakeWorkerClient();
     const service = new CaptionSyncService({
         workerClient,
@@ -280,7 +289,7 @@ test('source switching rotates a Live Captions session and establishes a fresh n
     assert.equal(service.getSessionId(), 'caption-session-2');
     assert.equal(resumed, true);
     assert.equal(service.getState().requiresFreshSessionBoundary, false);
-    assert.deepEqual(workerClient.calls, ['start', 'stop', 'start', 'restart']);
+    assert.deepEqual(workerClient.calls, ['start', 'stop', 'close', 'start']);
 });
 
 test('source switching before any Live Captions text resumes without forcing a clear boundary', async () => {
