@@ -9,6 +9,10 @@ const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
 const newTranscriptIndicator = document.getElementById('newTranscriptIndicator');
 const transcriptSourceStatus = document.getElementById('transcriptSourceStatus');
+const transcriptSourcePill = document.getElementById('transcriptSourcePill');
+const transcriptEmptyState = document.getElementById('transcriptEmptyState');
+const transcriptEmptyTitle = document.getElementById('transcriptEmptyTitle');
+const transcriptEmptyCopy = document.getElementById('transcriptEmptyCopy');
 const deepgramUsageStatus = document.getElementById('deepgramUsageStatus');
 const deepgramRemainingUsageValue = document.getElementById('deepgramRemainingUsageValue');
 const saveTranscriptBtn = document.getElementById('saveTranscriptBtn');
@@ -498,6 +502,7 @@ function renderTranscriptEntries(entries) {
         return marker ? `${marker}\n${entry.sourceText}` : entry.sourceText;
       })
       .join('\n\n');
+    updateTranscriptEmptyState(displayEntries);
     return;
   }
 
@@ -529,6 +534,8 @@ function renderTranscriptEntries(entries) {
   for (const staleRow of existingRows.values()) {
     staleRow.remove();
   }
+
+  updateTranscriptEmptyState(displayEntries);
 }
 
 function setTranslationVisibility(isVisible) {
@@ -573,6 +580,102 @@ function setTranslationEnabled(isEnabled) {
   }
 
   updateTranslationToggleButtonState();
+}
+
+function getCurrentTranscriptLifecyclePhase() {
+  if (!transcriptSourceLifecycle || transcriptSourceLifecycle.source !== transcriptSource) {
+    return '';
+  }
+
+  return transcriptSourceLifecycle.phase;
+}
+
+function updateTranscriptSourcePill() {
+  if (!transcriptSourcePill) {
+    return;
+  }
+
+  const phase = getCurrentTranscriptLifecyclePhase();
+  let label;
+
+  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+    if (!hasDeepgramApiKey) {
+      label = 'Deepgram - API key needed';
+    } else if (deepgramCaptureActive) {
+      label = 'Deepgram - Recording';
+    } else if (phase === 'connecting') {
+      label = 'Deepgram - Connecting';
+    } else if (phase === 'reconnecting') {
+      label = 'Deepgram - Reconnecting';
+    } else if (phase === 'stopping') {
+      label = 'Deepgram - Stopping';
+    } else if (phase === 'error') {
+      label = 'Deepgram - Needs attention';
+    } else {
+      label = 'Deepgram - Ready';
+    }
+  } else if (phase === 'connecting') {
+    label = 'Live Captions - Connecting';
+  } else if (phase === 'reconnecting') {
+    label = 'Live Captions - Reconnecting';
+  } else if (phase === 'stopping') {
+    label = 'Live Captions - Stopping';
+  } else if (phase === 'error') {
+    label = 'Live Captions - Needs attention';
+  } else if (phase === 'active') {
+    label = 'Live Captions - Listening';
+  } else {
+    label = 'Live Captions - Waiting';
+  }
+
+  transcriptSourcePill.textContent = label;
+}
+
+function getTranscriptEmptyStateContent() {
+  if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
+    if (!hasDeepgramApiKey) {
+      return {
+        title: 'Deepgram needs an API key',
+        copy: 'Add a Deepgram API key in settings to use transcription.'
+      };
+    }
+
+    if (deepgramCaptureActive) {
+      return {
+        title: 'Listening for transcript...',
+        copy: 'Deepgram transcript will appear here when audio is detected.'
+      };
+    }
+
+    return {
+      title: 'Deepgram is ready',
+      copy: 'Start Deepgram transcription to capture audio.'
+    };
+  }
+
+  return {
+    title: 'Listening for transcript...',
+    copy: 'Live Captions will appear here when speech is detected.'
+  };
+}
+
+function updateTranscriptEmptyState(entries) {
+  if (!transcriptEl || !transcriptEmptyState) {
+    return;
+  }
+
+  const hasTranscriptContent = Array.isArray(entries)
+    ? entries.some((entry) => typeof entry?.sourceText === 'string' && entry.sourceText.trim())
+    : Boolean(transcriptRowsEl?.querySelector('.transcript-row[data-caption-id]'));
+  const emptyStateContent = getTranscriptEmptyStateContent();
+
+  transcriptEl.classList.toggle('has-transcript-content', hasTranscriptContent);
+  if (transcriptEmptyTitle) {
+    transcriptEmptyTitle.textContent = emptyStateContent.title;
+  }
+  if (transcriptEmptyCopy) {
+    transcriptEmptyCopy.textContent = emptyStateContent.copy;
+  }
 }
 
 function getDeepgramRecorderMimeType() {
@@ -633,6 +736,9 @@ function updateDeepgramUsageStatus(usage = {}) {
   if (deepgramRemainingUsageValue) {
     deepgramRemainingUsageValue.textContent = deepgramRemainingText;
   }
+
+  updateTranscriptSourcePill();
+  updateTranscriptEmptyState();
 }
 
 function syncDeepgramCaptureFromPreferences() {
@@ -643,12 +749,16 @@ function syncDeepgramCaptureFromPreferences() {
 
   updateDeepgramUsageStatus();
   updateTranscriptSourceControlButton();
+  updateTranscriptSourcePill();
+  updateTranscriptEmptyState();
 }
 
 function applyDeepgramCaptureState(state = {}) {
   deepgramCaptureActive = Boolean(state?.active);
   updateDeepgramUsageStatus(state);
   updateTranscriptSourceControlButton();
+  updateTranscriptSourcePill();
+  updateTranscriptEmptyState();
 }
 
 function refreshDeepgramUsageStatus() {
@@ -775,6 +885,9 @@ function applyTranscriptSourceLifecycle(state = {}) {
     return;
   }
 
+  updateTranscriptSourcePill();
+  updateTranscriptEmptyState();
+
   const sourceLabel = getTranscriptSourceLabel(source);
   if (phase === 'error') {
     showCaptionErrorStatus({
@@ -849,6 +962,8 @@ function applyAppPreferences(preferences = {}) {
   }
 
   updateTranscriptSourceControlButton();
+  updateTranscriptSourcePill();
+  updateTranscriptEmptyState();
   refreshDeepgramUsageStatus();
 
   if (Number.isFinite(preferences.horizontalTranscriptPanelRatio)) {

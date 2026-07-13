@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Global Hotkeys</title>
+  <title>Settings</title>
   <link rel="stylesheet" href="hotkey-settings.css">
 </head>
 <body>
@@ -15,15 +15,15 @@
   >
     <div class="hotkey-dialog-header">
       <div>
-        <div class="hotkey-dialog-title" id="hotkeyDialogTitle">Global Hotkeys</div>
-        <div class="hotkey-dialog-subtitle">Click a field, then press a shortcut. Backspace clears it.</div>
+        <div class="hotkey-dialog-title" id="hotkeyDialogTitle">Settings</div>
+        <div class="hotkey-dialog-subtitle">Manage transcript source, Deepgram, translation, and shortcuts.</div>
       </div>
       <button
         class="hotkey-dialog-close"
         id="closeHotkeyDialogBtn"
         type="button"
-        data-protected-tooltip="Close hotkey settings"
-        aria-label="Close hotkey settings"
+        data-protected-tooltip="Close settings"
+        aria-label="Close settings"
       >
         <svg class="hotkey-dialog-close-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M6 6l12 12"></path>
@@ -31,7 +31,8 @@
         </svg>
       </button>
     </div>
-    <div class="settings-section" aria-label="App settings">
+    <section class="settings-section" aria-labelledby="transcriptSettingsTitle">
+      <div class="settings-section-heading" id="transcriptSettingsTitle">Transcript</div>
       <div class="setting-row">
         <div class="setting-meta">
           <div class="setting-name">Translation</div>
@@ -63,6 +64,9 @@
           <option value="deepgram">Deepgram</option>
         </select>
       </div>
+    </section>
+    <section class="settings-section" aria-labelledby="deepgramSettingsTitle">
+      <div class="settings-section-heading" id="deepgramSettingsTitle">Deepgram</div>
       <div class="setting-row setting-row-stacked">
         <div class="setting-meta">
           <div class="setting-name">Deepgram API key</div>
@@ -94,8 +98,11 @@
           </button>
         </div>
       </div>
-    </div>
-    <div class="hotkey-list" id="hotkeyList"></div>
+    </section>
+    <section class="settings-section settings-section-shortcuts" aria-labelledby="shortcutSettingsTitle">
+      <div class="settings-section-heading" id="shortcutSettingsTitle">Shortcuts</div>
+      <div class="hotkey-list" id="hotkeyList"></div>
+    </section>
   </section>
 
   <script src="protected-tooltips.js"></script>

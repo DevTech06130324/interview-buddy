@@ -21,6 +21,7 @@
   --danger-bg: #5a2424;
   --danger-border: #7a3434;
   --success: #42c46f;
+  --overlay-border: rgba(185, 203, 226, 0.24);
   --overlay-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
   --app-headbar-height: 38px;
   --minimum-browser-workspace-height: 120px;
@@ -43,11 +44,12 @@ body {
 .window-wrapper {
   width: 100%;
   height: 100%;
-  border: 3px dashed #3a3a3a;
+  border: 1px solid var(--overlay-border);
   border-radius: 10px;
-  padding: 10px;
+  padding: 8px;
   box-sizing: border-box;
-  background: transparent;
+  background: rgba(12, 12, 12, 0.18);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32);
 }
 
 .app-layout {
@@ -238,6 +240,29 @@ body {
   gap: 3px;
 }
 
+.transcript-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transcript-source-pill {
+  flex: 0 1 auto;
+  max-width: 180px;
+  padding: 3px 7px;
+  border: 1px solid rgba(74, 158, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(74, 158, 255, 0.1);
+  color: #cfe5ff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .deepgram-usage-status {
   display: flex;
   align-items: center;
@@ -387,6 +412,7 @@ body {
 
 .transcript-content {
   flex: 1;
+  position: relative;
   padding: 0;
   overflow-y: auto;
   color: #ffffff;
@@ -396,6 +422,39 @@ body {
   user-select: text;
   -webkit-user-select: text;
   cursor: text;
+}
+
+.transcript-empty-state {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 28px 22px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.transcript-empty-title {
+  color: var(--text, #ffffff);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.transcript-empty-copy {
+  max-width: 32ch;
+  color: var(--text-muted, #a9a9a9);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.transcript-content.has-transcript-content .transcript-empty-state {
+  display: none;
 }
 
 .new-transcript-indicator {
@@ -438,6 +497,7 @@ body {
 }
 
 .transcript-rows {
+  position: relative;
   min-height: 100%;
   display: flex;
   flex-direction: column;
@@ -1452,6 +1512,18 @@ body {
   background: var(--control-bg);
   border-color: var(--border);
   color: var(--text-muted);
+}
+
+.transcript-icon-btn.is-deepgram-source:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: #d7ebff;
+}
+
+.transcript-icon-btn.is-deepgram-source.is-deepgram-running:not(:disabled) {
+  border-color: color-mix(in srgb, var(--success) 64%, var(--border));
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: #dffbea;
 }
 
 .loading-indicator {

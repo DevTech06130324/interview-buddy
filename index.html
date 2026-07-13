@@ -16,8 +16,8 @@
             class="app-settings-btn"
             id="openHotkeySettingsBtn"
             type="button"
-            data-protected-tooltip="Hotkey settings"
-            aria-label="Hotkey settings"
+            data-protected-tooltip="Settings"
+            aria-label="Settings"
             aria-expanded="false"
           >
             <svg class="app-headbar-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -44,7 +44,14 @@
           <div class="transcript-panel">
             <div class="transcript-header">
               <div class="transcript-heading">
-                <span>Transcript</span>
+                <div class="transcript-title-row">
+                  <span>Transcript</span>
+                  <span
+                    class="transcript-source-pill"
+                    id="transcriptSourcePill"
+                    aria-live="polite"
+                  >Live Captions - Waiting</span>
+                </div>
                 <div class="deepgram-usage-status" id="deepgramUsageStatus" hidden>
                   <span id="deepgramRemainingUsageValue">Remaining unavailable</span>
                 </div>
@@ -134,6 +141,15 @@
               hidden
             ></p>
             <div class="transcript-content is-translation-hidden" id="transcript">
+              <div
+                class="transcript-empty-state"
+                id="transcriptEmptyState"
+                role="status"
+                aria-live="polite"
+              >
+                <div class="transcript-empty-title" id="transcriptEmptyTitle">Listening for transcript...</div>
+                <div class="transcript-empty-copy" id="transcriptEmptyCopy">Live Captions will appear here when speech is detected.</div>
+              </div>
               <div class="transcript-rows" id="transcriptRows"></div>
             </div>
             <button
