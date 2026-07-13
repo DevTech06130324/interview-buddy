@@ -89,19 +89,83 @@ function loadNativeModule() {
     throw error;
 }
 
-class LiveCaptionsHandler {
-    constructor() {
-        this.initialized = false;
+function normalizeOwnership(value) {
+    const processId = Number.isInteger(value?.processId) && value.processId > 0
+        ? value.processId
+        : 0;
+    return {
+        owned: Boolean(value?.owned && processId),
+        processId
+    };
+}
+
+function normalizeLifecycleResult(value) {
+    if (value && typeof value === 'object') {
+        return {
+            success: Boolean(value.success),
+            ownership: normalizeOwnership(value)
+        };
     }
 
-    sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+    return {
+        success: Boolean(value),
+        ownership: { owned: false, processId: 0 }
+    };
+}
+
+function unavailableSnapshot(error, fallbackCode = 'LIVECAPTIONS_READ_UNAVAILABLE') {
+    return {
+        status: 'unavailable',
+        code: typeof error?.code === 'string' && error.code ? error.code : fallbackCode,
+        message: error?.message || String(error || 'Live Captions text is unavailable.')
+    };
+}
+
+function normalizeCaptionSnapshot(value) {
+    if (value?.status === 'ok' && typeof value.text === 'string') {
+        return { status: 'ok', text: value.text };
+    }
+
+    if (
+        value?.status === 'unavailable'
+        && typeof value.code === 'string'
+        && typeof value.message === 'string'
+    ) {
+        return {
+            status: 'unavailable',
+            code: value.code,
+            message: value.message
+        };
+    }
+
+    return unavailableSnapshot(
+        new Error('Live Captions returned an invalid caption snapshot.'),
+        'LIVECAPTIONS_INVALID_SNAPSHOT'
+    );
+}
+
+class LiveCaptionsHandler {
+    constructor({
+        nativeLoader = loadNativeModule,
+        platform = process.platform,
+        sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    } = {}) {
+        this.nativeLoader = nativeLoader;
+        this.platform = platform;
+        this.sleep = sleep;
+        this.initialized = false;
+        this.ownership = { owned: false, processId: 0 };
     }
 
     async initialize() {
         if (this.initialized) return true;
-        const nativeModule = loadNativeModule();
-        this.initialized = nativeModule.initialize();
+        const nativeModule = this.nativeLoader();
+        this.initialized = Boolean(nativeModule.initialize());
+        if (!this.initialized) {
+            const error = new Error('Failed to initialize Windows UI Automation for Live Captions.');
+            error.code = 'LIVECAPTIONS_NATIVE_INITIALIZATION_FAILED';
+            throw error;
+        }
         return this.initialized;
     }
 
@@ -109,29 +173,34 @@ class LiveCaptionsHandler {
         if (!this.initialized) {
             await this.initialize();
         }
-        const nativeModule = loadNativeModule();
-        let launched = nativeModule.launchLiveCaptions();
-        if (!launched && process.platform === 'win32') {
-            console.warn('[WARNING] Live Captions launch/attach failed. Closing the tracked Live Captions instance and retrying once.');
+
+        let result = normalizeLifecycleResult(
+            this.nativeLoader().launchLiveCaptions()
+        );
+
+        if (!result.success && this.platform === 'win32') {
+            console.warn('[WARNING] Live Captions launch/attach failed. Retrying once.');
             await this.closeLiveCaptions();
             await this.sleep(400);
             await this.initialize();
-            launched = loadNativeModule().launchLiveCaptions();
+            result = normalizeLifecycleResult(
+                this.nativeLoader().launchLiveCaptions()
+            );
         }
 
-        if (!launched) {
-            throw new Error('Failed to launch or find LiveCaptions. Please ensure Windows LiveCaptions is running or installed.');
+        if (!result.success) {
+            throw new Error('Failed to launch or find Live Captions. Please ensure Windows Live Captions is running or installed.');
         }
-        return launched;
+
+        this.ownership = result.ownership;
+        return result;
     }
 
     getCaptions() {
         try {
-            const nativeModule = loadNativeModule();
-            return nativeModule.getCaptions() || '';
+            return normalizeCaptionSnapshot(this.nativeLoader().getCaptions());
         } catch (error) {
-            console.error('[ERROR] Failed to get captions:', error);
-            return '';
+            return unavailableSnapshot(error);
         }
     }
 
@@ -140,19 +209,16 @@ class LiveCaptionsHandler {
             await this.initialize();
         }
 
-        try {
-            const nativeModule = loadNativeModule();
-            const restarted = Boolean(nativeModule.restartLiveCaptions && nativeModule.restartLiveCaptions());
-            if (!restarted) {
-                throw new Error('Failed to restart LiveCaptions.');
-            }
-
-            this.initialized = true;
-            return restarted;
-        } catch (error) {
-            console.error('[ERROR] Failed to restart Live Captions:', error);
-            throw error;
+        const result = normalizeLifecycleResult(
+            this.nativeLoader().restartLiveCaptions()
+        );
+        if (!result.success) {
+            throw new Error('Failed to restart Live Captions.');
         }
+
+        this.initialized = true;
+        this.ownership = result.ownership;
+        return result;
     }
 
     async isWindowVisible() {
@@ -160,17 +226,12 @@ class LiveCaptionsHandler {
             await this.initialize();
         }
 
-        try {
-            const nativeModule = loadNativeModule();
-            if (typeof nativeModule.isLiveCaptionsVisible !== 'function') {
-                throw new Error('Live Captions window visibility is not supported by the native addon.');
-            }
-
-            return Boolean(nativeModule.isLiveCaptionsVisible());
-        } catch (error) {
-            console.error('[ERROR] Failed to get Live Captions window visibility:', error);
-            throw error;
+        const nativeModule = this.nativeLoader();
+        if (typeof nativeModule.isLiveCaptionsVisible !== 'function') {
+            throw new Error('Live Captions window visibility is not supported by the native addon.');
         }
+
+        return Boolean(nativeModule.isLiveCaptionsVisible());
     }
 
     async setWindowVisibility(isVisible) {
@@ -178,26 +239,21 @@ class LiveCaptionsHandler {
             await this.initialize();
         }
 
-        try {
-            const nativeModule = loadNativeModule();
-            if (typeof nativeModule.setLiveCaptionsVisible !== 'function') {
-                throw new Error('Live Captions window visibility is not supported by the native addon.');
-            }
-
-            const updated = Boolean(nativeModule.setLiveCaptionsVisible(Boolean(isVisible)));
-            if (!updated) {
-                throw new Error(`Failed to ${isVisible ? 'show' : 'hide'} the Live Captions window.`);
-            }
-
-            if (typeof nativeModule.isLiveCaptionsVisible === 'function') {
-                return Boolean(nativeModule.isLiveCaptionsVisible());
-            }
-
-            return Boolean(isVisible);
-        } catch (error) {
-            console.error('[ERROR] Failed to set Live Captions window visibility:', error);
-            throw error;
+        const nativeModule = this.nativeLoader();
+        if (typeof nativeModule.setLiveCaptionsVisible !== 'function') {
+            throw new Error('Live Captions window visibility is not supported by the native addon.');
         }
+
+        const updated = Boolean(nativeModule.setLiveCaptionsVisible(Boolean(isVisible)));
+        if (!updated) {
+            throw new Error(`Failed to ${isVisible ? 'show' : 'hide'} the Live Captions window.`);
+        }
+
+        if (typeof nativeModule.isLiveCaptionsVisible === 'function') {
+            return Boolean(nativeModule.isLiveCaptionsVisible());
+        }
+
+        return Boolean(isVisible);
     }
 
     async toggleWindowVisibility() {
@@ -209,7 +265,7 @@ class LiveCaptionsHandler {
         let closed = false;
 
         try {
-            const nativeModule = loadNativeModule();
+            const nativeModule = this.nativeLoader();
             if (typeof nativeModule.closeLiveCaptions === 'function') {
                 closed = Boolean(nativeModule.closeLiveCaptions());
             } else if (typeof nativeModule.cleanup === 'function') {
@@ -219,21 +275,30 @@ class LiveCaptionsHandler {
             console.error('[WARNING] Failed to close Live Captions through native addon:', error.message || error);
         } finally {
             this.initialized = false;
+            this.ownership = { owned: false, processId: 0 };
         }
 
-        return closed;
+        return {
+            closed,
+            ownership: this.ownership
+        };
     }
 
-    cleanup() {
+    async cleanup() {
         try {
-            const nativeModule = loadNativeModule();
-            nativeModule.cleanup();
-        } catch (error) {
-            console.error('[ERROR] Failed to cleanup:', error);
+            if (this.initialized) {
+                this.nativeLoader().cleanup();
+            }
         } finally {
             this.initialized = false;
+            this.ownership = { owned: false, processId: 0 };
         }
+
+        return { ownership: this.ownership };
     }
 }
 
-module.exports = new LiveCaptionsHandler();
+const liveCaptionsHandler = new LiveCaptionsHandler();
+
+module.exports = liveCaptionsHandler;
+module.exports.LiveCaptionsHandler = LiveCaptionsHandler;

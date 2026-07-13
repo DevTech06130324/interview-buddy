@@ -477,9 +477,9 @@ test('Deepgram service fails the whole capture closed when a failed role exceeds
     retryDelaysMs: [50, 100, 200],
     closeGraceMs: 5
   });
-  const fatalErrors = [];
-  service.on('fatalError', (error) => fatalErrors.push(error.message));
-  const startPromise = service.start({ apiKey: 'dg_overflow' });
+  const fatalEvents = [];
+  service.on('fatalError', (error, context) => fatalEvents.push({ error, context }));
+  const startPromise = service.start({ apiKey: 'dg_overflow', revision: 73 });
   const themSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_THEM);
   const meSocket = FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME);
   themSocket.open();
@@ -495,7 +495,10 @@ test('Deepgram service fails the whole capture closed when a failed role exceeds
 
   assert.equal(service.active, false);
   assert.equal(meSocket.closed, true);
-  assert.deepEqual(fatalErrors, ['Deepgram Them audio buffer overflowed.']);
+  assert.equal(fatalEvents.length, 1);
+  assert.equal(fatalEvents[0].error.message, 'Deepgram Them audio buffer overflowed.');
+  assert.equal(fatalEvents[0].context.revision, 73);
+  assert.equal(Number.isInteger(fatalEvents[0].context.generation), true);
 });
 
 test('Deepgram service exhausts three delayed retries after per-attempt open timeouts and fails start closed', async () => {
@@ -512,8 +515,9 @@ test('Deepgram service exhausts three delayed retries after per-attempt open tim
     openTimeoutMs: 3,
     closeGraceMs: 2
   });
-  service.on('fatalError', () => {});
-  const startPromise = service.start({ apiKey: 'dg_exhaust' });
+  const fatalEvents = [];
+  service.on('fatalError', (error, context) => fatalEvents.push({ error, context }));
+  const startPromise = service.start({ apiKey: 'dg_exhaust', revision: 81 });
   FakeWebSocket.instances.find((socket) => socket.options.role === DEEPGRAM_ROLE_ME).open();
 
   await assert.rejects(startPromise, /failed after 3 retries/i);
@@ -523,6 +527,10 @@ test('Deepgram service exhausts three delayed retries after per-attempt open tim
     4
   );
   assert.equal(service.active, false);
+  assert.equal(fatalEvents.length, 1);
+  assert.match(fatalEvents[0].error.message, /failed after 3 retries/i);
+  assert.equal(fatalEvents[0].context.revision, 81);
+  assert.equal(Number.isInteger(fatalEvents[0].context.generation), true);
 });
 
 test('Deepgram service graceful stop accepts final messages then force-closes after 1500 ms production grace', async () => {
@@ -629,4 +637,219 @@ test('Deepgram API-key rotation replaces both sockets without changing session e
     ['Token dg_new_key', 'Token dg_new_key']
   );
   assert.equal(typeof service.finalize, 'undefined');
+});
+
+test('Deepgram service aborts an in-flight start with typed supersession and closes its connecting sockets', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_OPERATION_SUPERSEDED
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    openTimeoutMs: 3,
+    retryDelaysMs: [],
+    closeGraceMs: 2
+  });
+  const fatalErrors = [];
+  service.on('fatalError', (error) => fatalErrors.push(error));
+  const controller = new AbortController();
+  const startPromise = service.start({
+    apiKey: 'dg_abort_start',
+    signal: controller.signal,
+    revision: 101
+  });
+  const connectingSockets = [...FakeWebSocket.instances];
+
+  controller.abort();
+
+  assert.equal(DEEPGRAM_OPERATION_SUPERSEDED, 'DEEPGRAM_OPERATION_SUPERSEDED');
+  await assert.rejects(startPromise, (error) => (
+    error?.code === 'DEEPGRAM_OPERATION_SUPERSEDED'
+  ));
+  assert.equal(connectingSockets.length, 2);
+  assert.equal(connectingSockets.every((socket) => socket.closed), true);
+  assert.equal(service.sockets.size, 0);
+  assert.deepEqual(fatalErrors, []);
+
+  for (const socket of connectingSockets) {
+    socket.emit('error', new Error('late start socket failure'));
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(fatalErrors, []);
+});
+
+test('Deepgram service aborts an intermediate rotation and converges both roles on a valid latest key', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_OPERATION_SUPERSEDED
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    openTimeoutMs: 3,
+    retryDelaysMs: [],
+    closeGraceMs: 2
+  });
+  const fatalErrors = [];
+  service.on('fatalError', (error) => fatalErrors.push(error));
+  await startReady(service, 'dg_initial_rotation');
+
+  const controller = new AbortController();
+  const intermediatePromise = service.rotateApiKey({
+    apiKey: 'dg_invalid_intermediate',
+    signal: controller.signal,
+    revision: 202
+  });
+  const intermediateSockets = FakeWebSocket.instances.filter((socket) => (
+    socket.options.headers.Authorization === 'Token dg_invalid_intermediate'
+  ));
+  controller.abort();
+
+  assert.equal(DEEPGRAM_OPERATION_SUPERSEDED, 'DEEPGRAM_OPERATION_SUPERSEDED');
+  await assert.rejects(intermediatePromise, (error) => (
+    error?.code === 'DEEPGRAM_OPERATION_SUPERSEDED'
+  ));
+  assert.equal(intermediateSockets.length, 2);
+  assert.equal(intermediateSockets.every((socket) => socket.closed), true);
+
+  const latestPromise = service.rotateApiKey({
+    apiKey: 'dg_valid_latest',
+    revision: 203
+  });
+  openLatestRoleSockets();
+  await latestPromise;
+
+  assert.deepEqual(
+    [...service.sockets.values()].map((socket) => socket.options.headers.Authorization),
+    ['Token dg_valid_latest', 'Token dg_valid_latest']
+  );
+  assert.deepEqual(fatalErrors, []);
+});
+
+test('Deepgram service aborts an in-flight clear without fatal error and closes replacement sockets', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_OPERATION_SUPERSEDED
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    openTimeoutMs: 3,
+    retryDelaysMs: [],
+    closeGraceMs: 2
+  });
+  const fatalErrors = [];
+  service.on('fatalError', (error) => fatalErrors.push(error));
+  await startReady(service, 'dg_clear_abort');
+  const controller = new AbortController();
+
+  const clearPromise = service.clear({ signal: controller.signal, revision: 302 });
+  const replacementSockets = FakeWebSocket.instances.filter((socket) => (
+    socket.readyState === FakeWebSocket.CONNECTING
+  ));
+  controller.abort();
+
+  assert.equal(DEEPGRAM_OPERATION_SUPERSEDED, 'DEEPGRAM_OPERATION_SUPERSEDED');
+  await assert.rejects(clearPromise, (error) => (
+    error?.code === 'DEEPGRAM_OPERATION_SUPERSEDED'
+  ));
+  assert.equal(replacementSockets.length, 2);
+  assert.equal(replacementSockets.every((socket) => socket.closed), true);
+  assert.equal(service.sockets.size, 0);
+  assert.deepEqual(fatalErrors, []);
+});
+
+test('Deepgram service stop invalidates an in-flight connection before late callbacks and never emits fatal error', async () => {
+  const { DeepgramTranscriptionService } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    closeGraceMs: 2
+  });
+  const fatalErrors = [];
+  service.on('fatalError', (error) => fatalErrors.push(error));
+  const startPromise = service.start({ apiKey: 'dg_stop_connect', revision: 401 });
+  const connectingSockets = [...FakeWebSocket.instances];
+  const generationBeforeStop = service.operationId;
+
+  const stopPromise = service.stop();
+  assert.ok(service.operationId > generationBeforeStop);
+  await assert.rejects(startPromise, /stopped/i);
+  await stopPromise;
+
+  for (const socket of connectingSockets) {
+    socket.emit('error', new Error('late stopped socket failure'));
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(connectingSockets.every((socket) => socket.closed), true);
+  assert.deepEqual(fatalErrors, []);
+});
+
+test('Deepgram service fails a current malformed protocol message closed with its originating revision', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    closeGraceMs: 2
+  });
+  const fatalEvents = [];
+  service.on('fatalError', (error, context) => fatalEvents.push({ error, context }));
+  const startPromise = service.start({ apiKey: 'dg_protocol', revision: 501 });
+  openLatestRoleSockets();
+  await startPromise;
+
+  service.sockets.get(DEEPGRAM_ROLE_THEM).emit('message', '{invalid-json');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(service.active, false);
+  assert.equal(fatalEvents.length, 1);
+  assert.match(fatalEvents[0].error.message, /json/i);
+  assert.equal(fatalEvents[0].context.revision, 501);
+  assert.equal(Number.isInteger(fatalEvents[0].context.generation), true);
+});
+
+test('a current failure still fails closed while an older generation fatal event is pending', async () => {
+  const {
+    DeepgramTranscriptionService,
+    DEEPGRAM_ROLE_THEM
+  } = require('../src/deepgramTranscriptionService');
+
+  FakeWebSocket.instances = [];
+  const service = new DeepgramTranscriptionService({
+    WebSocketImpl: FakeWebSocket,
+    closeGraceMs: 2
+  });
+  const fatalEvents = [];
+  service.on('fatalError', (error, context) => fatalEvents.push({ error, context }));
+  const firstStart = service.start({ apiKey: 'dg_old_fatal', revision: 601 });
+  openLatestRoleSockets();
+  await firstStart;
+  const oldGeneration = service.operationId;
+
+  const oldFatal = service.failClosed(new Error('old generation failed'), {
+    revision: 601,
+    generation: oldGeneration
+  });
+  const latestStart = service.start({ apiKey: 'dg_latest_fatal', revision: 602 });
+  openLatestRoleSockets();
+  service.sockets.get(DEEPGRAM_ROLE_THEM).emit('message', '{latest-invalid-json');
+
+  await assert.rejects(latestStart, /invalid deepgram json/i);
+  await oldFatal;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(service.active, false);
+  assert.deepEqual(
+    fatalEvents.map((event) => event.context.revision),
+    [601, 602]
+  );
 });

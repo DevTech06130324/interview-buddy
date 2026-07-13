@@ -1,3 +1,23 @@
+const DEEPGRAM_OPERATION_SUPERSEDED = 'DEEPGRAM_OPERATION_SUPERSEDED';
+
+function normalizeApiKey(apiKey) {
+  return typeof apiKey === 'string' ? apiKey.trim() : '';
+}
+
+function getErrorMessage(error) {
+  return error?.message || String(error || '');
+}
+
+function createSupersededError() {
+  const error = new Error('Deepgram lifecycle operation was superseded.');
+  error.code = DEEPGRAM_OPERATION_SUPERSEDED;
+  return error;
+}
+
+function isSupersededError(error) {
+  return error?.code === DEEPGRAM_OPERATION_SUPERSEDED;
+}
+
 class DeepgramLifecycleCoordinator {
   constructor({
     service,
@@ -9,260 +29,598 @@ class DeepgramLifecycleCoordinator {
     this.requestRendererStart = requestRendererStart;
     this.requestRendererStop = requestRendererStop;
     this.onState = onState;
-    this.operationId = 0;
-    this.active = false;
-    this.phase = 'inactive';
-    this.reason = '';
-    this.error = '';
-    this.startPromise = null;
-    this.stopPromise = null;
-    this.rotationPromise = null;
-    this.clearPromise = null;
+
+    this.revision = 0;
+    this.desired = {
+      shouldRun: false,
+      apiKey: '',
+      sessionRevision: 0,
+      shutdownRequested: false,
+      reason: 'inactive',
+      error: '',
+      revision: 0
+    };
+    this.applied = {
+      backendReady: false,
+      rendererActive: false,
+      apiKey: '',
+      sessionRevision: 0
+    };
+    this.state = {
+      active: false,
+      phase: 'inactive',
+      reason: '',
+      error: ''
+    };
+
+    this.reconcilePromise = null;
+    this.reconcileRequested = false;
+    this.supersedableEffect = null;
+    this.rendererCleanupRequired = false;
   }
 
   getState() {
     return {
-      active: this.active,
-      phase: this.phase,
-      reason: this.reason,
-      error: this.error
+      ...this.state,
+      revision: this.desired.revision
     };
   }
 
-  publishState({ active = this.active, phase = this.phase, reason = '', error = '' } = {}) {
-    this.active = Boolean(active);
-    this.phase = phase;
-    this.reason = reason;
-    this.error = error;
-    const state = this.getState();
-    this.onState(state);
-    return state;
+  publishState({
+    active = this.state.active,
+    phase = this.state.phase,
+    reason = '',
+    error = ''
+  } = {}) {
+    this.state = {
+      active: Boolean(active),
+      phase,
+      reason,
+      error
+    };
+    const snapshot = this.getState();
+    this.onState(snapshot);
+    return snapshot;
   }
 
   start({ apiKey } = {}) {
-    if (this.clearPromise) {
-      return this.clearPromise.then(() => this.start({ apiKey }));
-    }
-    if (this.stopPromise) {
-      return this.stopPromise.then(() => this.start({ apiKey }));
-    }
-    if (this.active) {
-      return Promise.resolve(this.getState());
-    }
-    if (this.startPromise) {
-      return this.startPromise;
+    if (this.desired.shutdownRequested) {
+      return this.getTerminalPromise();
     }
 
-    const operationId = ++this.operationId;
-    this.publishState({ active: false, phase: 'connecting', reason: 'backend-connecting' });
-    const trackedStartPromise = (async () => {
-      try {
-        await this.service.start({ apiKey });
-        if (operationId !== this.operationId) {
-          return this.getState();
-        }
-
-        this.publishState({ active: false, phase: 'awaiting-renderer', reason: 'capture-required' });
-        const rendererStarted = await this.requestRendererStart({ operationId });
-        if (operationId !== this.operationId) {
-          return this.getState();
-        }
-
-        if (!rendererStarted) {
-          await this.rollbackStart(operationId);
-          return this.publishState({
-            active: false,
-            phase: 'inactive',
-            reason: 'renderer-start-failed'
-          });
-        }
-
-        return this.publishState({ active: true, phase: 'active', reason: 'started' });
-      } catch (error) {
-        if (operationId !== this.operationId) {
-          return this.getState();
-        }
-        await this.rollbackStart(operationId);
-        return this.publishState({
-          active: false,
-          phase: 'inactive',
-          reason: 'start-failed',
-          error: error?.message || String(error)
-        });
-      }
-    })().finally(() => {
-      if (this.startPromise === trackedStartPromise) {
-        this.startPromise = null;
-      }
+    const nextApiKey = typeof apiKey === 'string'
+      ? normalizeApiKey(apiKey)
+      : this.desired.apiKey;
+    if (this.desired.shouldRun && nextApiKey === this.desired.apiKey) {
+      return this.getTerminalPromise();
+    }
+    return this.updateDesired({
+      shouldRun: true,
+      apiKey: nextApiKey,
+      reason: 'started',
+      error: ''
     });
-    this.startPromise = trackedStartPromise;
-    return trackedStartPromise;
   }
 
-  async rollbackStart(operationId) {
-    try {
-      await this.requestRendererStop({ operationId });
-    } finally {
-      await this.service.stop();
+  stop({ reason = 'stopped' } = {}) {
+    if (this.desired.shutdownRequested) {
+      return this.getTerminalPromise();
     }
-  }
-
-  stop({ reason = 'stopped', bypassClear = false } = {}) {
-    if (this.clearPromise && !bypassClear) {
-      // A user stop or app shutdown must not wait for clear() to reconnect.
-      // Advancing operationId below makes the abandoned clear transaction stale;
-      // dropping the tracked promise also prevents a later start from waiting on it.
-      this.clearPromise = null;
-    }
-    if (this.stopPromise) {
-      return this.stopPromise;
-    }
-    if (!this.active && this.phase === 'inactive' && !this.startPromise) {
-      return Promise.resolve(this.publishState({ active: false, phase: 'inactive', reason }));
+    if (!this.desired.shouldRun && this.desired.reason === reason) {
+      return this.getTerminalPromise();
     }
 
-    const operationId = ++this.operationId;
-    this.publishState({ active: false, phase: 'stopping', reason });
-    const trackedStopPromise = (async () => {
-      let rendererStopError = null;
-      try {
-        await this.requestRendererStop({ operationId });
-      } catch (error) {
-        rendererStopError = error;
-      }
-
-      try {
-        await this.service.stop();
-      } catch (error) {
-        return this.publishState({
-          active: false,
-          phase: 'inactive',
-          reason,
-          error: error?.message || String(error)
-        });
-      }
-
-      return this.publishState({
-        active: false,
-        phase: 'inactive',
-        reason,
-        error: rendererStopError?.message || ''
-      });
-    })().finally(() => {
-      if (this.stopPromise === trackedStopPromise) {
-        this.stopPromise = null;
-      }
+    return this.updateDesired({
+      shouldRun: false,
+      sessionRevision: this.applied.sessionRevision,
+      reason,
+      error: ''
     });
-    this.stopPromise = trackedStopPromise;
-    return trackedStopPromise;
-  }
-
-  rotateApiKey({ apiKey } = {}) {
-    return this.rotateApiKeyForOperation(apiKey, this.operationId);
-  }
-
-  rotateApiKeyForOperation(apiKey, requestedOperationId) {
-    if (this.clearPromise) {
-      return this.clearPromise.then(() => this.rotateApiKeyForOperation(apiKey, requestedOperationId));
-    }
-    if (this.rotationPromise) {
-      return this.rotationPromise.then(() => this.rotateApiKeyForOperation(apiKey, requestedOperationId));
-    }
-    if (requestedOperationId !== this.operationId) {
-      return Promise.resolve(this.getState());
-    }
-    if (!this.active) {
-      return this.start({ apiKey });
-    }
-
-    const trackedRotationPromise = (async () => {
-      const operationId = this.operationId;
-      this.publishState({ active: true, phase: 'reconnecting', reason: 'api-key-rotation' });
-      try {
-        await this.service.rotateApiKey({ apiKey });
-        if (operationId !== this.operationId) {
-          return this.getState();
-        }
-        return this.publishState({ active: true, phase: 'active', reason: 'api-key-rotated' });
-      } catch (error) {
-        if (operationId !== this.operationId) {
-          return this.getState();
-        }
-        await this.stop({ reason: 'api-key-rotation-failed' });
-        return this.publishState({
-          active: false,
-          phase: 'inactive',
-          reason: 'api-key-rotation-failed',
-          error: error?.message || String(error)
-        });
-      }
-    })().finally(() => {
-      if (this.rotationPromise === trackedRotationPromise) {
-        this.rotationPromise = null;
-      }
-    });
-    this.rotationPromise = trackedRotationPromise;
-    return trackedRotationPromise;
   }
 
   clear() {
-    return this.clearForOperation(this.operationId);
+    if (this.desired.shutdownRequested) {
+      return this.getTerminalPromise();
+    }
+
+    return this.updateDesired({
+      sessionRevision: this.desired.sessionRevision + 1,
+      reason: this.desired.shouldRun ? 'cleared' : this.desired.reason,
+      error: this.desired.shouldRun ? '' : this.desired.error
+    });
   }
 
-  clearForOperation(requestedOperationId) {
-    if (this.clearPromise) {
-      return this.clearPromise;
-    }
-    if (this.startPromise) {
-      return this.startPromise.then(() => this.clearForOperation(requestedOperationId));
-    }
-    if (this.rotationPromise) {
-      return this.rotationPromise.then(() => this.clearForOperation(requestedOperationId));
-    }
-    if (this.stopPromise) {
-      return this.stopPromise.then(() => this.clearForOperation(requestedOperationId));
-    }
-    if (requestedOperationId !== this.operationId) {
-      return Promise.resolve(this.getState());
+  setApiKey({ apiKey } = {}) {
+    if (this.desired.shutdownRequested) {
+      return this.getTerminalPromise();
     }
 
-    const operationId = requestedOperationId;
-    const trackedClearPromise = Promise.resolve(this.service.clear())
-      .then(() => {
-        if (operationId !== this.operationId) {
-          return this.getState();
+    const nextApiKey = normalizeApiKey(apiKey);
+    if (nextApiKey === this.desired.apiKey) {
+      return this.getTerminalPromise();
+    }
+
+    return this.updateDesired({
+      apiKey: nextApiKey,
+      reason: this.desired.shouldRun ? 'api-key-rotated' : this.desired.reason,
+      error: this.desired.shouldRun ? '' : this.desired.error
+    });
+  }
+
+  shutdown() {
+    if (this.desired.shutdownRequested) {
+      return this.getTerminalPromise();
+    }
+
+    return this.updateDesired({
+      shouldRun: false,
+      sessionRevision: this.applied.sessionRevision,
+      shutdownRequested: true,
+      reason: 'app-exit',
+      error: ''
+    });
+  }
+
+  failClosed(error, { revision } = {}) {
+    if (
+      this.desired.shutdownRequested
+      || !this.desired.shouldRun
+      || (revision !== undefined && revision !== this.desired.revision)
+    ) {
+      return this.reconcilePromise || Promise.resolve(this.getState());
+    }
+
+    return this.updateDesired({
+      shouldRun: false,
+      sessionRevision: this.applied.sessionRevision,
+      reason: 'backend-failed',
+      error: getErrorMessage(error)
+    });
+  }
+
+  getTerminalPromise() {
+    return this.reconcilePromise || Promise.resolve(this.getState());
+  }
+
+  updateDesired(patch) {
+    this.revision += 1;
+    this.desired = {
+      ...this.desired,
+      ...patch,
+      revision: this.revision
+    };
+    this.cancelSupersedableEffect();
+    return this.scheduleReconcile();
+  }
+
+  cancelSupersedableEffect() {
+    const controller = this.supersedableEffect?.controller;
+    if (controller && !controller.signal.aborted) {
+      controller.abort(createSupersededError());
+    }
+  }
+
+  scheduleReconcile() {
+    this.reconcileRequested = true;
+    if (this.reconcilePromise) {
+      return this.reconcilePromise;
+    }
+
+    let resolveReconcile;
+    let rejectReconcile;
+    const reconciliation = new Promise((resolve, reject) => {
+      resolveReconcile = resolve;
+      rejectReconcile = reject;
+    });
+    this.reconcilePromise = reconciliation;
+
+    this.runReconciliationLoop().then(
+      (state) => {
+        if (this.reconcilePromise === reconciliation) {
+          this.reconcilePromise = null;
         }
-        return this.publishState({
-          active: this.active,
-          phase: this.active ? 'active' : 'inactive',
-          reason: 'cleared'
-        });
-      })
-      .catch(async (error) => {
-        if (operationId !== this.operationId) {
-          return this.getState();
+        resolveReconcile(state);
+      },
+      (error) => {
+        if (this.reconcilePromise === reconciliation) {
+          this.reconcilePromise = null;
         }
-        await this.failClosed(error);
+        rejectReconcile(error);
+      }
+    );
+
+    return reconciliation;
+  }
+
+  async runReconciliationLoop() {
+    while (true) {
+      this.reconcileRequested = false;
+      await this.reconcileLatestDesiredState();
+
+      if (this.reconcileRequested || !this.stateMatchesDesired()) {
+        continue;
+      }
+
+      await Promise.resolve();
+      if (!this.reconcileRequested && this.stateMatchesDesired()) {
         return this.getState();
-      })
-      .finally(() => {
-        if (this.clearPromise === trackedClearPromise) {
-          this.clearPromise = null;
-        }
-      });
-    this.clearPromise = trackedClearPromise;
-    return trackedClearPromise;
+      }
+    }
   }
 
-  async failClosed(error) {
-    const state = await this.stop({ reason: 'backend-failed', bypassClear: true });
-    return this.publishState({
-      ...state,
+  stateMatchesDesired() {
+    if (!this.desired.shouldRun) {
+      return !this.applied.backendReady
+        && !this.applied.rendererActive
+        && this.applied.sessionRevision === this.desired.sessionRevision
+        && !this.state.active
+        && this.state.phase === 'inactive'
+        && this.state.reason === this.desired.reason;
+    }
+
+    return this.applied.backendReady
+      && this.applied.rendererActive
+      && this.applied.apiKey === this.desired.apiKey
+      && this.applied.sessionRevision === this.desired.sessionRevision
+      && this.state.active
+      && this.state.phase === 'active'
+      && this.state.reason === this.desired.reason;
+  }
+
+  isCurrent(snapshot) {
+    return snapshot.revision === this.desired.revision;
+  }
+
+  async reconcileLatestDesiredState() {
+    const snapshot = { ...this.desired };
+
+    if (!snapshot.shouldRun) {
+      const cleanupRequired = this.applied.backendReady
+        || this.applied.rendererActive
+        || (
+          this.rendererCleanupRequired
+          && snapshot.reason !== 'renderer-stop-failed'
+        )
+        || this.state.phase !== 'inactive';
+      if (!cleanupRequired && this.applied.sessionRevision !== snapshot.sessionRevision) {
+        await this.reconcileSession(snapshot);
+        return;
+      }
+      await this.reconcileStoppedState(snapshot);
+      return;
+    }
+
+    if (this.applied.sessionRevision !== snapshot.sessionRevision) {
+      await this.reconcileSession(snapshot);
+      return;
+    }
+
+    if (!this.applied.backendReady) {
+      await this.reconcileBackendStart(snapshot);
+      return;
+    }
+
+    if (this.applied.apiKey !== snapshot.apiKey) {
+      await this.reconcileApiKey(snapshot);
+      return;
+    }
+
+    if (!this.applied.rendererActive) {
+      await this.reconcileRendererStart(snapshot);
+      return;
+    }
+
+    if (this.isCurrent(snapshot)) {
+      this.publishState({
+        active: true,
+        phase: 'active',
+        reason: snapshot.reason,
+        error: snapshot.error
+      });
+    }
+  }
+
+  async reconcileStoppedState(snapshot) {
+    const rendererNeedsCleanup = this.applied.rendererActive
+      || (
+        this.rendererCleanupRequired
+        && snapshot.reason !== 'renderer-stop-failed'
+      );
+    const backendNeedsCleanup = this.applied.backendReady
+      || this.state.phase !== 'inactive';
+
+    if (!rendererNeedsCleanup && !backendNeedsCleanup) {
+      const latest = this.desired;
+      if (!latest.shouldRun) {
+        this.publishState({
+          active: false,
+          phase: 'inactive',
+          reason: latest.reason,
+          error: latest.error
+        });
+      }
+      return;
+    }
+
+    this.publishState({
+      active: false,
+      phase: 'stopping',
+      reason: snapshot.reason,
+      error: snapshot.error
+    });
+
+    let cleanupError = '';
+    if (rendererNeedsCleanup) {
+      try {
+        await this.cleanupRenderer(snapshot);
+      } catch (error) {
+        cleanupError = getErrorMessage(error);
+        this.applied.rendererActive = false;
+        this.rendererCleanupRequired = true;
+        this.failRendererCleanup(error);
+      }
+    }
+
+    if (backendNeedsCleanup) {
+      try {
+        await this.service.stop();
+      } catch (error) {
+        cleanupError = cleanupError || getErrorMessage(error);
+      }
+      this.applied.backendReady = false;
+      this.applied.apiKey = '';
+    }
+
+    const latest = this.desired;
+    if (!latest.shouldRun) {
+      this.applied.sessionRevision = snapshot.sessionRevision;
+      this.publishState({
+        active: false,
+        phase: 'inactive',
+        reason: latest.reason,
+        error: latest.error || cleanupError
+      });
+      return;
+    }
+
+    this.publishState({
       active: false,
       phase: 'inactive',
-      reason: 'backend-failed',
-      error: error?.message || String(error)
+      reason: 'stopped',
+      error: cleanupError
     });
+  }
+
+  async reconcileSession(snapshot) {
+    this.publishState({
+      active: false,
+      phase: this.applied.rendererActive ? 'reconnecting' : this.state.phase,
+      reason: 'clearing',
+      error: ''
+    });
+    if (!this.isCurrent(snapshot)) {
+      return;
+    }
+    const outcome = await this.executeSupersedableEffect(
+      'clear',
+      snapshot,
+      (signal) => this.service.clear({
+        apiKey: snapshot.apiKey,
+        signal,
+        revision: snapshot.revision,
+        sessionRevision: snapshot.sessionRevision
+      })
+    );
+
+    if (outcome.ok) {
+      this.applied.sessionRevision = snapshot.sessionRevision;
+      if (outcome.value === false) {
+        this.applied.backendReady = false;
+        this.applied.apiKey = '';
+      } else if (outcome.value === true) {
+        this.applied.backendReady = true;
+        this.applied.apiKey = snapshot.apiKey;
+      }
+      return;
+    }
+
+    if (isSupersededError(outcome.error) || !this.isCurrent(snapshot)) {
+      return;
+    }
+
+    this.failCurrentEffect(snapshot, 'backend-failed', outcome.error);
+  }
+
+  async reconcileBackendStart(snapshot) {
+    this.publishState({
+      active: false,
+      phase: 'connecting',
+      reason: 'backend-connecting',
+      error: ''
+    });
+    if (!this.isCurrent(snapshot)) {
+      return;
+    }
+    const outcome = await this.executeSupersedableEffect(
+      'connect',
+      snapshot,
+      (signal) => this.service.start({
+        apiKey: snapshot.apiKey,
+        signal,
+        revision: snapshot.revision
+      })
+    );
+
+    if (outcome.ok) {
+      this.applied.backendReady = true;
+      this.applied.apiKey = snapshot.apiKey;
+      return;
+    }
+
+    if (isSupersededError(outcome.error) || !this.isCurrent(snapshot)) {
+      return;
+    }
+
+    this.failCurrentEffect(snapshot, 'start-failed', outcome.error);
+  }
+
+  async reconcileApiKey(snapshot) {
+    this.publishState({
+      active: false,
+      phase: 'reconnecting',
+      reason: 'api-key-rotation',
+      error: ''
+    });
+    if (!this.isCurrent(snapshot)) {
+      return;
+    }
+    const outcome = await this.executeSupersedableEffect(
+      'rotate',
+      snapshot,
+      (signal) => this.service.rotateApiKey({
+        apiKey: snapshot.apiKey,
+        signal,
+        revision: snapshot.revision
+      })
+    );
+
+    if (outcome.ok) {
+      this.applied.backendReady = true;
+      this.applied.apiKey = snapshot.apiKey;
+      return;
+    }
+
+    if (isSupersededError(outcome.error) || !this.isCurrent(snapshot)) {
+      return;
+    }
+
+    this.failCurrentEffect(snapshot, 'api-key-rotation-failed', outcome.error);
+  }
+
+  async reconcileRendererStart(snapshot) {
+    if (this.rendererCleanupRequired) {
+      this.publishState({
+        active: false,
+        phase: 'stopping',
+        reason: 'renderer-cleanup',
+        error: ''
+      });
+      try {
+        await this.cleanupRenderer(snapshot);
+      } catch (error) {
+        this.failRendererCleanup(error);
+        return;
+      }
+      if (!this.isCurrent(snapshot)) {
+        return;
+      }
+    }
+
+    this.publishState({
+      active: false,
+      phase: 'awaiting-renderer',
+      reason: 'capture-required',
+      error: ''
+    });
+    if (!this.isCurrent(snapshot)) {
+      return;
+    }
+
+    let rendererStarted = false;
+    let rendererError = null;
+    try {
+      rendererStarted = await this.requestRendererStart({
+        operationId: snapshot.revision,
+        revision: snapshot.revision
+      });
+    } catch (error) {
+      rendererError = error;
+    }
+
+    if (rendererStarted) {
+      this.applied.rendererActive = true;
+      this.rendererCleanupRequired = false;
+      return;
+    }
+
+    this.rendererCleanupRequired = true;
+
+    if (!this.isCurrent(snapshot)) {
+      return;
+    }
+
+    this.failCurrentEffect(
+      snapshot,
+      'renderer-start-failed',
+      rendererError,
+      { includeError: Boolean(rendererError) }
+    );
+  }
+
+  failCurrentEffect(snapshot, reason, error, { includeError = true } = {}) {
+    if (!this.isCurrent(snapshot)) {
+      return false;
+    }
+
+    this.revision += 1;
+    this.desired = {
+      ...this.desired,
+      shouldRun: false,
+      sessionRevision: this.applied.sessionRevision,
+      reason,
+      error: includeError ? getErrorMessage(error) : '',
+      revision: this.revision
+    };
+    this.reconcileRequested = true;
+    return true;
+  }
+
+  async cleanupRenderer(snapshot) {
+    const acknowledged = await this.requestRendererStop({
+      operationId: snapshot.revision,
+      revision: snapshot.revision
+    });
+    if (acknowledged !== true) {
+      throw new Error('Renderer capture cleanup was not acknowledged.');
+    }
+    this.applied.rendererActive = false;
+    this.rendererCleanupRequired = false;
+  }
+
+  failRendererCleanup(error) {
+    this.revision += 1;
+    this.desired = {
+      ...this.desired,
+      shouldRun: false,
+      sessionRevision: this.applied.sessionRevision,
+      reason: 'renderer-stop-failed',
+      error: getErrorMessage(error),
+      revision: this.revision
+    };
+    this.reconcileRequested = true;
+  }
+
+  async executeSupersedableEffect(kind, snapshot, effect) {
+    const controller = new AbortController();
+    const token = {
+      kind,
+      revision: snapshot.revision,
+      controller
+    };
+    this.supersedableEffect = token;
+
+    try {
+      return {
+        ok: true,
+        value: await effect(controller.signal)
+      };
+    } catch (error) {
+      return { ok: false, error };
+    } finally {
+      if (this.supersedableEffect === token) {
+        this.supersedableEffect = null;
+      }
+    }
   }
 }
 

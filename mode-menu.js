@@ -69,6 +69,69 @@ function deferModeMenuRenderForRenameWindow() {
   }, MODE_RENAME_DOUBLE_CLICK_WINDOW_MS);
 }
 
+function getModeMenuRovingItems() {
+  if (!modeMenu) {
+    return [];
+  }
+
+  return Array.from(modeMenu.querySelectorAll('[role="menuitem"]')).filter((item) => (
+    !item.classList.contains('mode-menu-editing') && !item.disabled
+  ));
+}
+
+function updateModeMenuRovingTabStop(preferredItem = null) {
+  const items = getModeMenuRovingItems();
+  if (items.length === 0) {
+    return;
+  }
+
+  const tabStop = items.includes(preferredItem)
+    ? preferredItem
+    : (items.find((item) => item.classList.contains('is-active')) || items[0]);
+
+  for (const item of items) {
+    item.tabIndex = item === tabStop ? 0 : -1;
+  }
+}
+
+function handleModeMenuRovingFocus(event) {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    return;
+  }
+
+  const currentItem = event.target?.closest?.('[role="menuitem"]');
+  const items = getModeMenuRovingItems();
+  const currentIndex = items.indexOf(currentItem);
+  if (currentIndex === -1) {
+    return;
+  }
+
+  let nextIndex = currentIndex;
+  if (event.key === 'ArrowDown') {
+    nextIndex = (currentIndex + 1) % items.length;
+  } else if (event.key === 'ArrowUp') {
+    nextIndex = (currentIndex - 1 + items.length) % items.length;
+  } else if (event.key === 'Home') {
+    nextIndex = 0;
+  } else if (event.key === 'End') {
+    nextIndex = items.length - 1;
+  }
+
+  event.preventDefault();
+  const nextItem = items[nextIndex];
+  updateModeMenuRovingTabStop(nextItem);
+  nextItem.focus();
+}
+
+function handleModeMenuFocusIn(event) {
+  const currentItem = event.target?.closest?.('[role="menuitem"]');
+  if (!currentItem || currentItem.classList.contains('mode-menu-editing')) {
+    return;
+  }
+
+  updateModeMenuRovingTabStop(currentItem);
+}
+
 async function commitModeRename(modeId, nextName) {
   const mode = promptModes.find((entry) => entry.id === modeId);
   const trimmedName = typeof nextName === 'string' ? nextName.trim() : '';
@@ -262,6 +325,7 @@ function renderModeMenu() {
     await sendModeMenuAction({ type: 'add' });
   };
   modeMenu.appendChild(addButton);
+  updateModeMenuRovingTabStop();
 }
 
 function applyModeMenuState(state = {}) {
@@ -288,6 +352,11 @@ function applyModeMenuState(state = {}) {
   }
 
   renderModeMenu();
+}
+
+if (modeMenu) {
+  modeMenu.addEventListener('keydown', handleModeMenuRovingFocus);
+  modeMenu.addEventListener('focusin', handleModeMenuFocusIn);
 }
 
 document.addEventListener('keydown', (event) => {

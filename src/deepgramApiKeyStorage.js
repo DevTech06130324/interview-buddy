@@ -1,3 +1,5 @@
+const fs = require('fs');
+
 function normalizeDeepgramApiKey(apiKey) {
   return String(apiKey || '').trim();
 }
@@ -69,8 +71,44 @@ function decodeDeepgramApiKeyStorage(storage, safeStorage) {
   }
 }
 
+function loadAndMigrateDeepgramApiKeyPreferencesFile(preferencesPath, safeStorage) {
+  const preferences = JSON.parse(fs.readFileSync(preferencesPath, 'utf8'));
+  const hasLegacyApiKey = Object.prototype.hasOwnProperty.call(
+    preferences,
+    'deepgramApiKey'
+  );
+  const storedApiKey = preferences.deepgramApiKeyStorage || (
+    typeof preferences.deepgramApiKey === 'string'
+      ? { encrypted: false, value: preferences.deepgramApiKey }
+      : null
+  );
+  const decoded = decodeDeepgramApiKeyStorage(storedApiKey, safeStorage);
+  const needsRewrite = decoded.needsRewrite || hasLegacyApiKey;
+  const sanitizedPreferences = needsRewrite
+    ? {
+      ...preferences,
+      deepgramApiKeyStorage: decoded.storage
+    }
+    : preferences;
+
+  if (needsRewrite) {
+    delete sanitizedPreferences.deepgramApiKey;
+    fs.writeFileSync(
+      preferencesPath,
+      JSON.stringify(sanitizedPreferences, null, 2)
+    );
+  }
+
+  return {
+    ...decoded,
+    preferences: sanitizedPreferences,
+    needsRewrite
+  };
+}
+
 module.exports = {
   canEncryptDeepgramApiKey,
   decodeDeepgramApiKeyStorage,
-  encodeDeepgramApiKeyForStorage
+  encodeDeepgramApiKeyForStorage,
+  loadAndMigrateDeepgramApiKeyPreferencesFile
 };

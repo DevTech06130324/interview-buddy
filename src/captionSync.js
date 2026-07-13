@@ -1,65 +1,87 @@
-const liveCaptionsHandler = require('./livecaptions');
-const EventEmitter = require('events');
-const { logTranscriptEvent } = require('./transcriptLogger');
+const EventEmitter = require('node:events');
+const { randomUUID } = require('node:crypto');
+const { LiveCaptionsWorkerClient } = require('./liveCaptionsWorkerClient');
 
 const CONTROL_CHARS_EXCEPT_WHITESPACE_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+const UNAVAILABLE_ERROR_THRESHOLD = 3;
 
 class CaptionSyncService extends EventEmitter {
-    constructor() {
+    constructor({
+        workerClient = new LiveCaptionsWorkerClient(),
+        createSessionId = randomUUID
+    } = {}) {
         super();
+        this.workerClient = workerClient;
+        this.createSessionId = createSessionId;
         this.isRunning = false;
-        this.activePollInterval = 60;
-        this.idlePollInterval = 180;
-        this.idleThreshold = 10;
-        this.currentPollInterval = this.activePollInterval;
-        this.unchangedPollCount = 0;
         this.lastEmittedText = '';
-        this.lastRawPolledText = '';
-        this.loopGeneration = 0;
-        this.pollSequence = 0;
         this.startPromise = null;
+        this.consecutiveUnavailableReads = 0;
+        this.unavailableErrorEmitted = false;
+        this.sessionId = this.createSessionId();
+        this.requiresFreshSessionBoundary = false;
+
+        this.workerClient.on('snapshot', (snapshot) => this.handleSnapshot(snapshot));
+        this.workerClient.on('error', (error) => this.handleWorkerError(error));
+        this.workerClient.on('state', () => this.emit('state', this.getState()));
+    }
+
+    getSessionId() {
+        return this.sessionId;
+    }
+
+    getState() {
+        const workerState = this.workerClient?.getState?.() || {};
+        return {
+            active: this.isRunning,
+            sessionId: this.getSessionId(),
+            requiresFreshSessionBoundary: this.requiresFreshSessionBoundary,
+            phase: typeof workerState.phase === 'string'
+                ? workerState.phase
+                : (this.isRunning ? 'active' : 'inactive'),
+            retryAttempt: Number.isSafeInteger(workerState.retryAttempt)
+                ? Math.max(0, workerState.retryAttempt)
+                : (Number.isSafeInteger(workerState.crashCount)
+                    ? Math.max(0, workerState.crashCount)
+                    : 0)
+        };
+    }
+
+    beginNewSession({ requireFreshBoundary = false } = {}) {
+        this.sessionId = this.createSessionId();
+        this.lastEmittedText = '';
+        this.resetUnavailableEpisode();
+        this.requiresFreshSessionBoundary = Boolean(requireFreshBoundary);
+        return this.getSessionId();
     }
 
     async start() {
         if (this.isRunning) {
             return true;
         }
-
         if (this.startPromise) {
             return this.startPromise;
         }
 
-        const startGeneration = this.loopGeneration;
         const startPromise = (async () => {
-            // Initialize and launch LiveCaptions
-            await liveCaptionsHandler.initialize();
-            await liveCaptionsHandler.launchLiveCaptions();
-
-            // Small delay to allow window to initialize
-            await this.sleep(1000);
-
-            if (this.loopGeneration !== startGeneration || this.isRunning) {
+            try {
+                const state = await this.workerClient.start();
+                if (state?.active && this.requiresFreshSessionBoundary) {
+                    await this.workerClient.restart();
+                    this.requiresFreshSessionBoundary = false;
+                }
+                this.isRunning = Boolean(state?.active);
                 return this.isRunning;
+            } catch (error) {
+                this.isRunning = false;
+                this.emit('error', error);
+                return false;
             }
-
-            this.lastEmittedText = '';
-            this.lastRawPolledText = '';
-            this.currentPollInterval = this.activePollInterval;
-            this.unchangedPollCount = 0;
-            this.startSyncLoop();
-            return true;
         })();
-
         this.startPromise = startPromise;
 
         try {
             return await startPromise;
-        } catch (error) {
-            console.error('[ERROR] Failed to start caption sync:', error);
-            this.emit('error', error);
-            // Don't throw - allow app to continue even if LiveCaptions isn't available
-            // The UI will show the error message
-            return false;
         } finally {
             if (this.startPromise === startPromise) {
                 this.startPromise = null;
@@ -68,78 +90,41 @@ class CaptionSyncService extends EventEmitter {
     }
 
     stop() {
-        this.stopPolling();
-        liveCaptionsHandler.cleanup();
-    }
-
-    async stopAndCloseLiveCaptions() {
-        this.stopPolling();
-        await liveCaptionsHandler.closeLiveCaptions();
-    }
-
-    stopPolling() {
-        const hadStartInFlight = Boolean(this.startPromise);
         this.isRunning = false;
-        this.lastEmittedText = '';
-        this.lastRawPolledText = '';
-        this.currentPollInterval = this.activePollInterval;
-        this.unchangedPollCount = 0;
-        this.loopGeneration += 1;
-        logTranscriptEvent('caption-sync-stop', {
-            loopGeneration: this.loopGeneration,
-            hadStartInFlight
+        this.resetUnavailableEpisode();
+        return this.workerClient.stop().catch((error) => {
+            this.emit('error', error);
+            return { stopped: false };
+        });
+    }
+
+    stopAndCloseLiveCaptions() {
+        this.isRunning = false;
+        this.resetUnavailableEpisode();
+        return this.workerClient.close().catch((error) => {
+            this.emit('error', error);
+            return { closed: false };
         });
     }
 
     async clearTranscript() {
-        const wasRunning = this.isRunning;
-        this.isRunning = false;
-        this.lastEmittedText = '';
-        this.lastRawPolledText = '';
-        this.loopGeneration += 1;
-
-        logTranscriptEvent('caption-sync-clear-requested', {
-            loopGeneration: this.loopGeneration,
-            wasRunning
-        });
+        this.beginNewSession();
 
         this.emit('captionUpdate', {
             fullText: '',
             entries: []
         });
 
-        await this.sleep(100);
-
         try {
-            await liveCaptionsHandler.restartLiveCaptions();
-            await this.sleep(1000);
-
-            this.lastEmittedText = '';
-            this.lastRawPolledText = '';
-            this.currentPollInterval = this.activePollInterval;
-            this.unchangedPollCount = 0;
-            if (wasRunning) {
-                this.startSyncLoop();
-            }
-
+            await this.workerClient.restart();
             const liveCaptionsVisible = await this.getLiveCaptionsVisibility();
-            logTranscriptEvent('caption-sync-clear-succeeded', {
-                loopGeneration: this.loopGeneration,
-                liveCaptionsVisible
-            });
-
             return {
                 success: true,
                 liveCaptionsVisible
             };
         } catch (error) {
-            console.error('[ERROR] Failed to restart Live Captions after clearing transcript:', error);
-            this.lastEmittedText = '';
-            this.lastRawPolledText = '';
-            logTranscriptEvent('caption-sync-clear-failed', {
-                loopGeneration: this.loopGeneration,
-                error
-            });
+            this.isRunning = false;
+            this.requiresFreshSessionBoundary = true;
             this.emit('error', error);
             return {
                 success: false,
@@ -148,105 +133,93 @@ class CaptionSyncService extends EventEmitter {
         }
     }
 
-    async getLiveCaptionsVisibility() {
-        return liveCaptionsHandler.isWindowVisible();
+    getLiveCaptionsVisibility() {
+        return this.workerClient.getVisibility();
     }
 
     async toggleLiveCaptionsVisibility() {
-        return liveCaptionsHandler.toggleWindowVisibility();
+        const isVisible = await this.getLiveCaptionsVisibility();
+        return this.setLiveCaptionsVisibility(!isVisible);
     }
 
-    async setLiveCaptionsVisibility(isVisible) {
-        return liveCaptionsHandler.setWindowVisibility(Boolean(isVisible));
+    setLiveCaptionsVisibility(isVisible) {
+        return this.workerClient.setVisibility(Boolean(isVisible));
     }
 
-    startSyncLoop() {
-        this.loopGeneration += 1;
-        this.isRunning = true;
-        this.currentPollInterval = this.activePollInterval;
-        this.unchangedPollCount = 0;
-        logTranscriptEvent('caption-sync-loop-started', {
-            loopGeneration: this.loopGeneration,
-            activePollInterval: this.activePollInterval,
-            idlePollInterval: this.idlePollInterval
-        });
-        void this.syncLoop(this.loopGeneration);
-    }
-
-    async syncLoop(loopGeneration) {
-        while (this.isRunning && this.loopGeneration === loopGeneration) {
-            try {
-                // Get text from LiveCaptions (10-20ms operation)
-                const fullText = liveCaptionsHandler.getCaptions();
-
-                // Preprocess text to clean it up (fix acronyms, punctuation, etc.)
-                const processedText = this.preprocessText(fullText);
-                const normalizedText = processedText.trim() === '' ? '' : processedText;
-                const shouldEmit = normalizedText !== this.lastEmittedText;
-
-                if (fullText !== this.lastRawPolledText || shouldEmit) {
-                    this.pollSequence += 1;
-                    logTranscriptEvent('caption-sync-polled', {
-                        loopGeneration,
-                        pollSequence: this.pollSequence,
-                        rawText: fullText,
-                        processedText,
-                        normalizedText,
-                        previousEmittedText: this.lastEmittedText,
-                        emitted: shouldEmit,
-                        unchangedPollCount: this.unchangedPollCount,
-                        currentPollInterval: this.currentPollInterval
-                    });
-                    this.lastRawPolledText = fullText;
-                }
-
-                if (shouldEmit) {
-                    this.lastEmittedText = normalizedText;
-                    this.currentPollInterval = this.activePollInterval;
-                    this.unchangedPollCount = 0;
-
-                    // Emit the full processed transcript only when it changes.
-                    this.emit('captionUpdate', {
-                        fullText: normalizedText
-                    });
-                } else {
-                    this.unchangedPollCount += 1;
-                    if (this.unchangedPollCount >= this.idleThreshold) {
-                        this.currentPollInterval = this.idlePollInterval;
-                    }
-                }
-            } catch (error) {
-                console.error('[ERROR] Sync loop error:', error);
-                logTranscriptEvent('caption-sync-loop-error', {
-                    loopGeneration,
-                    error
-                });
-                this.emit('error', error);
-            }
-
-            await this.sleep(this.currentPollInterval);
+    handleSnapshot(snapshot) {
+        if (!this.isRunning || !snapshot || typeof snapshot !== 'object') {
+            return;
         }
+
+        if (snapshot.status === 'unavailable') {
+            this.handleUnavailableSnapshot(snapshot);
+            return;
+        }
+
+        if (snapshot.status !== 'ok' || typeof snapshot.text !== 'string') {
+            this.handleUnavailableSnapshot({
+                code: 'LIVECAPTIONS_INVALID_SNAPSHOT',
+                message: 'Live Captions returned an invalid caption snapshot.'
+            });
+            return;
+        }
+
+        this.resetUnavailableEpisode();
+        if (snapshot.text.length === 0) {
+            return;
+        }
+
+        const processedText = this.preprocessText(snapshot.text);
+        const normalizedText = processedText.trim() === '' ? '' : processedText;
+        if (normalizedText === '' || normalizedText === this.lastEmittedText) {
+            return;
+        }
+
+        this.lastEmittedText = normalizedText;
+        this.emit('captionUpdate', { fullText: normalizedText });
+    }
+
+    handleUnavailableSnapshot(snapshot) {
+        this.consecutiveUnavailableReads += 1;
+        if (
+            this.consecutiveUnavailableReads < UNAVAILABLE_ERROR_THRESHOLD
+            || this.unavailableErrorEmitted
+        ) {
+            return;
+        }
+
+        this.unavailableErrorEmitted = true;
+        const error = new Error(snapshot.message || 'Live Captions text is unavailable.');
+        error.source = 'live-captions';
+        error.code = snapshot.code || 'LIVECAPTIONS_READ_UNAVAILABLE';
+        error.recoverable = true;
+        this.emit('error', error);
+    }
+
+    handleWorkerError(error) {
+        if (error?.code === 'LIVECAPTIONS_WORKER_MANUAL_RETRY') {
+            this.isRunning = false;
+        }
+        this.emit('error', error);
+    }
+
+    resetUnavailableEpisode() {
+        this.consecutiveUnavailableReads = 0;
+        this.unavailableErrorEmitted = false;
     }
 
     preprocessText(text) {
         return String(text || '')
-            // Native UIA strings may include a C-style NUL terminator; never let
-            // control characters become transcript content.
             .replace(CONTROL_CHARS_EXCEPT_WHITESPACE_PATTERN, '')
-            // Remove acronym formatting (e.g., "A.I." -> "AI")
             .replace(/([A-Z])\.([A-Z])\./g, '$1$2')
             .replace(/([A-Z])\.([A-Z])/g, '$1 $2')
-            // Fix punctuation spacing
             .replace(/([.!?])([A-Za-z])/g, '$1 $2')
-            // Handle CJK punctuation
             .replace(/([\uFF0C\u3002\uFF01\uFF1F])([A-Za-z])/g, '$1 $2')
-            // Replace excessive newlines
             .replace(/\n{2,}/g, '. ');
-    }
-
-    sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 
-module.exports = new CaptionSyncService();
+const captionSyncService = new CaptionSyncService();
+
+module.exports = captionSyncService;
+module.exports.CaptionSyncService = CaptionSyncService;

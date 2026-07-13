@@ -1,17 +1,69 @@
 const { clipboard, desktopCapturer, screen } = require('electron');
 
 class ScreenCapture {
+  constructor({
+    clipboard: clipboardApi = clipboard,
+    desktopCapturer: desktopCapturerApi = desktopCapturer,
+    screen: screenApi = screen,
+    logger = console
+  } = {}) {
+    this.clipboard = clipboardApi;
+    this.desktopCapturer = desktopCapturerApi;
+    this.screen = screenApi;
+    this.logger = logger;
+  }
+
+  getDisplayId(display) {
+    if (!display || display.id === null || display.id === undefined) {
+      throw new Error('Screen capture requires a display with an id.');
+    }
+
+    return String(display.id);
+  }
+
+  getRequiredScreen() {
+    if (!this.screen?.getAllDisplays || !this.screen?.getPrimaryDisplay) {
+      throw new Error('Screen capture display APIs are unavailable.');
+    }
+
+    return this.screen;
+  }
+
+  getRequiredDesktopCapturer() {
+    if (!this.desktopCapturer?.getSources) {
+      throw new Error('Screen capture source APIs are unavailable.');
+    }
+
+    return this.desktopCapturer;
+  }
+
+  getRequiredClipboard() {
+    if (!this.clipboard?.writeImage) {
+      throw new Error('Screen capture clipboard APIs are unavailable.');
+    }
+
+    return this.clipboard;
+  }
+
   getTargetDisplay(displayId = null) {
-    const displays = screen.getAllDisplays();
+    const screenApi = this.getRequiredScreen();
+    const displays = screenApi.getAllDisplays();
 
     if (displayId !== null && displayId !== undefined) {
       const matchedDisplay = displays.find((display) => String(display.id) === String(displayId));
       if (matchedDisplay) {
         return matchedDisplay;
       }
+
+      throw new Error(`Screen capture display "${String(displayId)}" is unavailable.`);
     }
 
-    return screen.getPrimaryDisplay();
+    const primaryDisplay = screenApi.getPrimaryDisplay();
+    if (!primaryDisplay) {
+      throw new Error('Screen capture primary display is unavailable.');
+    }
+
+    return primaryDisplay;
   }
 
   getCaptureSize(targetDisplay) {
@@ -23,22 +75,24 @@ class ScreenCapture {
   }
 
   async getScreenSource(targetDisplay) {
+    const targetDisplayId = this.getDisplayId(targetDisplay);
     const captureSize = this.getCaptureSize(targetDisplay);
-    const sources = await desktopCapturer.getSources({
+    const sources = await this.getRequiredDesktopCapturer().getSources({
       types: ['screen'],
       thumbnailSize: captureSize
     });
 
-    return sources.find((item) => item.display_id === String(targetDisplay.id)) || sources[0] || null;
+    const source = sources.find((item) => String(item?.display_id) === targetDisplayId);
+    if (!source) {
+      throw new Error(`No screen source found for display "${targetDisplayId}".`);
+    }
+
+    return source;
   }
 
   async prepareDisplayCapture(displayId = null) {
     const targetDisplay = this.getTargetDisplay(displayId);
     const source = await this.getScreenSource(targetDisplay);
-
-    if (!source) {
-      throw new Error('No screen source found');
-    }
 
     if (!source.thumbnail || source.thumbnail.isEmpty()) {
       throw new Error('Captured screen image is empty');
@@ -46,8 +100,36 @@ class ScreenCapture {
 
     return {
       display: targetDisplay,
+      sourceDisplayId: this.getDisplayId({ id: source.display_id }),
       image: source.thumbnail
     };
+  }
+
+  validatePreparedCapture(preparedCapture, requestedDisplayId = null) {
+    if (!preparedCapture?.image) {
+      throw new Error('Prepared screen capture image is unavailable.');
+    }
+
+    const preparedDisplayId = this.getDisplayId(preparedCapture.display);
+    if (preparedCapture.sourceDisplayId === null || preparedCapture.sourceDisplayId === undefined) {
+      throw new Error('Prepared screen capture source display identity is unavailable.');
+    }
+
+    const sourceDisplayId = String(preparedCapture.sourceDisplayId);
+    if (sourceDisplayId !== preparedDisplayId) {
+      throw new Error(
+        `Prepared capture source display "${sourceDisplayId}" does not match geometry display "${preparedDisplayId}".`
+      );
+    }
+
+    if (requestedDisplayId !== null && requestedDisplayId !== undefined
+      && String(requestedDisplayId) !== preparedDisplayId) {
+      throw new Error(
+        `Prepared capture belongs to display "${preparedDisplayId}", not requested display "${String(requestedDisplayId)}".`
+      );
+    }
+
+    return preparedCapture;
   }
 
   cropImageToBounds(image, display, selectionBounds) {
@@ -78,15 +160,21 @@ class ScreenCapture {
 
   async captureArea(selectionBounds, displayId = null, preparedCapture = null) {
     try {
-      const capture = preparedCapture || await this.prepareDisplayCapture(displayId);
+      const capture = this.validatePreparedCapture(
+        preparedCapture || await this.prepareDisplayCapture(displayId),
+        displayId
+      );
       const image = this.cropImageToBounds(capture.image, capture.display, selectionBounds);
-      clipboard.writeImage(image);
+      this.getRequiredClipboard().writeImage(image);
       return { success: true, image, display: capture.display };
     } catch (error) {
-      console.error('[ERROR] Area capture failed:', error);
+      this.logger?.error?.('[ERROR] Area capture failed:', error);
       throw error;
     }
   }
 }
 
-module.exports = new ScreenCapture();
+const defaultScreenCapture = new ScreenCapture();
+
+module.exports = defaultScreenCapture;
+module.exports.ScreenCapture = ScreenCapture;

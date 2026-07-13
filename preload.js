@@ -44,10 +44,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deletePromptMode: (modeId) => ipcRenderer.invoke('delete-prompt-mode', modeId),
   renamePromptMode: (payload) => ipcRenderer.invoke('rename-prompt-mode', payload),
   savePromptMode: (payload) => ipcRenderer.invoke('save-prompt-mode', payload),
+  updatePromptModeDraft: (payload) => ipcRenderer.invoke('update-prompt-mode-draft', payload),
+  flushPromptModeDrafts: () => ipcRenderer.invoke('flush-prompt-mode-drafts'),
   setPromptModeHotkey: (payload) => ipcRenderer.invoke('set-prompt-mode-hotkey', payload),
   getGlobalHotkeys: () => ipcRenderer.invoke('get-global-hotkeys'),
   setGlobalHotkey: (payload) => ipcRenderer.invoke('set-global-hotkey', payload),
-  getActiveTab: () => ipcRenderer.invoke('get-active-tab'),
   getTabs: () => ipcRenderer.invoke('get-tabs'),
 
   onTabCreated: (callback) => subscribe('tab-created', callback),
@@ -58,6 +59,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTabNavigated: (callback) => subscribe('tab-navigated', callback),
   onTabLoading: (callback) => subscribe('tab-loading', callback),
   onPromptModeState: (callback) => subscribe('prompt-mode-state', callback),
+  onPromptModePersistenceStatus: (callback) => subscribe('prompt-mode-persistence-status', callback),
   onModeMenuState: (callback) => subscribe('mode-menu-state', callback),
   onModeMenuAction: (callback) => subscribe('mode-menu-action', callback),
   onModeMenuClosed: (callback) => subscribe('mode-menu-closed', callback),
@@ -66,6 +68,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   onCaptionUpdate: (callback) => subscribe('caption-update', callback),
   onCaptionError: (callback) => subscribe('caption-error', callback),
+  onTranscriptSourceState: (callback) => subscribe('transcript-source-state', callback),
   onDeepgramCaptureCommand: (callback) => subscribe('deepgram-capture-command', callback),
   onDeepgramCaptureState: (callback) => subscribe('deepgram-capture-state', callback)
 });

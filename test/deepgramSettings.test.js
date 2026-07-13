@@ -78,7 +78,8 @@ test('preferences keep unavailable keys memory-only and synchronously scrub lega
   assert.match(main, /require\('\.\/src\/deepgramApiKeyStorage'\)/);
   assert.doesNotMatch(storage, /return\s*\{\s*encrypted:\s*false/);
   assert.doesNotMatch(persistedSnapshot, /encrypted:\s*false/);
-  assert.match(main, /decodeDeepgramApiKeyStorage/);
+  assert.match(main, /loadAndMigrateDeepgramApiKeyPreferencesFile/);
+  assert.match(main, /loadAndMigrateDeepgramApiKeyPreferencesFile\(\s*getAppPreferencesStorePath\(\),\s*safeStorage\s*\)/);
   assert.match(main, /deepgramKeyLoadResult\.needsRewrite/);
   assert.match(main, /persistAppPreferencesSync\(\)/);
   assert.match(main, /encodeDeepgramApiKeyForStorage\(deepgramApiKey, safeStorage\)/);

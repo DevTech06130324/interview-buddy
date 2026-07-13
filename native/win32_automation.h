@@ -15,7 +15,11 @@ public:
     static void Cleanup();
 
     // Launch LiveCaptions process if needed, or attach to the existing one.
-    static HRESULT LaunchLiveCaptions(DWORD* processId, bool* launchedProcess);
+    static HRESULT LaunchLiveCaptions(
+        DWORD* processId,
+        bool* launchedProcess,
+        HANDLE* launchedProcessHandle
+    );
 
     // Find the Live Captions top-level window for a process ID.
     static HRESULT FindWindowByProcessId(DWORD processId, IUIAutomationElement** window);
@@ -31,12 +35,10 @@ public:
     static HRESULT GetElementText(IUIAutomationElement* element, std::wstring& text);
     static HRESULT GetElementWindowHandle(IUIAutomationElement* element, HWND* windowHandle);
 
-    static HRESULT KillProcess(DWORD processId);
-
 private:
-    static IUIAutomation* automation;
-    static bool comInitialized;
-    static bool initialized;
+    static thread_local IUIAutomation* automation;
+    static thread_local bool comInitialized;
+    static thread_local bool initialized;
 };
 
 #endif

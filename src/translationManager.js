@@ -1,5 +1,4 @@
 const EventEmitter = require('events');
-const { logTranscriptEvent } = require('./transcriptLogger');
 
 const EOS_CHARS = new Set(['.', '?', '!', '\u3002', '\uff1f', '\uff01']);
 const GOOGLE_TRANSLATE_URL = 'https://clients5.google.com/translate_a/t';
@@ -185,45 +184,6 @@ function isTransientTranslationError(error) {
   return error.name === 'TypeError';
 }
 
-function getEntrySnapshot(entry, index = null) {
-  if (!entry) {
-    return null;
-  }
-
-  return {
-    index,
-    id: entry.id,
-    sourceText: entry.sourceText,
-    translatedText: entry.translatedText,
-    status: entry.status,
-    isFinal: entry.isFinal,
-    version: entry.version,
-    lastQueuedText: entry.lastQueuedText,
-    queuedTranslationText: entry.queuedTranslationText,
-    changeCount: entry.changeCount
-  };
-}
-
-function getEntrySnapshots(entries) {
-  return entries.map((entry, index) => getEntrySnapshot(entry, index));
-}
-
-function getSegmentSnapshot(segment, index = null) {
-  if (!segment) {
-    return null;
-  }
-
-  return {
-    index,
-    sourceText: segment.sourceText,
-    isFinal: segment.isFinal
-  };
-}
-
-function getSegmentSnapshots(segments) {
-  return segments.map((segment, index) => getSegmentSnapshot(segment, index));
-}
-
 class TranslationManager extends EventEmitter {
   constructor() {
     super();
@@ -237,10 +197,35 @@ class TranslationManager extends EventEmitter {
     this.activeTranslationCount = 0;
     this.translationEnabled = false;
     this.payloadVersion = 0;
+    this.updateEventBatchDepth = 0;
+    this.pendingUpdateEvent = false;
   }
 
   bumpPayloadVersion() {
     this.payloadVersion += 1;
+  }
+
+  beginUpdateEventBatch() {
+    this.updateEventBatchDepth += 1;
+  }
+
+  endUpdateEventBatch() {
+    this.updateEventBatchDepth = Math.max(0, this.updateEventBatchDepth - 1);
+    if (this.updateEventBatchDepth !== 0 || !this.pendingUpdateEvent) {
+      return;
+    }
+
+    this.pendingUpdateEvent = false;
+    this.emit('updated', this.getPayload());
+  }
+
+  emitUpdated() {
+    if (this.updateEventBatchDepth > 0) {
+      this.pendingUpdateEvent = true;
+      return;
+    }
+
+    this.emit('updated', this.getPayload());
   }
 
   getPayload() {
@@ -260,19 +245,10 @@ class TranslationManager extends EventEmitter {
   }
 
   reset(fullText = '') {
-    const entriesBefore = getEntrySnapshots(this.entries);
-    const requestedFullText = String(fullText || '');
     this.sessionGeneration += 1;
-    this.liveCaptionText = sanitizeCaptionText(requestedFullText);
+    this.liveCaptionText = sanitizeCaptionText(fullText);
     this.entryCounter = 0;
     this.clearPartialIdleTimer();
-
-    logTranscriptEvent('translation-manager-reset-started', {
-      sessionGeneration: this.sessionGeneration,
-      requestedFullText,
-      sanitizedFullText: this.liveCaptionText,
-      entriesBefore
-    });
 
     for (const entry of this.entries) {
       this.abortEntryTranslation(entry);
@@ -281,16 +257,11 @@ class TranslationManager extends EventEmitter {
     this.translationQueue = [];
     this.entries = [];
     this.bumpPayloadVersion();
-    logTranscriptEvent('translation-manager-reset-completed', {
-      sessionGeneration: this.sessionGeneration,
-      payload: this.getPayload()
-    });
     return this.getPayload();
   }
 
   update(fullText) {
-    const rawLiveCaptionText = String(fullText || '');
-    const nextLiveCaptionText = sanitizeCaptionText(rawLiveCaptionText);
+    const nextLiveCaptionText = sanitizeCaptionText(fullText);
 
     if (nextLiveCaptionText === this.liveCaptionText) {
       return this.getPayload();
@@ -303,27 +274,19 @@ class TranslationManager extends EventEmitter {
     }
 
     const segments = parseCaptionSegments(nextLiveCaptionText);
-    logTranscriptEvent('translation-manager-update-started', {
-      sessionGeneration: this.sessionGeneration,
-      rawLiveCaptionText,
-      liveCaptionText: nextLiveCaptionText,
-      parsedSegments: getSegmentSnapshots(segments),
-      entriesBefore: getEntrySnapshots(this.entries),
-      panelFullTextBefore: this.getSessionTranscriptText()
-    });
-    this.reconcileEntries(segments);
-    if (this.translationEnabled) {
-      this.queueTranslations();
-    } else {
-      this.markEntriesTranslationDisabled();
+    this.beginUpdateEventBatch();
+    try {
+      this.reconcileEntries(segments);
+      if (this.translationEnabled) {
+        this.queueTranslations();
+      } else {
+        this.markEntriesTranslationDisabled();
+      }
+      this.bumpPayloadVersion();
+      return this.getPayload();
+    } finally {
+      this.endUpdateEventBatch();
     }
-    this.bumpPayloadVersion();
-    logTranscriptEvent('translation-manager-update-completed', {
-      sessionGeneration: this.sessionGeneration,
-      entriesAfter: getEntrySnapshots(this.entries),
-      panelFullTextAfter: this.getSessionTranscriptText()
-    });
-    return this.getPayload();
   }
 
   setTranslationEnabled(isEnabled) {
@@ -332,28 +295,33 @@ class TranslationManager extends EventEmitter {
       return this.getPayload();
     }
 
-    this.translationEnabled = nextEnabled;
-    if (!this.translationEnabled) {
-      this.markEntriesTranslationDisabled();
-    } else {
-      for (const entry of this.entries) {
-        if (!entry?.sourceText || entry.status !== 'disabled') {
-          continue;
+    this.beginUpdateEventBatch();
+    try {
+      this.translationEnabled = nextEnabled;
+      if (!this.translationEnabled) {
+        this.markEntriesTranslationDisabled();
+      } else {
+        for (const entry of this.entries) {
+          if (!entry?.sourceText || entry.status !== 'disabled') {
+            continue;
+          }
+
+          entry.translatedText = '';
+          entry.status = 'pending';
+          entry.lastQueuedText = '';
+          entry.queuedTranslationText = '';
         }
 
-        entry.translatedText = '';
-        entry.status = 'pending';
-        entry.lastQueuedText = '';
-        entry.queuedTranslationText = '';
+        this.queueTranslations();
       }
 
-      this.queueTranslations();
+      this.bumpPayloadVersion();
+      const payload = this.getPayload();
+      this.emitUpdated();
+      return payload;
+    } finally {
+      this.endUpdateEventBatch();
     }
-
-    this.bumpPayloadVersion();
-    const payload = this.getPayload();
-    this.emit('updated', payload);
-    return payload;
   }
 
   getSessionTranscriptText() {
@@ -446,38 +414,43 @@ class TranslationManager extends EventEmitter {
       return this.getPayload();
     }
 
-    this.liveCaptionText = nextLiveCaptionText;
+    this.beginUpdateEventBatch();
+    try {
+      this.liveCaptionText = nextLiveCaptionText;
 
-    const existingEntries = new Map(this.entries.map((entry) => [entry.id, entry]));
-    const nextEntries = [];
+      const existingEntries = new Map(this.entries.map((entry) => [entry.id, entry]));
+      const nextEntries = [];
 
-    for (let index = 0; index < normalizedSourceEntries.length; index += 1) {
-      const sourceEntry = normalizedSourceEntries[index];
-      const entryId = sourceEntry.id || `caption-${this.sessionGeneration}-${index}`;
-      const existingEntry = existingEntries.get(entryId);
-      sourceEntry.id = entryId;
+      for (let index = 0; index < normalizedSourceEntries.length; index += 1) {
+        const sourceEntry = normalizedSourceEntries[index];
+        const entryId = sourceEntry.id || `caption-${this.sessionGeneration}-${index}`;
+        const existingEntry = existingEntries.get(entryId);
+        sourceEntry.id = entryId;
 
-      if (existingEntry) {
-        this.updateEntryFromTranscriptEntry(existingEntry, sourceEntry);
-        nextEntries.push(existingEntry);
-        existingEntries.delete(entryId);
-      } else {
-        nextEntries.push(this.createEntryFromTranscriptEntry(sourceEntry));
+        if (existingEntry) {
+          this.updateEntryFromTranscriptEntry(existingEntry, sourceEntry);
+          nextEntries.push(existingEntry);
+          existingEntries.delete(entryId);
+        } else {
+          nextEntries.push(this.createEntryFromTranscriptEntry(sourceEntry));
+        }
       }
-    }
 
-    for (const removedEntry of existingEntries.values()) {
-      this.abortEntryTranslation(removedEntry);
-    }
+      for (const removedEntry of existingEntries.values()) {
+        this.abortEntryTranslation(removedEntry);
+      }
 
-    this.entries = nextEntries;
-    if (this.translationEnabled) {
-      this.queueTranslations();
-    } else {
-      this.markEntriesTranslationDisabled();
+      this.entries = nextEntries;
+      if (this.translationEnabled) {
+        this.queueTranslations();
+      } else {
+        this.markEntriesTranslationDisabled();
+      }
+      this.bumpPayloadVersion();
+      return this.getPayload();
+    } finally {
+      this.endUpdateEventBatch();
     }
-    this.bumpPayloadVersion();
-    return this.getPayload();
   }
 
   getReconcileSearchStart(segmentCount) {
@@ -574,29 +547,9 @@ class TranslationManager extends EventEmitter {
     }
 
     if (!bestMatch || bestMatch.score < 8) {
-      logTranscriptEvent('translation-reconcile-alignment', {
-        sessionGeneration: this.sessionGeneration,
-        selectedStartIndex: fallbackStartIndex,
-        fallbackStartIndex,
-        reason: bestMatch ? 'low-confidence' : 'no-match',
-        bestMatch,
-        searchStartIndex,
-        segmentCount: segments.length,
-        entryCount: this.entries.length
-      });
       return fallbackStartIndex;
     }
 
-    logTranscriptEvent('translation-reconcile-alignment', {
-      sessionGeneration: this.sessionGeneration,
-      selectedStartIndex: bestMatch.index,
-      fallbackStartIndex,
-      reason: 'anchored-window',
-      bestMatch,
-      searchStartIndex,
-      segmentCount: segments.length,
-      entryCount: this.entries.length
-    });
     return bestMatch.index;
   }
 
@@ -639,13 +592,6 @@ class TranslationManager extends EventEmitter {
 
   reconcileSegment(segment, startIndex, hasFollowingSegment, previousSegmentEntry = null) {
     if (previousSegmentEntry && isLikelySuffixDuplicate(previousSegmentEntry.sourceText, segment.sourceText)) {
-      logTranscriptEvent('translation-reconcile-decision', {
-        sessionGeneration: this.sessionGeneration,
-        action: 'skip-suffix-duplicate',
-        segment: getSegmentSnapshot(segment),
-        previousSegmentEntry: getEntrySnapshot(previousSegmentEntry),
-        startIndex
-      });
       return {
         entry: previousSegmentEntry,
         nextStartIndex: startIndex
@@ -655,24 +601,11 @@ class TranslationManager extends EventEmitter {
     const match = this.findMatchingEntry(segment, startIndex, hasFollowingSegment);
 
     if (match) {
-      const entryBefore = getEntrySnapshot(match.entry, match.index);
       if (match.updateSourceText) {
         this.updateEntryFromSegment(match.entry, segment);
       } else if (match.entry.isFinal !== segment.isFinal) {
         match.entry.isFinal = segment.isFinal;
       }
-
-      logTranscriptEvent('translation-reconcile-decision', {
-        sessionGeneration: this.sessionGeneration,
-        action: match.updateSourceText ? 'update-existing' : 'match-existing',
-        matchType: match.matchType,
-        startIndex,
-        matchIndex: match.index,
-        hasFollowingSegment,
-        segment: getSegmentSnapshot(segment),
-        entryBefore,
-        entryAfter: getEntrySnapshot(match.entry, match.index)
-      });
 
       return {
         entry: match.entry,
@@ -683,15 +616,6 @@ class TranslationManager extends EventEmitter {
     const insertIndex = Math.min(startIndex, this.entries.length);
     const entry = this.createEntry(segment);
     this.entries.splice(insertIndex, 0, entry);
-    logTranscriptEvent('translation-reconcile-decision', {
-      sessionGeneration: this.sessionGeneration,
-      action: 'insert-new',
-      startIndex,
-      insertIndex,
-      hasFollowingSegment,
-      segment: getSegmentSnapshot(segment),
-      entryAfter: getEntrySnapshot(entry, insertIndex)
-    });
     return {
       entry,
       nextStartIndex: insertIndex + 1
@@ -706,14 +630,6 @@ class TranslationManager extends EventEmitter {
     let nextStartIndex = this.findBestReconcileSearchStart(segments);
     const windowStartIndex = nextStartIndex;
     let previousSegmentEntry = null;
-
-    logTranscriptEvent('translation-reconcile-started', {
-      sessionGeneration: this.sessionGeneration,
-      searchStartIndex: nextStartIndex,
-      previousPartial: getEntrySnapshot(previousPartial),
-      segments: getSegmentSnapshots(segments),
-      entriesBefore: getEntrySnapshots(this.entries)
-    });
 
     for (let index = 0; index < segments.length; index += 1) {
       const result = this.reconcileSegment(
@@ -735,38 +651,17 @@ class TranslationManager extends EventEmitter {
     ) {
       this.abortEntryTranslation(previousPartial);
       this.entries = this.entries.filter((entry) => entry !== previousPartial);
-      logTranscriptEvent('translation-reconcile-decision', {
-        sessionGeneration: this.sessionGeneration,
-        action: 'remove-untouched-partial',
-        previousPartial: getEntrySnapshot(previousPartial)
-      });
     }
 
     if (segments.length > 0) {
-      const removedEntries = [];
       this.entries = this.entries.filter((entry, index) => {
         const shouldKeep = index < windowStartIndex || touchedEntries.has(entry);
         if (!shouldKeep) {
           this.abortEntryTranslation(entry);
-          removedEntries.push(getEntrySnapshot(entry, index));
         }
         return shouldKeep;
       });
-
-      if (removedEntries.length > 0) {
-        logTranscriptEvent('translation-reconcile-decision', {
-          sessionGeneration: this.sessionGeneration,
-          action: 'remove-stale-window-entries',
-          windowStartIndex,
-          removedEntries
-        });
-      }
     }
-
-    logTranscriptEvent('translation-reconcile-completed', {
-      sessionGeneration: this.sessionGeneration,
-      entriesAfter: getEntrySnapshots(this.entries)
-    });
   }
 
   queueTranslations() {
@@ -790,20 +685,9 @@ class TranslationManager extends EventEmitter {
 
     if (partialEntry.changeCount >= PARTIAL_CHANGE_THRESHOLD) {
       partialEntry.changeCount = 0;
-      logTranscriptEvent('translation-partial-queued-by-change-count', {
-        sessionGeneration: this.sessionGeneration,
-        entry: getEntrySnapshot(partialEntry, this.entries.length - 1),
-        partialChangeThreshold: PARTIAL_CHANGE_THRESHOLD
-      });
       this.queueEntryTranslation(partialEntry);
       return;
     }
-
-    logTranscriptEvent('translation-partial-idle-timer-scheduled', {
-      sessionGeneration: this.sessionGeneration,
-      entry: getEntrySnapshot(partialEntry, this.entries.length - 1),
-      partialIdleMs: PARTIAL_IDLE_MS
-    });
 
     this.partialIdleTimer = setTimeout(() => {
       this.partialIdleTimer = null;
@@ -814,10 +698,6 @@ class TranslationManager extends EventEmitter {
         && !latestPartialEntry.isFinal
         && getByteLength(latestPartialEntry.sourceText) >= PARTIAL_MIN_LENGTH
       ) {
-        logTranscriptEvent('translation-partial-queued-by-idle', {
-          sessionGeneration: this.sessionGeneration,
-          entry: getEntrySnapshot(latestPartialEntry, this.entries.length - 1)
-        });
         this.queueEntryTranslation(latestPartialEntry);
       }
     }, PARTIAL_IDLE_MS);
@@ -826,11 +706,6 @@ class TranslationManager extends EventEmitter {
   queueEntryTranslation(entry) {
     if (!this.translationEnabled) {
       this.markEntryTranslationDisabled(entry);
-      logTranscriptEvent('translation-queue-skipped', {
-        sessionGeneration: this.sessionGeneration,
-        reason: 'translation-disabled',
-        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
-      });
       return;
     }
 
@@ -847,14 +722,6 @@ class TranslationManager extends EventEmitter {
       );
 
     if (!entry || !entry.sourceText || shouldSkipSameQueuedText) {
-      logTranscriptEvent('translation-queue-skipped', {
-        sessionGeneration: this.sessionGeneration,
-        reason: !entry ? 'missing-entry' : (!entry.sourceText ? 'empty-source-text' : 'same-as-last-queued'),
-        hasActiveRequest,
-        hasQueuedRequest,
-        hasUsableTranslation,
-        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
-      });
       return;
     }
 
@@ -867,11 +734,7 @@ class TranslationManager extends EventEmitter {
       entry.queuedTranslationText = '';
       entry.controller = null;
       this.bumpPayloadVersion();
-      logTranscriptEvent('translation-cache-hit', {
-        sessionGeneration: this.sessionGeneration,
-        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
-      });
-      this.emit('updated', this.getPayload());
+      this.emitUpdated();
       return;
     }
 
@@ -887,13 +750,6 @@ class TranslationManager extends EventEmitter {
     const controller = new AbortController();
 
     entry.controller = controller;
-
-    logTranscriptEvent('translation-queued', {
-      sessionGeneration,
-      entryVersion,
-      entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
-      timeoutMs: TRANSLATION_TIMEOUT_MS
-    });
 
     this.translationQueue.push({
       entry,
@@ -921,12 +777,6 @@ class TranslationManager extends EventEmitter {
       }
 
       if (!this.isCurrentTranslation(task.entry, task.entryVersion, task.sessionGeneration)) {
-        logTranscriptEvent('translation-queued-task-ignored-stale', {
-          sessionGeneration: task.sessionGeneration,
-          entryVersion: task.entryVersion,
-          entry: getEntrySnapshot(task.entry, this.entries.indexOf(task.entry)),
-          currentSessionGeneration: this.sessionGeneration
-        });
         continue;
       }
 
@@ -948,13 +798,6 @@ class TranslationManager extends EventEmitter {
     try {
       const translatedText = await this.translateWithGoogle(sourceText, controller.signal);
       if (!this.isCurrentTranslation(entry, entryVersion, sessionGeneration)) {
-        logTranscriptEvent('translation-result-ignored-stale', {
-          sessionGeneration,
-          entryVersion,
-          translatedText,
-          entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
-          currentSessionGeneration: this.sessionGeneration
-        });
         return;
       }
 
@@ -963,31 +806,13 @@ class TranslationManager extends EventEmitter {
       entry.controller = null;
       entry.queuedTranslationText = '';
       this.bumpPayloadVersion();
-      logTranscriptEvent('translation-succeeded', {
-        sessionGeneration,
-        entryVersion,
-        translatedText,
-        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
-      });
-      this.emit('updated', this.getPayload());
+      this.emitUpdated();
     } catch (error) {
       if (!this.isCurrentTranslation(entry, entryVersion, sessionGeneration)) {
-        logTranscriptEvent('translation-error-ignored-stale', {
-          sessionGeneration,
-          entryVersion,
-          error,
-          entry: getEntrySnapshot(entry, this.entries.indexOf(entry)),
-          currentSessionGeneration: this.sessionGeneration
-        });
         return;
       }
 
       if (error?.name === 'AbortError' && controller.signal.aborted) {
-        logTranscriptEvent('translation-aborted', {
-          sessionGeneration,
-          entryVersion,
-          entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
-        });
         return;
       }
 
@@ -998,14 +823,7 @@ class TranslationManager extends EventEmitter {
       entry.controller = null;
       entry.queuedTranslationText = '';
       this.bumpPayloadVersion();
-      logTranscriptEvent('translation-failed', {
-        sessionGeneration,
-        entryVersion,
-        timedOut: error?.code === 'TRANSLATION_TIMEOUT',
-        error,
-        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
-      });
-      this.emit('updated', this.getPayload());
+      this.emitUpdated();
     }
   }
 
@@ -1018,10 +836,6 @@ class TranslationManager extends EventEmitter {
 
   abortEntryTranslation(entry) {
     if (entry?.controller && !entry.controller.signal.aborted) {
-      logTranscriptEvent('translation-abort-requested', {
-        sessionGeneration: this.sessionGeneration,
-        entry: getEntrySnapshot(entry, this.entries.indexOf(entry))
-      });
       entry.controller.abort();
     }
 
@@ -1146,25 +960,11 @@ class TranslationManager extends EventEmitter {
           transientFailure = transientFailure || isTransientTranslationError(error);
           hadTimeoutFailure = hadTimeoutFailure || error?.code === 'TRANSLATION_TIMEOUT';
           errors.push(`${sourceLanguage}: ${error?.message || String(error)}`);
-          logTranscriptEvent('translation-provider-attempt-failed', {
-            sessionGeneration: this.sessionGeneration,
-            sourceLanguage,
-            attempt,
-            text,
-            transient: isTransientTranslationError(error),
-            error
-          });
         }
       }
 
       if (attempt < TRANSLATION_MAX_RETRIES && transientFailure) {
         const backoffMs = TRANSLATION_RETRY_BASE_DELAY_MS * (2 ** attempt);
-        logTranscriptEvent('translation-provider-retry-scheduled', {
-          sessionGeneration: this.sessionGeneration,
-          attempt,
-          backoffMs,
-          text,
-        });
         await this.sleepWithAbort(backoffMs, signal);
         continue;
       }

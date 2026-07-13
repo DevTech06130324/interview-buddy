@@ -2,15 +2,175 @@
 #include "win32_automation.h"
 #include <thread>
 #include <chrono>
+#include <mutex>
 #include <string>
 
-// Global references
-static IUIAutomationElement* g_window = nullptr;
-static IUIAutomationElement* g_textBlock = nullptr;
-static DWORD g_processId = 0;
-static bool g_ownsProcess = false;
+// COM/UI Automation references stay on the worker thread that created them.
+static thread_local IUIAutomationElement* g_window = nullptr;
+static thread_local IUIAutomationElement* g_textBlock = nullptr;
+static thread_local DWORD g_processId = 0;
+static thread_local bool g_ownsProcess = false;
+
+// Process ownership must survive a worker crash that occurs after CreateProcess
+// but before the worker can send its start response to Electron main.
+static std::mutex g_ownedProcessMutex;
+static HANDLE g_appOwnedProcessHandle = nullptr;
+static DWORD g_appOwnedProcessId = 0;
+static constexpr DWORD PROCESS_EXIT_GRACE_MS = 2000;
+static constexpr DWORD PROCESS_TERMINATE_WAIT_MS = 2000;
 
 bool GetLiveCaptionsWindowHandle(HWND* windowHandle, bool allowLaunch);
+bool AttachToLiveCaptionsWindow(DWORD processId);
+
+void ClearRegisteredOwnershipLocked() {
+    if (g_appOwnedProcessHandle) {
+        CloseHandle(g_appOwnedProcessHandle);
+        g_appOwnedProcessHandle = nullptr;
+    }
+    g_appOwnedProcessId = 0;
+}
+
+bool IsRegisteredProcessAliveLocked() {
+    if (!g_appOwnedProcessHandle || !g_appOwnedProcessId) {
+        return false;
+    }
+
+    const DWORD waitResult = WaitForSingleObject(g_appOwnedProcessHandle, 0);
+    if (waitResult == WAIT_TIMEOUT) {
+        return true;
+    }
+    if (waitResult == WAIT_OBJECT_0) {
+        ClearRegisteredOwnershipLocked();
+    }
+    return false;
+}
+
+bool RegisterAppOwnedProcess(DWORD processId, HANDLE processHandle) {
+    if (!processId || !processHandle) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_ownedProcessMutex);
+    if (IsRegisteredProcessAliveLocked()) {
+        if (g_appOwnedProcessId == processId) {
+            CloseHandle(processHandle);
+            return true;
+        }
+
+        TerminateProcess(processHandle, 0);
+        CloseHandle(processHandle);
+        return false;
+    }
+
+    // An invalid retained handle is not proof that the registered process
+    // exited. Keep the record instead of replacing its ownership authority.
+    if (g_appOwnedProcessHandle || g_appOwnedProcessId) {
+        TerminateProcess(processHandle, 0);
+        CloseHandle(processHandle);
+        return false;
+    }
+
+    g_appOwnedProcessId = processId;
+    g_appOwnedProcessHandle = processHandle;
+    return true;
+}
+
+bool IsRegisteredOwnedProcess(DWORD processId) {
+    std::lock_guard<std::mutex> lock(g_ownedProcessMutex);
+    return IsRegisteredProcessAliveLocked() && g_appOwnedProcessId == processId;
+}
+
+DWORD GetRegisteredOwnedProcessId() {
+    std::lock_guard<std::mutex> lock(g_ownedProcessMutex);
+    return IsRegisteredProcessAliveLocked() ? g_appOwnedProcessId : 0;
+}
+
+bool WaitForRegisteredOwnedProcessExit(DWORD trackedProcessId, DWORD timeoutMs) {
+    std::lock_guard<std::mutex> lock(g_ownedProcessMutex);
+    if (
+        !trackedProcessId
+        || trackedProcessId != g_appOwnedProcessId
+        || !g_appOwnedProcessHandle
+    ) {
+        return false;
+    }
+
+    const DWORD waitResult = WaitForSingleObject(g_appOwnedProcessHandle, timeoutMs);
+    if (waitResult == WAIT_OBJECT_0) {
+        ClearRegisteredOwnershipLocked();
+        return true;
+    }
+    return false;
+}
+
+HRESULT TerminateRegisteredOwnedProcess(
+    DWORD trackedProcessId,
+    DWORD timeoutMs = PROCESS_TERMINATE_WAIT_MS
+) {
+    std::lock_guard<std::mutex> lock(g_ownedProcessMutex);
+    if (
+        !trackedProcessId
+        || trackedProcessId != g_appOwnedProcessId
+        || !g_appOwnedProcessHandle
+    ) {
+        return E_FAIL;
+    }
+
+    const DWORD waitResult = WaitForSingleObject(g_appOwnedProcessHandle, 0);
+    if (waitResult == WAIT_OBJECT_0) {
+        ClearRegisteredOwnershipLocked();
+        return S_OK;
+    }
+    if (waitResult == WAIT_FAILED) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    if (!TerminateProcess(g_appOwnedProcessHandle, 0)) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    const DWORD exitWaitResult = WaitForSingleObject(g_appOwnedProcessHandle, timeoutMs);
+    if (exitWaitResult == WAIT_OBJECT_0) {
+        ClearRegisteredOwnershipLocked();
+        return S_OK;
+    }
+    if (exitWaitResult == WAIT_TIMEOUT) {
+        return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+    }
+    return HRESULT_FROM_WIN32(GetLastError());
+}
+
+Napi::Object CreateCaptionOkSnapshot(Napi::Env env, const std::string& text) {
+    Napi::Object snapshot = Napi::Object::New(env);
+    snapshot.Set("status", Napi::String::New(env, "ok"));
+    snapshot.Set("text", Napi::String::New(env, text));
+    return snapshot;
+}
+
+Napi::Object CreateCaptionUnavailableSnapshot(
+    Napi::Env env,
+    const char* code,
+    const char* message
+) {
+    Napi::Object snapshot = Napi::Object::New(env);
+    snapshot.Set("status", Napi::String::New(env, "unavailable"));
+    snapshot.Set("code", Napi::String::New(env, code));
+    snapshot.Set("message", Napi::String::New(env, message));
+    return snapshot;
+}
+
+Napi::Object CreateLifecycleResult(
+    Napi::Env env,
+    bool success,
+    DWORD processId,
+    bool owned
+) {
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("success", Napi::Boolean::New(env, success));
+    result.Set("processId", Napi::Number::New(env, static_cast<double>(processId)));
+    result.Set("owned", Napi::Boolean::New(env, owned));
+    return result;
+}
 
 void ReleaseCachedLiveCaptionsElements() {
     if (g_textBlock) {
@@ -21,6 +181,13 @@ void ReleaseCachedLiveCaptionsElements() {
         g_window->Release();
         g_window = nullptr;
     }
+}
+
+void CleanupWorkerEnvironment() {
+    ReleaseCachedLiveCaptionsElements();
+    g_processId = 0;
+    g_ownsProcess = false;
+    Win32Automation::Cleanup();
 }
 
 bool WaitForWindowToClose(HWND windowHandle, int timeoutMs) {
@@ -38,27 +205,37 @@ bool WaitForWindowToClose(HWND windowHandle, int timeoutMs) {
 }
 
 bool CloseTrackedLiveCaptions(bool allowOwnedProcessTerminate) {
-    HWND windowHandle = nullptr;
-    bool closed = false;
-
-    if (GetLiveCaptionsWindowHandle(&windowHandle, false) && windowHandle && IsWindow(windowHandle)) {
-        PostMessageW(windowHandle, WM_CLOSE, 0, 0);
-        closed = WaitForWindowToClose(windowHandle, 2000);
+    const DWORD trackedProcessId = g_processId;
+    const bool trackedProcessOwned = IsRegisteredOwnedProcess(trackedProcessId);
+    if (!trackedProcessOwned) {
+        ReleaseCachedLiveCaptionsElements();
+        g_processId = 0;
+        g_ownsProcess = false;
+        return true;
     }
 
-    if (!closed && allowOwnedProcessTerminate && g_ownsProcess && g_processId) {
-        HRESULT killHr = Win32Automation::KillProcess(g_processId);
-        if (SUCCEEDED(killHr)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
-            closed = true;
+    HWND windowHandle = nullptr;
+    if (GetLiveCaptionsWindowHandle(&windowHandle, false) && windowHandle && IsWindow(windowHandle)) {
+        DWORD windowProcessId = 0;
+        GetWindowThreadProcessId(windowHandle, &windowProcessId);
+        if (windowProcessId == trackedProcessId) {
+            PostMessageW(windowHandle, WM_CLOSE, 0, 0);
+            WaitForWindowToClose(windowHandle, 2000);
         }
+    }
+
+    bool exited = WaitForRegisteredOwnedProcessExit(
+        trackedProcessId,
+        PROCESS_EXIT_GRACE_MS
+    );
+    if (!exited && allowOwnedProcessTerminate) {
+        exited = SUCCEEDED(TerminateRegisteredOwnedProcess(trackedProcessId));
     }
 
     ReleaseCachedLiveCaptionsElements();
     g_processId = 0;
     g_ownsProcess = false;
-
-    return closed;
+    return exited;
 }
 
 bool AttachToLiveCaptionsWindow(DWORD processId) {
@@ -98,6 +275,23 @@ bool AttachToLiveCaptionsWindow(DWORD processId) {
     return false;
 }
 
+bool ReinitializeAndReattachTrackedProcess(DWORD processId) {
+    if (!processId) {
+        return false;
+    }
+
+    ReleaseCachedLiveCaptionsElements();
+    Win32Automation::Cleanup();
+    g_processId = processId;
+    g_ownsProcess = false;
+
+    const HRESULT initializeHr = Win32Automation::Initialize();
+    if (FAILED(initializeHr)) {
+        return false;
+    }
+    return AttachToLiveCaptionsWindow(processId);
+}
+
 bool EnsureLiveCaptionsWindowReady(bool allowLaunch) {
     if (g_window) {
         return true;
@@ -113,13 +307,27 @@ bool EnsureLiveCaptionsWindowReady(bool allowLaunch) {
 
     DWORD processId = 0;
     bool launchedProcess = false;
-    HRESULT hr = Win32Automation::LaunchLiveCaptions(&processId, &launchedProcess);
+    HANDLE launchedProcessHandle = nullptr;
+    HRESULT hr = Win32Automation::LaunchLiveCaptions(
+        &processId,
+        &launchedProcess,
+        &launchedProcessHandle
+    );
     if (FAILED(hr)) {
         return false;
     }
 
     g_processId = processId;
-    g_ownsProcess = launchedProcess;
+    g_ownsProcess = false;
+    if (
+        launchedProcess
+        && !RegisterAppOwnedProcess(processId, launchedProcessHandle)
+    ) {
+        g_processId = 0;
+        g_ownsProcess = false;
+        return false;
+    }
+    g_ownsProcess = IsRegisteredOwnedProcess(processId);
     return AttachToLiveCaptionsWindow(processId);
 }
 
@@ -163,18 +371,48 @@ Napi::Value Initialize(const Napi::CallbackInfo& info) {
 Napi::Value LaunchLiveCaptions(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
+    const DWORD registeredProcessId = GetRegisteredOwnedProcessId();
+    if (registeredProcessId) {
+        g_processId = registeredProcessId;
+        g_ownsProcess = true;
+        return CreateLifecycleResult(
+            env,
+            AttachToLiveCaptionsWindow(registeredProcessId),
+            registeredProcessId,
+            true
+        );
+    }
+
     DWORD processId = 0;
     bool launchedProcess = false;
-    HRESULT hr = Win32Automation::LaunchLiveCaptions(&processId, &launchedProcess);
+    HANDLE launchedProcessHandle = nullptr;
+    HRESULT hr = Win32Automation::LaunchLiveCaptions(
+        &processId,
+        &launchedProcess,
+        &launchedProcessHandle
+    );
 
     if (FAILED(hr)) {
-        return Napi::Boolean::New(env, false);
+        return CreateLifecycleResult(env, false, 0, false);
     }
 
     g_processId = processId;
-    g_ownsProcess = launchedProcess;
+    if (
+        launchedProcess
+        && !RegisterAppOwnedProcess(processId, launchedProcessHandle)
+    ) {
+        g_processId = 0;
+        g_ownsProcess = false;
+        return CreateLifecycleResult(env, false, 0, false);
+    }
+    g_ownsProcess = IsRegisteredOwnedProcess(processId);
 
-    return Napi::Boolean::New(env, AttachToLiveCaptionsWindow(processId));
+    return CreateLifecycleResult(
+        env,
+        AttachToLiveCaptionsWindow(processId),
+        processId,
+        g_ownsProcess
+    );
 }
 
 // Get captions text
@@ -182,7 +420,11 @@ Napi::Value GetCaptions(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (!g_window) {
-        return Napi::String::New(env, "");
+        return CreateCaptionUnavailableSnapshot(
+            env,
+            "LIVECAPTIONS_WINDOW_UNAVAILABLE",
+            "The Live Captions window is unavailable."
+        );
     }
 
     // Find text block if not cached
@@ -193,7 +435,11 @@ Napi::Value GetCaptions(const Napi::CallbackInfo& info) {
             &g_textBlock
         );
         if (FAILED(hr) || !g_textBlock) {
-            return Napi::String::New(env, "");
+            return CreateCaptionUnavailableSnapshot(
+                env,
+                "LIVECAPTIONS_ELEMENT_UNAVAILABLE",
+                "The Live Captions text element is unavailable."
+            );
         }
     }
 
@@ -206,22 +452,46 @@ Napi::Value GetCaptions(const Napi::CallbackInfo& info) {
             g_textBlock->Release();
             g_textBlock = nullptr;
         }
-        return Napi::String::New(env, "");
+        return CreateCaptionUnavailableSnapshot(
+            env,
+            "LIVECAPTIONS_READ_FAILED",
+            "The Live Captions text could not be read."
+        );
     }
 
     // Convert wstring to UTF-8 string
     int size_needed = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, NULL, 0, NULL, NULL);
     if (size_needed <= 0) {
-        return Napi::String::New(env, "");
+        return CreateCaptionUnavailableSnapshot(
+            env,
+            "LIVECAPTIONS_TEXT_CONVERSION_FAILED",
+            "The Live Captions text could not be converted to UTF-8."
+        );
     }
 
     std::string utf8_text(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, &utf8_text[0], size_needed, NULL, NULL);
+    const int convertedCount = WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        text.c_str(),
+        -1,
+        &utf8_text[0],
+        size_needed,
+        NULL,
+        NULL
+    );
+    if (convertedCount <= 0) {
+        return CreateCaptionUnavailableSnapshot(
+            env,
+            "LIVECAPTIONS_TEXT_CONVERSION_FAILED",
+            "The Live Captions text could not be converted to UTF-8."
+        );
+    }
     if (!utf8_text.empty() && utf8_text.back() == '\0') {
         utf8_text.pop_back();
     }
 
-    return Napi::String::New(env, utf8_text);
+    return CreateCaptionOkSnapshot(env, utf8_text);
 }
 
 // Restart LiveCaptions and reattach to its window
@@ -229,8 +499,20 @@ Napi::Value RestartLiveCaptions(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (g_processId || g_window) {
+        if (!IsRegisteredOwnedProcess(g_processId)) {
+            const DWORD unownedProcessId = g_processId;
+            const bool reattached = ReinitializeAndReattachTrackedProcess(g_processId);
+            return CreateLifecycleResult(env, reattached, unownedProcessId, false);
+        }
+
+        const DWORD ownedProcessId = g_processId;
         if (!CloseTrackedLiveCaptions(true)) {
-            return Napi::Boolean::New(env, false);
+            return CreateLifecycleResult(
+                env,
+                false,
+                ownedProcessId,
+                IsRegisteredOwnedProcess(ownedProcessId)
+            );
         }
     }
 
@@ -239,19 +521,45 @@ Napi::Value RestartLiveCaptions(const Napi::CallbackInfo& info) {
 
     DWORD processId = 0;
     bool launchedProcess = false;
-    HRESULT hr = Win32Automation::LaunchLiveCaptions(&processId, &launchedProcess);
+    HANDLE launchedProcessHandle = nullptr;
+    HRESULT hr = Win32Automation::LaunchLiveCaptions(
+        &processId,
+        &launchedProcess,
+        &launchedProcessHandle
+    );
     if (FAILED(hr)) {
-        return Napi::Boolean::New(env, false);
+        return CreateLifecycleResult(env, false, 0, false);
     }
 
     g_processId = processId;
-    g_ownsProcess = launchedProcess;
+    g_ownsProcess = false;
+    if (
+        launchedProcess
+        && !RegisterAppOwnedProcess(processId, launchedProcessHandle)
+    ) {
+        g_processId = 0;
+        g_ownsProcess = false;
+        return CreateLifecycleResult(env, false, 0, false);
+    }
+    g_ownsProcess = IsRegisteredOwnedProcess(processId);
 
-    return Napi::Boolean::New(env, AttachToLiveCaptionsWindow(processId));
+    return CreateLifecycleResult(
+        env,
+        AttachToLiveCaptionsWindow(processId),
+        processId,
+        g_ownsProcess
+    );
 }
 
 Napi::Value CloseLiveCaptions(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
+    if (!g_ownsProcess && !g_processId) {
+        const DWORD registeredProcessId = GetRegisteredOwnedProcessId();
+        if (registeredProcessId) {
+            g_processId = registeredProcessId;
+            g_ownsProcess = true;
+        }
+    }
     return Napi::Boolean::New(env, CloseTrackedLiveCaptions(true));
 }
 
@@ -266,7 +574,7 @@ Napi::Value SetLiveCaptionsVisible(const Napi::CallbackInfo& info) {
     const bool shouldShow = info[0].As<Napi::Boolean>().Value();
     HWND windowHandle = nullptr;
 
-    if (!GetLiveCaptionsWindowHandle(&windowHandle, shouldShow)) {
+    if (!GetLiveCaptionsWindowHandle(&windowHandle, false)) {
         return Napi::Boolean::New(env, false);
     }
 
@@ -301,18 +609,15 @@ Napi::Value IsLiveCaptionsVisible(const Napi::CallbackInfo& info) {
 
 // Cleanup
 Napi::Value Cleanup(const Napi::CallbackInfo& info) {
-    ReleaseCachedLiveCaptionsElements();
-    if (g_ownsProcess && g_processId) {
-        Win32Automation::KillProcess(g_processId);
-    }
-    g_processId = 0;
-    g_ownsProcess = false;
-    Win32Automation::Cleanup();
+    // Worker stop is a detach/pause operation. Process termination is reserved
+    // for CloseLiveCaptions during explicit app shutdown/restart.
+    CleanupWorkerEnvironment();
     return info.Env().Undefined();
 }
 
 // Module initialization
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+    env.AddCleanupHook(CleanupWorkerEnvironment);
     exports.Set(
         Napi::String::New(env, "initialize"),
         Napi::Function::New(env, Initialize)

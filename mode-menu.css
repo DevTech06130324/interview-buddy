@@ -104,7 +104,8 @@ body {
 
 .mode-menu-item:focus-visible,
 .mode-menu-add:focus-visible,
-.mode-menu-edit-input:focus-visible {
+.mode-menu-edit-input:focus-visible,
+.mode-menu-delete:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

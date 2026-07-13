@@ -12,6 +12,17 @@ const DEEPGRAM_PENDING_AUDIO_CHUNK_LIMIT = 16;
 const DEEPGRAM_OPEN_TIMEOUT_MS = 10_000;
 const DEEPGRAM_RETRY_DELAYS_MS = Object.freeze([500, 1000, 2000]);
 const DEEPGRAM_CLOSE_GRACE_MS = 1500;
+const DEEPGRAM_OPERATION_SUPERSEDED = 'DEEPGRAM_OPERATION_SUPERSEDED';
+
+function createDeepgramOperationSupersededError() {
+  const error = new Error('Deepgram operation was superseded.');
+  error.code = DEEPGRAM_OPERATION_SUPERSEDED;
+  return error;
+}
+
+function isDeepgramOperationSupersededError(error) {
+  return error?.code === DEEPGRAM_OPERATION_SUPERSEDED;
+}
 
 function normalizeDeepgramApiKey(apiKey) {
   return String(apiKey || '').trim();
@@ -104,6 +115,10 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.roleStates = createRoleValueMap(() => this.createRoleState());
     this.roleReadyWaiters = new Map();
     this.operationId = 0;
+    this.operationRevision = undefined;
+    this.operationCancellationErrors = new Map();
+    this.drainingSockets = new Map();
+    this.lastClearSessionRevision = undefined;
     this.sessionId = randomUUID();
     this.entries = [];
     this.partialEntries = new Map();
@@ -119,7 +134,9 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.pendingAudioChunks = createRoleValueMap(() => []);
     this.startPromise = null;
     this.stopPromise = null;
+    this.stopPromiseGeneration = null;
     this.fatalPromise = null;
+    this.fatalPromiseGeneration = null;
   }
 
   createRoleState() {
@@ -129,6 +146,15 @@ class DeepgramTranscriptionService extends EventEmitter {
       openTimer: null,
       status: 'inactive'
     };
+  }
+
+  getRetryAttempt() {
+    return Math.max(
+      0,
+      ...Array.from(this.roleStates.values(), (state) => (
+        Number.isSafeInteger(state?.retryAttempt) ? state.retryAttempt : 0
+      ))
+    );
   }
 
   clearRoleTimer(state, timerName) {
@@ -156,16 +182,19 @@ class DeepgramTranscriptionService extends EventEmitter {
   }
 
   createReadinessPromise(operationId) {
-    this.rejectRoleWaiters(new Error('Deepgram connection operation was replaced.'));
     this.roleReadyWaiters = createRoleValueMap(() => createDeferred());
     return Promise.all([...this.roleReadyWaiters.values()].map((waiter) => waiter.promise))
       .then(() => {
         if (!this.active || operationId !== this.operationId) {
-          throw new Error('Deepgram connection operation was cancelled.');
+          throw this.operationCancellationErrors.get(operationId)
+            || new Error('Deepgram connection operation was cancelled.');
         }
         this.phase = 'active';
         this.roleReadyWaiters.clear();
         return true;
+      })
+      .finally(() => {
+        this.operationCancellationErrors.delete(operationId);
       });
   }
 
@@ -193,25 +222,93 @@ class DeepgramTranscriptionService extends EventEmitter {
     }
   }
 
-  start({ apiKey } = {}) {
+  beginConnectionOperation({ revision, clearBuffers }) {
+    const supersededError = createDeepgramOperationSupersededError();
+    const previousOperationId = this.operationId;
+    const replacedSockets = [...new Set(this.sockets.values())];
+    this.cancelRoleTimers();
+    this.sockets.clear();
+    this.operationId += 1;
+    this.operationRevision = revision;
+    if (this.roleReadyWaiters.size > 0) {
+      this.operationCancellationErrors.set(previousOperationId, supersededError);
+    }
+    this.rejectRoleWaiters(supersededError);
+    this.resetConnectionState({ clearBuffers });
+    this.closeReplacedSockets(replacedSockets);
+    return this.operationId;
+  }
+
+  abortConnectionOperation(operationId) {
+    if (operationId !== this.operationId) {
+      return false;
+    }
+
+    const supersededError = createDeepgramOperationSupersededError();
+    const supersededSockets = [...new Set(this.sockets.values())];
+    this.cancelRoleTimers();
+    this.sockets.clear();
+    this.operationCancellationErrors.set(operationId, supersededError);
+    this.operationId += 1;
+    this.operationRevision = undefined;
+    this.rejectRoleWaiters(supersededError);
+    this.resetConnectionState({ clearBuffers: false });
+    this.closeReplacedSockets(supersededSockets);
+    this.phase = this.active ? 'reconnecting' : 'inactive';
+    return true;
+  }
+
+  trackOperationAbort(signal, operationId) {
+    if (!signal) {
+      return () => {};
+    }
+
+    const onAbort = () => {
+      this.abortConnectionOperation(operationId);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+    return () => signal.removeEventListener('abort', onAbort);
+  }
+
+  start({ apiKey, signal, revision } = {}) {
+    if (signal?.aborted) {
+      return Promise.reject(createDeepgramOperationSupersededError());
+    }
     const normalizedApiKey = normalizeDeepgramApiKey(apiKey);
     if (!normalizedApiKey) {
       return Promise.reject(new Error('Deepgram API key is required.'));
     }
     if (this.active) {
-      if (normalizedApiKey === this.apiKey) {
+      if (
+        normalizedApiKey === this.apiKey
+        && this.phase === 'active'
+        && this.sockets.size === 2
+      ) {
         return this.startPromise || Promise.resolve(true);
       }
-      return this.rotateApiKey({ apiKey: normalizedApiKey });
+      if (normalizedApiKey === this.apiKey && this.startPromise) {
+        return this.startPromise;
+      }
+      return this.rotateApiKey({
+        apiKey: normalizedApiKey,
+        signal,
+        revision
+      });
     }
 
     this.active = true;
     this.phase = 'starting';
     this.apiKey = normalizedApiKey;
     this.payloadVersion += 1;
-    const operationId = ++this.operationId;
-    this.resetConnectionState({ clearBuffers: true });
+    const operationId = this.beginConnectionOperation({
+      revision,
+      clearBuffers: true
+    });
     const readinessPromise = this.createReadinessPromise(operationId);
+    const removeAbortListener = this.trackOperationAbort(signal, operationId);
 
     this.connectRole(DEEPGRAM_ROLE_THEM, operationId);
     this.connectRole(DEEPGRAM_ROLE_ME, operationId);
@@ -219,12 +316,21 @@ class DeepgramTranscriptionService extends EventEmitter {
 
     const trackedStartPromise = readinessPromise
       .catch(async (error) => {
-        if (operationId === this.operationId && this.phase !== 'stopping') {
-          await this.failClosed(error, { emitFatal: false });
+        if (
+          !isDeepgramOperationSupersededError(error)
+          && operationId === this.operationId
+          && this.phase !== 'stopping'
+        ) {
+          await this.failClosed(error, {
+            emitFatal: false,
+            revision,
+            generation: operationId
+          });
         }
         throw error;
       })
       .finally(() => {
+        removeAbortListener();
         if (this.startPromise === trackedStartPromise) {
           this.startPromise = null;
         }
@@ -288,8 +394,11 @@ class DeepgramTranscriptionService extends EventEmitter {
       this.emit('roleOpen', { role: normalizedRole });
     });
     socket.on('message', (message) => {
-      if (this.isCurrentSocket(normalizedRole, socket, socketSessionId, operationId)) {
-        this.handleSocketMessage(normalizedRole, message);
+      if (
+        this.isCurrentSocket(normalizedRole, socket, socketSessionId, operationId)
+        || this.isDrainingSocket(socket, socketSessionId)
+      ) {
+        this.handleSocketMessage(normalizedRole, message, { operationId });
       }
     });
     socket.on('error', (error) => {
@@ -341,7 +450,10 @@ class DeepgramTranscriptionService extends EventEmitter {
       );
       state.status = 'failed';
       this.rejectRoleReady(normalizedRole, error);
-      void this.failClosed(error);
+      void this.failClosed(error, {
+        revision: this.operationRevision,
+        generation: operationId
+      });
       return;
     }
 
@@ -365,6 +477,12 @@ class DeepgramTranscriptionService extends EventEmitter {
       && sessionId === this.sessionId
       && operationId === this.operationId
       && this.sockets.get(normalizeDeepgramRole(role)) === socket;
+  }
+
+  isDrainingSocket(socket, sessionId) {
+    return this.phase === 'stopping'
+      && sessionId === this.sessionId
+      && this.drainingSockets.get(socket) === this.operationId;
   }
 
   sendAudioChunk(role, chunk) {
@@ -397,7 +515,13 @@ class DeepgramTranscriptionService extends EventEmitter {
     const normalizedRole = normalizeDeepgramRole(role);
     const pendingChunks = this.pendingAudioChunks.get(normalizedRole) || [];
     if (pendingChunks.length >= DEEPGRAM_PENDING_AUDIO_CHUNK_LIMIT) {
-      void this.failClosed(new Error(`Deepgram ${normalizedRole} audio buffer overflowed.`));
+      void this.failClosed(
+        new Error(`Deepgram ${normalizedRole} audio buffer overflowed.`),
+        {
+          revision: this.operationRevision,
+          generation: this.operationId
+        }
+      );
       return false;
     }
 
@@ -462,22 +586,39 @@ class DeepgramTranscriptionService extends EventEmitter {
     });
   }
 
-  stop({ graceful = true } = {}) {
-    if (this.stopPromise) {
+  stop({
+    graceful = true,
+    readinessError = new Error('Deepgram transcription stopped.')
+  } = {}) {
+    if (
+      this.stopPromise
+      && this.stopPromiseGeneration === this.operationId
+    ) {
       return this.stopPromise;
     }
+
+    const previousOperationId = this.operationId;
+    const stopGeneration = previousOperationId + 1;
+    if (this.roleReadyWaiters.size > 0) {
+      this.operationCancellationErrors.set(previousOperationId, readinessError);
+    }
+    this.operationId = stopGeneration;
+    this.operationRevision = undefined;
+    this.lastClearSessionRevision = undefined;
+    this.active = false;
+    this.cancelRoleTimers();
+    this.rejectRoleWaiters(readinessError);
+
     if (this.phase === 'inactive' && this.sockets.size === 0) {
-      this.active = false;
       this.apiKey = '';
       return Promise.resolve(false);
     }
 
-    this.active = false;
     this.phase = 'stopping';
-    this.cancelRoleTimers();
-    this.rejectRoleWaiters(new Error('Deepgram transcription stopped.'));
-    const operationId = this.operationId;
     const sockets = [...new Set(this.sockets.values())];
+    for (const socket of sockets) {
+      this.drainingSockets.set(socket, stopGeneration);
+    }
     const closeWaits = sockets.map((socket) => this.waitForSocketClose(socket));
 
     for (const socket of sockets) {
@@ -488,7 +629,8 @@ class DeepgramTranscriptionService extends EventEmitter {
       }
     }
 
-    this.stopPromise = (async () => {
+    let trackedStopPromise;
+    trackedStopPromise = (async () => {
       if (graceful && sockets.length > 0) {
         await this.waitForSocketDrain(closeWaits);
       }
@@ -504,9 +646,19 @@ class DeepgramTranscriptionService extends EventEmitter {
         }
       }
 
-      if (operationId === this.operationId) {
-        this.operationId += 1;
+      for (const [role, socket] of this.sockets.entries()) {
+        if (sockets.includes(socket)) {
+          this.sockets.delete(role);
+        }
       }
+      for (const socket of sockets) {
+        this.drainingSockets.delete(socket);
+      }
+
+      if (stopGeneration !== this.operationId) {
+        return true;
+      }
+
       this.sockets.clear();
       this.phase = 'inactive';
       this.apiKey = '';
@@ -516,27 +668,51 @@ class DeepgramTranscriptionService extends EventEmitter {
       this.pendingAudioChunks = createRoleValueMap(() => []);
       return true;
     })().finally(() => {
-      this.stopPromise = null;
+      if (this.stopPromise === trackedStopPromise) {
+        this.stopPromise = null;
+        this.stopPromiseGeneration = null;
+      }
     });
-    return this.stopPromise;
+    this.stopPromise = trackedStopPromise;
+    this.stopPromiseGeneration = stopGeneration;
+    return trackedStopPromise;
   }
 
-  failClosed(rawError, { emitFatal = true } = {}) {
-    if (this.fatalPromise) {
+  failClosed(rawError, {
+    emitFatal = true,
+    revision = this.operationRevision,
+    generation = this.operationId
+  } = {}) {
+    if (isDeepgramOperationSupersededError(rawError)) {
+      return Promise.resolve(false);
+    }
+    if (
+      this.fatalPromise
+      && this.fatalPromiseGeneration === generation
+    ) {
       return this.fatalPromise;
     }
     const error = rawError instanceof Error ? rawError : new Error(String(rawError));
-    this.rejectRoleWaiters(error);
-    this.fatalPromise = this.stop({ graceful: false })
+    const context = { revision, generation };
+    let trackedFatalPromise;
+    trackedFatalPromise = this.stop({
+      graceful: false,
+      readinessError: error
+    })
       .then(() => {
         if (emitFatal) {
-          this.emit('fatalError', error);
+          this.emit('fatalError', error, context);
         }
       })
       .finally(() => {
-        this.fatalPromise = null;
+        if (this.fatalPromise === trackedFatalPromise) {
+          this.fatalPromise = null;
+          this.fatalPromiseGeneration = null;
+        }
       });
-    return this.fatalPromise;
+    this.fatalPromise = trackedFatalPromise;
+    this.fatalPromiseGeneration = generation;
+    return trackedFatalPromise;
   }
 
   closeReplacedSockets(sockets) {
@@ -557,56 +733,77 @@ class DeepgramTranscriptionService extends EventEmitter {
     }
   }
 
-  rotateApiKey({ apiKey } = {}) {
+  rotateApiKey({ apiKey, signal, revision } = {}) {
+    if (signal?.aborted) {
+      return Promise.reject(createDeepgramOperationSupersededError());
+    }
     const normalizedApiKey = normalizeDeepgramApiKey(apiKey);
     if (!normalizedApiKey) {
       return Promise.reject(new Error('Deepgram API key is required.'));
     }
     if (!this.active) {
-      return this.start({ apiKey: normalizedApiKey });
+      return this.start({
+        apiKey: normalizedApiKey,
+        signal,
+        revision
+      });
     }
 
-    const oldSockets = [...new Set(this.sockets.values())];
-    this.cancelRoleTimers();
-    this.sockets.clear();
     this.apiKey = normalizedApiKey;
     this.phase = 'reconnecting';
-    const operationId = ++this.operationId;
-    this.resetConnectionState({ clearBuffers: false });
+    const operationId = this.beginConnectionOperation({
+      revision,
+      clearBuffers: false
+    });
     const readinessPromise = this.createReadinessPromise(operationId);
-    this.closeReplacedSockets(oldSockets);
+    const removeAbortListener = this.trackOperationAbort(signal, operationId);
     this.connectRole(DEEPGRAM_ROLE_THEM, operationId);
     this.connectRole(DEEPGRAM_ROLE_ME, operationId);
 
     return readinessPromise.catch(async (error) => {
-      if (operationId === this.operationId) {
-        await this.failClosed(error);
+      if (
+        !isDeepgramOperationSupersededError(error)
+        && operationId === this.operationId
+        && this.phase !== 'stopping'
+      ) {
+        await this.failClosed(error, {
+          revision,
+          generation: operationId
+        });
       }
       throw error;
-    });
+    }).finally(removeAbortListener);
   }
 
-  clear() {
+  clear({ apiKey, signal, revision, sessionRevision } = {}) {
+    if (signal?.aborted) {
+      return Promise.reject(createDeepgramOperationSupersededError());
+    }
     const shouldResume = this.active;
-    const resumeApiKey = this.apiKey;
-    const oldSockets = [...new Set(this.sockets.values())];
-    this.cancelRoleTimers();
-    this.sockets.clear();
-    this.rejectRoleWaiters(new Error('Deepgram transcript session was cleared.'));
-    this.operationId += 1;
-    this.closeReplacedSockets(oldSockets);
+    const resumeApiKey = apiKey === undefined
+      ? this.apiKey
+      : normalizeDeepgramApiKey(apiKey);
+    const shouldRotateSession = sessionRevision === undefined
+      || sessionRevision !== this.lastClearSessionRevision;
+    const operationId = this.beginConnectionOperation({
+      revision,
+      clearBuffers: shouldRotateSession
+    });
 
-    this.sessionId = randomUUID();
-    this.entries = [];
-    this.partialEntries.clear();
-    this.partialEntryIds.clear();
-    this.partialEntryOrders.clear();
-    this.entryCounters = createRoleCounterMap();
-    this.partialEntryCounters = createRoleCounterMap();
-    this.entryOrderCounter = 0;
-    this.pendingAudioChunks = createRoleValueMap(() => []);
-    this.payloadVersion += 1;
-    this.emitSnapshot();
+    if (shouldRotateSession) {
+      this.sessionId = randomUUID();
+      this.entries = [];
+      this.partialEntries.clear();
+      this.partialEntryIds.clear();
+      this.partialEntryOrders.clear();
+      this.entryCounters = createRoleCounterMap();
+      this.partialEntryCounters = createRoleCounterMap();
+      this.entryOrderCounter = 0;
+      this.pendingAudioChunks = createRoleValueMap(() => []);
+      this.payloadVersion += 1;
+      this.emitSnapshot();
+      this.lastClearSessionRevision = sessionRevision;
+    }
 
     if (!shouldResume || !resumeApiKey) {
       this.active = false;
@@ -618,17 +815,23 @@ class DeepgramTranscriptionService extends EventEmitter {
     this.active = true;
     this.phase = 'starting';
     this.apiKey = resumeApiKey;
-    const operationId = this.operationId;
-    this.resetConnectionState({ clearBuffers: true });
     const readinessPromise = this.createReadinessPromise(operationId);
+    const removeAbortListener = this.trackOperationAbort(signal, operationId);
     this.connectRole(DEEPGRAM_ROLE_THEM, operationId);
     this.connectRole(DEEPGRAM_ROLE_ME, operationId);
     return readinessPromise.catch(async (error) => {
-      if (operationId === this.operationId) {
-        await this.failClosed(error);
+      if (
+        !isDeepgramOperationSupersededError(error)
+        && operationId === this.operationId
+        && this.phase !== 'stopping'
+      ) {
+        await this.failClosed(error, {
+          revision,
+          generation: operationId
+        });
       }
       throw error;
-    });
+    }).finally(removeAbortListener);
   }
 
   getPartialEntryId(role) {
@@ -671,12 +874,20 @@ class DeepgramTranscriptionService extends EventEmitter {
     return nextOrder;
   }
 
-  handleSocketMessage(role, rawMessage) {
+  handleSocketMessage(role, rawMessage, { operationId = this.operationId } = {}) {
     let message;
     try {
       message = JSON.parse(Buffer.isBuffer(rawMessage) ? rawMessage.toString('utf8') : String(rawMessage));
     } catch (error) {
-      this.emit('error', error);
+      if (operationId === this.operationId && this.phase !== 'stopping') {
+        void this.failClosed(
+          new Error(`Invalid Deepgram JSON message: ${error?.message || String(error)}`),
+          {
+            revision: this.operationRevision,
+            generation: operationId
+          }
+        );
+      }
       return;
     }
 
@@ -745,11 +956,14 @@ module.exports = {
   DEEPGRAM_CLOSE_GRACE_MS,
   DEEPGRAM_LISTEN_URL,
   DEEPGRAM_OPEN_TIMEOUT_MS,
+  DEEPGRAM_OPERATION_SUPERSEDED,
   DEEPGRAM_PENDING_AUDIO_CHUNK_LIMIT,
   DEEPGRAM_RETRY_DELAYS_MS,
   DEEPGRAM_ROLE_ME,
   DEEPGRAM_ROLE_THEM,
   DeepgramTranscriptionService,
+  createDeepgramOperationSupersededError,
+  isDeepgramOperationSupersededError,
   normalizeDeepgramApiKey,
   normalizeDeepgramRole
 };

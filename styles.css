@@ -22,6 +22,9 @@
   --danger-border: #7a3434;
   --success: #42c46f;
   --overlay-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+  --app-headbar-height: 38px;
+  --minimum-browser-workspace-height: 120px;
+  --mode-panel-expanded-height: 224px;
   color-scheme: dark;
 }
 
@@ -139,7 +142,7 @@ body {
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
-  min-height: 0;
+  min-height: var(--minimum-browser-workspace-height);
 }
 
 .left-panel {
@@ -210,6 +213,8 @@ body {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  container-name: transcript-panel;
+  container-type: inline-size;
 }
 
 .transcript-header {
@@ -366,6 +371,20 @@ body {
   box-shadow: 0 -5px 0 -3px currentColor;
 }
 
+@container transcript-panel (max-width: 520px) {
+  .transcript-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .transcript-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}
+
 .transcript-content {
   flex: 1;
   padding: 0;
@@ -426,21 +445,27 @@ body {
 }
 
 .transcript-row {
-  width: min(100%, 120ch);
+  width: min(82%, 120ch);
+  max-width: 82%;
   border-bottom: 1px solid #2d2d2d;
 }
 
 .transcript-row-role-them {
+  align-self: flex-start;
   margin-right: auto;
 }
 
 .transcript-row-role-me {
+  align-self: flex-end;
   margin-left: auto;
 }
 
-.transcript-row-role-me .transcript-entry-header,
 .transcript-row-role-me .transcript-entry-body {
   text-align: left;
+}
+
+.transcript-row-role-me .transcript-entry-header {
+  text-align: right;
 }
 
 .transcript-row:last-child {
@@ -494,13 +519,23 @@ body {
   font-style: italic;
 }
 
-.transcript-error-cell {
-  color: #ff8f8f;
+.transcript-source-status {
+  margin: 0;
+  padding: 7px 12px;
+  border-bottom: 1px solid #343434;
+  background: #252525;
+  color: #d7e7ff;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
-.transcript-error-cell {
-  padding: 16px;
-  white-space: pre-wrap;
+.transcript-source-status.is-error {
+  background: #3a2020;
+  color: #ffb1b1;
+}
+
+.transcript-source-status.is-recovering {
+  color: #ffe0a3;
 }
 
 .transcript-content::-webkit-scrollbar {
@@ -531,14 +566,15 @@ body {
 }
 
 .mode-panel {
-  height: 224px;
-  flex: 0 0 224px;
+  height: var(--mode-panel-expanded-height);
+  flex: 0 1 var(--mode-panel-expanded-height);
+  max-height: calc(100% - var(--app-headbar-height) - var(--minimum-browser-workspace-height));
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-top: 1px solid #3a3a3a;
   background: #181818;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .mode-header {
@@ -614,6 +650,7 @@ body {
 .mode-panel.is-collapsed {
   height: 54px;
   flex-basis: 54px;
+  max-height: 54px;
 }
 
 .mode-panel.is-collapsed .mode-header {
@@ -636,8 +673,14 @@ body {
   flex: 1;
   min-height: 0;
   padding: 14px 16px 16px;
-  overflow: visible;
+  overflow-x: hidden;
+  overflow-y: auto;
   -webkit-app-region: no-drag;
+}
+
+.mode-panel.is-inline-menu-open,
+.mode-panel.is-inline-menu-open .mode-content {
+  overflow: visible;
 }
 
 .mode-layout {
@@ -645,7 +688,7 @@ body {
   grid-template-columns: 220px minmax(0, 1fr);
   gap: 16px;
   height: 100%;
-  min-height: 0;
+  min-height: 160px;
 }
 
 .mode-selector-pane,
@@ -965,6 +1008,22 @@ body {
   border-color: #d85656;
 }
 
+.mode-hotkey-status {
+  min-height: 1.35em;
+  margin-top: 6px;
+  color: #a9a9a9;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.mode-hotkey-status.is-success {
+  color: #42c46f;
+}
+
+.mode-hotkey-status.is-error {
+  color: #ff8f8f;
+}
+
 .mode-editor-row {
   flex: 1;
   display: grid;
@@ -1070,6 +1129,7 @@ body {
 .mode-dropdown-item:focus-visible,
 .mode-dropdown-add:focus-visible,
 .mode-dropdown-edit-input:focus-visible,
+.mode-dropdown-delete:focus-visible,
 .mode-hotkey-input:focus-visible,
 .mode-suffix-input:focus-visible {
   outline: 2px solid #4a9eff;
@@ -1531,6 +1591,7 @@ body {
 .mode-dropdown-item:focus-visible,
 .mode-dropdown-add:focus-visible,
 .mode-dropdown-edit-input:focus-visible,
+.mode-dropdown-delete:focus-visible,
 .mode-hotkey-input:focus-visible,
 .mode-suffix-input:focus-visible {
   outline-color: var(--accent);

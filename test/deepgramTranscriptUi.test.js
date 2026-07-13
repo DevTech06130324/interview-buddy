@@ -105,6 +105,17 @@ test('Deepgram transcription starts and stops only through explicit controls', (
   assert.doesNotMatch(setKeyPreference, /startDeepgramTranscriptSource\(\)/);
 });
 
+test('Deepgram API-key edits always update desired lifecycle state without phase inspection', () => {
+  const main = readRepoFile('main.js');
+  const setKeyPreference = getFunctionSource(main, 'setDeepgramApiKeyPreference');
+
+  assert.match(setKeyPreference, /transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && deepgramApiKey/);
+  assert.match(setKeyPreference, /await getDeepgramLifecycleCoordinator\(\)\.setApiKey\(\{ apiKey: deepgramApiKey \}\)/);
+  assert.doesNotMatch(setKeyPreference, /getState\?\.\(\)\.(?:active|phase|reason)/);
+  assert.doesNotMatch(setKeyPreference, /rotateApiKey/);
+  assert.doesNotMatch(setKeyPreference, /'connecting'|'awaiting-renderer'|'reconnecting'|'stopping'/);
+});
+
 test('main and renderer use acknowledged capture commands around the tested lifecycle coordinator', () => {
   const renderer = readRepoFile('renderer.js');
   const preload = readRepoFile('preload.js');
@@ -117,7 +128,10 @@ test('main and renderer use acknowledged capture commands around the tested life
   assert.match(main, /ipcMain\.handle\('deepgram-capture-command-ack'/);
   assert.match(main, /await getDeepgramLifecycleCoordinator\(\)\.start/);
   assert.match(main, /await getDeepgramLifecycleCoordinator\(\)\.stop/);
-  assert.match(main, /await deepgramLifecycleCoordinator\.clear\(\)/);
+  assert.match(main, /await getDeepgramLifecycleCoordinator\(\)\.clear\(\)/);
+  assert.match(main, /await getDeepgramLifecycleCoordinator\(\)\.shutdown\(\)/);
+  assert.match(main, /failClosed\(error, \{ revision/);
+  assert.doesNotMatch(main, /deepgramTranscriptionService\.clear\(\)/);
   assert.match(preload, /acknowledgeDeepgramCaptureCommand:\s*\(payload\)\s*=>\s*ipcRenderer\.invoke\('deepgram-capture-command-ack', payload\)/);
   assert.match(preload, /onDeepgramCaptureCommand:\s*\(callback\)\s*=>\s*subscribe\('deepgram-capture-command', callback\)/);
   assert.match(renderer, /onDeepgramCaptureCommand\(async \(command\)\s*=>/);

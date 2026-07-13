@@ -1,8 +1,8 @@
 #include "win32_automation.h"
 
-IUIAutomation* Win32Automation::automation = nullptr;
-bool Win32Automation::comInitialized = false;
-bool Win32Automation::initialized = false;
+thread_local IUIAutomation* Win32Automation::automation = nullptr;
+thread_local bool Win32Automation::comInitialized = false;
+thread_local bool Win32Automation::initialized = false;
 
 HRESULT Win32Automation::Initialize() {
     if (initialized) return S_OK;
@@ -23,6 +23,14 @@ HRESULT Win32Automation::Initialize() {
     if (SUCCEEDED(hr)) {
         initialized = true;
     }
+    if (FAILED(hr)) {
+        if (automation) {
+            automation->Release();
+            automation = nullptr;
+        }
+        CoUninitialize();
+        comInitialized = false;
+    }
 
     return hr;
 }
@@ -41,10 +49,17 @@ void Win32Automation::Cleanup() {
     initialized = false;
 }
 
-HRESULT Win32Automation::LaunchLiveCaptions(DWORD* processId, bool* launchedProcess) {
-    if (!initialized || !processId || !launchedProcess) return E_INVALIDARG;
+HRESULT Win32Automation::LaunchLiveCaptions(
+    DWORD* processId,
+    bool* launchedProcess,
+    HANDLE* launchedProcessHandle
+) {
+    if (!initialized || !processId || !launchedProcess || !launchedProcessHandle) {
+        return E_INVALIDARG;
+    }
 
     *launchedProcess = false;
+    *launchedProcessHandle = nullptr;
 
     // First, try to find if LiveCaptions is already running
     IUIAutomationElement* root = nullptr;
@@ -124,8 +139,8 @@ HRESULT Win32Automation::LaunchLiveCaptions(DWORD* processId, bool* launchedProc
         if (SUCCEEDED(hr)) {
             *processId = pi.dwProcessId;
             *launchedProcess = true;
+            *launchedProcessHandle = pi.hProcess;
             CloseHandle(pi.hThread);
-            CloseHandle(pi.hProcess);
             return S_OK;
         }
     }
@@ -292,14 +307,4 @@ HRESULT Win32Automation::GetElementWindowHandle(IUIAutomationElement* element, H
 
     *windowHandle = reinterpret_cast<HWND>(handleValue);
     return S_OK;
-}
-
-HRESULT Win32Automation::KillProcess(DWORD processId) {
-    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, processId);
-    if (!hProcess) return HRESULT_FROM_WIN32(GetLastError());
-
-    BOOL result = TerminateProcess(hProcess, 0);
-    CloseHandle(hProcess);
-
-    return result ? S_OK : HRESULT_FROM_WIN32(GetLastError());
 }

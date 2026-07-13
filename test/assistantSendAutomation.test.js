@@ -74,20 +74,19 @@ test('DOM submit fallback clicks a ready assistant send button outside forms', (
   assert.match(source, /button\.click\(\)/);
 });
 
-test('current composer submit waits for the send button before clicking it', () => {
+test('current composer submission delegates confirmation and fallback safety to the outcome runner', () => {
   const source = getFunctionSource('submitCurrentComposer');
-  const waitIndex = source.indexOf('await waitForSendButtonReady(webContents');
-  const clickIndex = source.indexOf('clickComposerSendButton(webContents)');
 
-  assert.notEqual(waitIndex, -1);
-  assert.notEqual(clickIndex, -1);
-  assert.ok(waitIndex < clickIndex);
+  assert.match(source, /await waitForSendButtonReady\(webContents/);
+  assert.match(source, /runAssistantSubmissionStrategies\(/);
+  assert.match(source, /createAssistantSubmissionStrategy\(/);
+  assert.match(source, /ASSISTANT_SUBMISSION_OUTCOME\.NOT_DISPATCHED/);
 });
 
 test('current composer submit tries form submission before mouse fallback for ChatGPT', () => {
   const source = getFunctionSource('submitCurrentComposer');
-  const formSubmitIndex = source.indexOf('submitComposerViaForm(webContents)');
-  const clickIndex = source.indexOf('clickComposerSendButton(webContents)');
+  const formSubmitIndex = source.indexOf('submitComposerViaForm,');
+  const clickIndex = source.indexOf('clickComposerSendButton,');
   const formSource = getFunctionSource('submitComposerViaForm');
 
   assert.match(source, /getAssistantTargetKind\(webContents\.getURL\(\)\)/);
@@ -101,9 +100,9 @@ test('current composer submit tries form submission before mouse fallback for Ch
 
 test('DeepSeek submit uses mouse click before form fallback to avoid no-op form delay', () => {
   const source = getFunctionSource('submitCurrentComposer');
-  const clickIndex = source.indexOf('clickComposerSendButton(webContents)');
+  const clickIndex = source.indexOf('clickComposerSendButton,');
   const nonChatGptBranchIndex = source.indexOf("targetKind !== 'chatgpt'");
-  const fallbackFormIndex = source.indexOf('submitComposerViaForm(webContents)', nonChatGptBranchIndex);
+  const fallbackFormIndex = source.indexOf('submitComposerViaForm,', nonChatGptBranchIndex);
 
   assert.notEqual(clickIndex, -1);
   assert.notEqual(nonChatGptBranchIndex, -1);

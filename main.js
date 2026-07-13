@@ -1,6 +1,7 @@
 const { app, BrowserWindow, BrowserView, ipcMain, globalShortcut, screen, clipboard, nativeTheme, dialog } = require('electron');
 const { safeStorage } = require('electron');
 const { desktopCapturer } = require('electron');
+const { randomUUID } = require('node:crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -29,6 +30,7 @@ if (process.platform === 'win32') {
 
 // Screen capture integration
 const screenCapture = require('./src/screenCapture');
+const { runSelectedAreaCaptureWorkflow } = require('./src/selectedAreaCaptureWorkflow');
 const translationManager = require('./src/translationManager');
 const {
   DeepgramTranscriptionService,
@@ -41,8 +43,8 @@ const {
   DeepgramRendererCommandBroker
 } = require('./src/deepgramRendererCommandBroker');
 const {
-  decodeDeepgramApiKeyStorage,
-  encodeDeepgramApiKeyForStorage
+  encodeDeepgramApiKeyForStorage,
+  loadAndMigrateDeepgramApiKeyPreferencesFile
 } = require('./src/deepgramApiKeyStorage');
 const {
   DEFAULT_ASSISTANT_URLS,
@@ -54,6 +56,23 @@ const {
   isSupportedAssistantUrl: isSupportedAssistantTargetUrl
 } = require('./src/assistantTargets');
 const {
+  ASSISTANT_NAVIGATION_ACTION,
+  createAssistantNavigationPolicy
+} = require('./src/assistantNavigationPolicy');
+const {
+  ASSISTANT_MUTATION_STATUS,
+  AssistantMutationController
+} = require('./src/assistantMutationController');
+const {
+  ASSISTANT_SUBMISSION_OUTCOME,
+  needsAssistantSubmissionRetry,
+  runAssistantSubmissionStrategies,
+  shouldAdvanceAssistantTranscriptCursor
+} = require('./src/assistantSubmissionOutcome');
+const {
+  waitForAssistantImageAttachmentEvidence
+} = require('./src/assistantAttachmentEvidence');
+const {
   TRANSCRIPT_SPEAKER_TAG,
   buildTranscriptPromptText,
   formatTranscriptEntryPromptLine,
@@ -64,6 +83,12 @@ const {
 const {
   resolvePendingTranscriptCursor
 } = require('./src/transcriptCursor');
+const {
+  normalizeTranscriptError
+} = require('./src/transcriptError');
+const {
+  normalizeTranscriptSourceLifecycle
+} = require('./src/transcriptSourceLifecycle');
 
 // Constants
 const BORDER_WIDTH = 3;
@@ -104,6 +129,7 @@ const DEEPGRAM_USAGE_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_HORIZONTAL_TRANSCRIPT_PANEL_RATIO = 0.4;
 const DEFAULT_TAB_URLS = DEFAULT_ASSISTANT_URLS;
 const ALLOWED_NAVIGATION_PROTOCOLS = new Set(['http:', 'https:']);
+const decideAssistantNavigation = createAssistantNavigationPolicy();
 const ASSISTANT_COMPOSER_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_COMPOSER_SELECTORS);
 const ASSISTANT_SEND_BUTTON_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_SEND_BUTTON_SELECTORS);
 const ASSISTANT_FILE_INPUT_SELECTORS_SCRIPT = JSON.stringify(ASSISTANT_FILE_INPUT_SELECTORS);
@@ -175,6 +201,232 @@ const COMPOSER_SCOPE_HELPERS_SCRIPT = `
           ].filter(Boolean);
         }
 `;
+
+class PromptModePersistenceController {
+  constructor({
+    serialize,
+    getStorePath,
+    fsModule = fs,
+    debounceMs = 150,
+    setTimeoutImpl = setTimeout,
+    clearTimeoutImpl = clearTimeout,
+    onStatus = () => {}
+  } = {}) {
+    if (typeof serialize !== 'function') {
+      throw new TypeError('Prompt mode persistence requires serialize().');
+    }
+    if (typeof getStorePath !== 'function') {
+      throw new TypeError('Prompt mode persistence requires getStorePath().');
+    }
+
+    this.serialize = serialize;
+    this.getStorePath = getStorePath;
+    this.fs = fsModule;
+    this.debounceMs = debounceMs;
+    this.setTimeout = setTimeoutImpl;
+    this.clearTimeout = clearTimeoutImpl;
+    this.onStatus = onStatus;
+    this.timer = null;
+    this.pending = null;
+    this.inFlight = null;
+    this.lastSynchronousFlush = null;
+    this.revision = 0;
+    this.status = {
+      state: 'saved',
+      dirty: false,
+      message: '',
+      revision: 0
+    };
+  }
+
+  getStatus() {
+    return { ...this.status };
+  }
+
+  setStatus(nextStatus) {
+    this.status = {
+      state: nextStatus.state,
+      dirty: Boolean(nextStatus.dirty),
+      message: typeof nextStatus.message === 'string' ? nextStatus.message : '',
+      revision: Number.isSafeInteger(nextStatus.revision) ? nextStatus.revision : this.revision
+    };
+    this.onStatus(this.getStatus());
+  }
+
+  clearScheduledFlush() {
+    if (this.timer !== null) {
+      this.clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+
+  writePayloadSync(pending) {
+    const storePath = this.getStorePath();
+    this.fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    this.fs.writeFileSync(storePath, pending.payload, 'utf8');
+  }
+
+  schedule() {
+    this.revision += 1;
+    this.pending = {
+      revision: this.revision,
+      payload: this.serialize()
+    };
+    this.clearScheduledFlush();
+    this.setStatus({
+      state: 'dirty',
+      dirty: true,
+      message: '',
+      revision: this.revision
+    });
+    this.timer = this.setTimeout(() => {
+      this.timer = null;
+      void this.flush();
+    }, this.debounceMs);
+    return this.getStatus();
+  }
+
+  writePending() {
+    const pending = this.pending;
+    if (!pending) {
+      return {
+        success: this.status.state !== 'error',
+        status: this.getStatus()
+      };
+    }
+
+    this.pending = null;
+    this.setStatus({
+      state: 'saving',
+      dirty: true,
+      message: '',
+      revision: pending.revision
+    });
+
+    const operation = (async () => {
+      try {
+        const storePath = this.getStorePath();
+        await this.fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+        await this.fs.promises.writeFile(storePath, pending.payload, 'utf8');
+
+        const supersedingSyncFlush = this.lastSynchronousFlush;
+        if (supersedingSyncFlush && supersedingSyncFlush.revision > pending.revision) {
+          this.writePayloadSync(supersedingSyncFlush);
+        }
+
+        if (this.pending) {
+          this.setStatus({
+            state: 'dirty',
+            dirty: true,
+            message: '',
+            revision: this.pending.revision
+          });
+        } else {
+          this.setStatus({
+            state: 'saved',
+            dirty: false,
+            message: '',
+            revision: supersedingSyncFlush && supersedingSyncFlush.revision > pending.revision
+              ? supersedingSyncFlush.revision
+              : pending.revision
+          });
+        }
+        return {
+          success: true,
+          status: this.getStatus()
+        };
+      } catch (error) {
+        const retryPending = this.lastSynchronousFlush
+          && this.lastSynchronousFlush.revision > pending.revision
+          ? this.lastSynchronousFlush
+          : pending;
+        if (!this.pending || this.pending.revision < retryPending.revision) {
+          this.pending = retryPending;
+        }
+
+        this.setStatus({
+          state: 'error',
+          dirty: true,
+          message: error instanceof Error && error.message
+            ? error.message
+            : 'Failed to save prompt modes.',
+          revision: retryPending.revision
+        });
+        return {
+          success: false,
+          status: this.getStatus()
+        };
+      }
+    })();
+    this.inFlight = operation;
+    return operation.finally(() => {
+      if (this.inFlight === operation) {
+        this.inFlight = null;
+      }
+    });
+  }
+
+  async flush() {
+    this.clearScheduledFlush();
+    let result = null;
+
+    while (this.inFlight || this.pending) {
+      if (this.inFlight) {
+        result = await this.inFlight;
+      } else {
+        result = await this.writePending();
+      }
+
+      if (!result.success) {
+        return result;
+      }
+    }
+
+    return result || {
+      success: this.status.state !== 'error',
+      status: this.getStatus()
+    };
+  }
+
+  flushSync() {
+    this.clearScheduledFlush();
+    this.revision += 1;
+    const pending = {
+      revision: this.revision,
+      payload: this.serialize()
+    };
+    this.pending = null;
+    this.lastSynchronousFlush = pending;
+
+    try {
+      this.writePayloadSync(pending);
+      this.setStatus({
+        state: 'saved',
+        dirty: false,
+        message: '',
+        revision: pending.revision
+      });
+      return {
+        success: true,
+        status: this.getStatus()
+      };
+    } catch (error) {
+      this.pending = pending;
+      this.setStatus({
+        state: 'error',
+        dirty: true,
+        message: error instanceof Error && error.message
+          ? error.message
+          : 'Failed to save prompt modes.',
+        revision: pending.revision
+      });
+      return {
+        success: false,
+        status: this.getStatus()
+      };
+    }
+  }
+}
 const SEND_BUTTON_HELPERS_SCRIPT = `
         function isButtonReady(button) {
           if (!button) return false;
@@ -306,6 +558,8 @@ let hotkeySettingsWindow = null;
 let modeMenuWindow = null;
 let modeMenuAnchor = null;
 const tabs = new Map();
+const assistantMutationController = new AssistantMutationController();
+const assistantPopupWindows = new Set();
 let activeTabId = null;
 let tabIdCounter = 0;
 let currentOpacity = DEFAULT_OPACITY;
@@ -343,9 +597,18 @@ let promptModes = createDefaultPromptModes();
 let globalHotkeys = createDefaultGlobalHotkeys();
 let selectedPromptModeId = promptModes[0].id;
 let captionSyncStartTimer = null;
-let promptModePersistTimer = null;
-let pendingPromptModePersistPayload = null;
-let promptModePersistInFlight = false;
+let liveCaptionsSessionId = typeof captionSync?.getSessionId === 'function'
+  ? captionSync.getSessionId()
+  : randomUUID();
+let deepgramTranscriptSessionId = randomUUID();
+let promptModePersistenceController = null;
+let promptModePersistenceStatus = {
+  state: 'saved',
+  dirty: false,
+  message: '',
+  revision: 0
+};
+const promptModeDraftRevisions = new Map();
 let appPreferencesPersistTimer = null;
 let defaultTabWarmupTimer = null;
 let lastSubmittedTranscriptText = '';
@@ -467,7 +730,7 @@ function isAllowedNavigationUrl(url) {
 }
 
 function serializePromptModeStateSnapshot() {
-  return JSON.stringify(getPromptModeStateSnapshot(), null, 2);
+  return JSON.stringify(getPromptModeStateData(), null, 2);
 }
 
 function createPromptModeId() {
@@ -531,7 +794,44 @@ function getSelectedPromptMode() {
   return promptModes.find((mode) => mode.id === selectedPromptModeId) || promptModes[0];
 }
 
-function getPromptModeStateSnapshot() {
+function getPromptModePersistenceStatus() {
+  return { ...promptModePersistenceStatus };
+}
+
+function broadcastPromptModePersistenceStatus() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('prompt-mode-persistence-status', getPromptModePersistenceStatus());
+  }
+}
+
+function updatePromptModePersistenceStatus(status) {
+  promptModePersistenceStatus = {
+    state: typeof status?.state === 'string' ? status.state : 'saved',
+    dirty: Boolean(status?.dirty),
+    message: typeof status?.message === 'string' ? status.message : '',
+    revision: Number.isSafeInteger(status?.revision) ? status.revision : 0
+  };
+
+  if (promptModePersistenceStatus.state === 'error') {
+    console.error('[ERROR] Failed to save prompt mode state:', promptModePersistenceStatus.message);
+  }
+
+  broadcastPromptModePersistenceStatus();
+}
+
+function getPromptModePersistenceController() {
+  if (!promptModePersistenceController) {
+    promptModePersistenceController = new PromptModePersistenceController({
+      serialize: serializePromptModeStateSnapshot,
+      getStorePath: getPromptModeStorePath,
+      onStatus: updatePromptModePersistenceStatus
+    });
+  }
+
+  return promptModePersistenceController;
+}
+
+function getPromptModeStateData() {
   ensurePromptModeState();
 
   return {
@@ -542,6 +842,13 @@ function getPromptModeStateSnapshot() {
       hotkey: mode.hotkey
     })),
     selectedPromptModeId
+  };
+}
+
+function getPromptModeStateSnapshot() {
+  return {
+    ...getPromptModeStateData(),
+    promptModePersistence: getPromptModePersistenceStatus()
   };
 }
 
@@ -660,10 +967,6 @@ function clearDeepgramApiKeyInMemory() {
 
 function getDeepgramApiKeyLast4() {
   return deepgramApiKey ? deepgramApiKey.slice(-4) : '';
-}
-
-function hasSavedDeepgramKey() {
-  return Boolean(deepgramApiKey);
 }
 
 function getDeepgramConnectionApiKey() {
@@ -820,6 +1123,7 @@ function getRendererAppPreferenceStateSnapshot() {
     translationEnabled,
     liveCaptionsWindowVisible,
     transcriptSource,
+    transcriptSourceState: getTranscriptSourceLifecycleSnapshot(transcriptSource),
     hasDeepgramApiKey: Boolean(deepgramApiKey),
     deepgramApiKeyLast4: getDeepgramApiKeyLast4(),
     deepgramUsage: getDeepgramUsageSnapshot()
@@ -883,8 +1187,11 @@ function flushAppPreferencesPersist() {
 function loadAppPreferences() {
   let shouldRewriteDeepgramStorage = false;
   try {
-    const rawData = fs.readFileSync(getAppPreferencesStorePath(), 'utf8');
-    const parsed = JSON.parse(rawData);
+    const deepgramKeyLoadResult = loadAndMigrateDeepgramApiKeyPreferencesFile(
+      getAppPreferencesStorePath(),
+      safeStorage
+    );
+    const parsed = deepgramKeyLoadResult.preferences;
 
     horizontalTranscriptPanelRatio = normalizeSplitRatio(
       parsed?.horizontalTranscriptPanelRatio,
@@ -898,16 +1205,9 @@ function loadAppPreferences() {
     translationEnabled = normalizeBoolean(parsed?.translationEnabled, DEFAULT_TRANSLATION_ENABLED);
     liveCaptionsWindowVisible = normalizeBoolean(parsed?.liveCaptionsWindowVisible, true);
     transcriptSource = normalizeTranscriptSource(parsed?.transcriptSource);
-    const storedDeepgramKey = parsed?.deepgramApiKeyStorage || (
-      typeof parsed?.deepgramApiKey === 'string'
-        ? { encrypted: false, value: parsed.deepgramApiKey }
-        : null
-    );
-    const deepgramKeyLoadResult = decodeDeepgramApiKeyStorage(storedDeepgramKey, safeStorage);
     deepgramApiKeyStorage = deepgramKeyLoadResult.storage;
     deepgramApiKey = normalizeDeepgramApiKey(deepgramKeyLoadResult.apiKey);
-    shouldRewriteDeepgramStorage = deepgramKeyLoadResult.needsRewrite
-      || Object.prototype.hasOwnProperty.call(parsed, 'deepgramApiKey');
+    shouldRewriteDeepgramStorage = deepgramKeyLoadResult.needsRewrite;
     if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && !deepgramApiKey) {
       transcriptSource = TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
     }
@@ -1387,7 +1687,9 @@ function registerModeHotkey(modeId, hotkey) {
         return;
       }
 
-      selectPromptMode(modeId);
+      void selectPromptMode(modeId).catch((error) => {
+        console.error('[ERROR] Failed to select prompt mode from its hotkey:', error);
+      });
     });
   } catch (error) {
     console.error('[ERROR] Failed to register prompt mode hotkey:', error);
@@ -1421,57 +1723,15 @@ function registerAllModeHotkeys() {
 }
 
 function persistPromptModeState() {
-  pendingPromptModePersistPayload = serializePromptModeStateSnapshot();
-
-  if (promptModePersistTimer) {
-    clearTimeout(promptModePersistTimer);
-  }
-
-  promptModePersistTimer = setTimeout(() => {
-    promptModePersistTimer = null;
-    void flushPromptModeStatePersist();
-  }, 150);
+  return getPromptModePersistenceController().schedule();
 }
 
 async function flushPromptModeStatePersist() {
-  if (promptModePersistInFlight || !pendingPromptModePersistPayload) {
-    return;
-  }
-
-  promptModePersistInFlight = true;
-  const payload = pendingPromptModePersistPayload;
-  pendingPromptModePersistPayload = null;
-
-  try {
-    const storePath = getPromptModeStorePath();
-    await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.promises.writeFile(storePath, payload, 'utf8');
-  } catch (error) {
-    console.error('[ERROR] Failed to save prompt mode state:', error);
-  } finally {
-    promptModePersistInFlight = false;
-
-    if (pendingPromptModePersistPayload) {
-      void flushPromptModeStatePersist();
-    }
-  }
+  return getPromptModePersistenceController().flush();
 }
 
 function flushPromptModeStatePersistSync() {
-  if (promptModePersistTimer) {
-    clearTimeout(promptModePersistTimer);
-    promptModePersistTimer = null;
-  }
-
-  pendingPromptModePersistPayload = null;
-
-  try {
-    const storePath = getPromptModeStorePath();
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(storePath, serializePromptModeStateSnapshot(), 'utf8');
-  } catch (error) {
-    console.error('[ERROR] Failed to flush prompt mode state:', error);
-  }
+  return getPromptModePersistenceController().flushSync();
 }
 
 function loadPromptModeState() {
@@ -1538,6 +1798,7 @@ function deletePromptMode(modeId) {
 
   unregisterModeHotkey(modeId);
   promptModes.splice(modeIndex, 1);
+  promptModeDraftRevisions.delete(modeId);
 
   if (selectedPromptModeId === modeId) {
     const fallbackMode = promptModes[modeIndex] || promptModes[modeIndex - 1] || promptModes[0];
@@ -1549,13 +1810,68 @@ function deletePromptMode(modeId) {
   return getPromptModeStateSnapshot();
 }
 
-function selectPromptMode(modeId) {
+function normalizePromptModeDraftSessionId(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const sessionId = value.trim();
+  return sessionId && sessionId.length <= 128 ? sessionId : null;
+}
+
+function normalizePromptModeDraftRevision(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function updatePromptModeDraft(modeId, suffix, draftSessionId, draftRevision) {
+  ensurePromptModeState();
+
+  const mode = promptModes.find((entry) => entry.id === modeId);
+  if (!mode) {
+    throw new Error(`Prompt mode "${modeId}" was not found.`);
+  }
+
+  const sessionId = normalizePromptModeDraftSessionId(draftSessionId);
+  const revision = normalizePromptModeDraftRevision(draftRevision);
+  const previousRevision = sessionId && revision !== null
+    ? promptModeDraftRevisions.get(modeId)
+    : null;
+
+  if (
+    previousRevision
+    && previousRevision.sessionId === sessionId
+    && revision <= previousRevision.revision
+  ) {
+    return {
+      accepted: false,
+      revision,
+      promptModePersistence: getPromptModePersistenceStatus()
+    };
+  }
+
+  mode.suffix = typeof suffix === 'string' ? suffix : '';
+  if (sessionId && revision !== null) {
+    promptModeDraftRevisions.set(modeId, {
+      sessionId,
+      revision
+    });
+  }
+
+  return {
+    accepted: true,
+    revision,
+    promptModePersistence: persistPromptModeState()
+  };
+}
+
+async function selectPromptMode(modeId) {
   ensurePromptModeState();
 
   if (typeof modeId === 'string' && promptModes.some((mode) => mode.id === modeId)) {
     selectedPromptModeId = modeId;
     persistPromptModeState();
     broadcastPromptModeState();
+    await flushPromptModeStatePersist();
   }
 
   return getPromptModeStateSnapshot();
@@ -2139,6 +2455,12 @@ function scheduleCaptionSyncStart(delayMs = 250) {
     return;
   }
 
+  broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+    phase: 'starting',
+    active: false,
+    reason: 'starting'
+  });
+
   if (captionSyncStartTimer) {
     clearTimeout(captionSyncStartTimer);
     captionSyncStartTimer = null;
@@ -2147,9 +2469,30 @@ function scheduleCaptionSyncStart(delayMs = 250) {
   captionSyncStartTimer = setTimeout(() => {
     captionSyncStartTimer = null;
     captionSync.start()
-      .then((started) => (started ? applyLiveCaptionsVisibilityPreference() : null))
+      .then((started) => {
+        if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
+          return null;
+        }
+
+        getLiveCaptionsTranscriptSessionId();
+        const captionState = captionSync.getState?.() || {};
+        broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+          ...captionState,
+          phase: started ? (captionState.phase || 'active') : 'error',
+          active: Boolean(started),
+          reason: started ? 'started' : 'start-failed'
+        });
+        return started ? applyLiveCaptionsVisibilityPreference() : null;
+      })
       .catch((error) => {
         console.error('[ERROR] Failed to start caption sync:', error);
+        sendCaptionError(error, { source: TRANSCRIPT_SOURCE_LIVE_CAPTIONS });
+        broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+          phase: 'error',
+          active: false,
+          error: error?.message || String(error),
+          reason: 'start-failed'
+        });
       });
   }, delayMs);
 }
@@ -2274,6 +2617,200 @@ function getInitialTabTitle(url, deferLoad = false) {
   }
 }
 
+function getNavigationUrlFromEvent(detailsOrUrl) {
+  if (typeof detailsOrUrl === 'string') {
+    return detailsOrUrl;
+  }
+
+  return typeof detailsOrUrl?.url === 'string' ? detailsOrUrl.url : '';
+}
+
+function getTabStatePayload(tab) {
+  return {
+    id: tab.id,
+    title: tab.title,
+    url: tab.url,
+    canGoBack: tab.canGoBack,
+    canGoForward: tab.canGoForward,
+    isLoading: tab.isLoading,
+    loadError: tab.loadError || ''
+  };
+}
+
+function sendTabState(channel, tab) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, getTabStatePayload(tab));
+  }
+}
+
+function updateTabNavigationState(tabId, {
+  url,
+  title,
+  loadError,
+  isLoading
+} = {}) {
+  const tab = tabs.get(tabId);
+  if (!tab) {
+    return null;
+  }
+
+  if (typeof url === 'string' && url) {
+    tab.url = url;
+  }
+  if (typeof title === 'string') {
+    tab.title = title || 'New Tab';
+  }
+  if (typeof loadError === 'string') {
+    tab.loadError = loadError;
+  }
+  if (typeof isLoading === 'boolean') {
+    tab.isLoading = isLoading;
+  }
+
+  const webContents = tab.view?.webContents;
+  if (webContents && !webContents.isDestroyed()) {
+    tab.canGoBack = webContents.navigationHistory.canGoBack();
+    tab.canGoForward = webContents.navigationHistory.canGoForward();
+  }
+
+  return tab;
+}
+
+function handleTabLoadFailure(tabId, {
+  errorCode = 0,
+  errorDescription = 'The page could not be loaded.',
+  url = ''
+} = {}) {
+  const tab = updateTabNavigationState(tabId, {
+    url: normalizeAllowedNavigationUrl(url) || undefined,
+    isLoading: false,
+    loadError: `${errorCode ? `[${errorCode}] ` : ''}${errorDescription}`
+  });
+  if (!tab) {
+    return;
+  }
+
+  sendTabState('tab-updated', tab);
+}
+
+function navigateTabTo(tabId, url, { reason = 'navigation' } = {}) {
+  const tab = tabs.get(tabId);
+  const nextUrl = normalizeAllowedNavigationUrl(url);
+  const webContents = tab?.view?.webContents;
+  if (!tab || !nextUrl || !webContents || webContents.isDestroyed()) {
+    return false;
+  }
+
+  updateTabNavigationState(tabId, {
+    url: nextUrl,
+    isLoading: true,
+    loadError: ''
+  });
+  sendTabState('tab-updated', tab);
+
+  try {
+    const loadPromise = webContents.loadURL(nextUrl);
+    if (loadPromise && typeof loadPromise.catch === 'function') {
+      void loadPromise.catch((error) => {
+        handleTabLoadFailure(tabId, {
+          errorCode: error?.errno || error?.code || 0,
+          errorDescription: error?.message || `Failed to ${reason}.`,
+          url: nextUrl
+        });
+      });
+    }
+    return true;
+  } catch (error) {
+    handleTabLoadFailure(tabId, {
+      errorCode: error?.errno || error?.code || 0,
+      errorDescription: error?.message || `Failed to ${reason}.`,
+      url: nextUrl
+    });
+    return false;
+  }
+}
+
+function getAssistantPopupWindowOptions() {
+  return {
+    width: 1000,
+    height: 760,
+    minWidth: 400,
+    minHeight: 300,
+    show: true,
+    autoHideMenuBar: true,
+    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      preload: undefined
+    }
+  };
+}
+
+function isAllowedAssistantPopupUrl(url) {
+  return decideAssistantNavigation({ url }) !== ASSISTANT_NAVIGATION_ACTION.DENY;
+}
+
+function setupAssistantPopupWindow(popupWindow) {
+  if (!popupWindow || popupWindow.isDestroyed()) {
+    return;
+  }
+
+  assistantPopupWindows.add(popupWindow);
+  popupWindow.once('closed', () => {
+    assistantPopupWindows.delete(popupWindow);
+  });
+
+  const popupContents = popupWindow.webContents;
+  popupContents.setWindowOpenHandler((details) => {
+    const action = decideAssistantNavigation({ ...details, source: 'window-open' });
+    if (action !== ASSISTANT_NAVIGATION_ACTION.POPUP) {
+      return { action: 'deny' };
+    }
+
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: getAssistantPopupWindowOptions()
+    };
+  });
+  popupContents.on('did-create-window', (childWindow) => {
+    setupAssistantPopupWindow(childWindow);
+  });
+
+  const guardNavigation = (event, detailsOrUrl) => {
+    const navigationUrl = getNavigationUrlFromEvent(detailsOrUrl);
+    if (!isAllowedAssistantPopupUrl(navigationUrl)) {
+      event.preventDefault();
+      console.warn(`[WARNING] Blocked unsupported assistant popup navigation: ${navigationUrl || '<empty>'}`);
+    }
+  };
+  popupContents.on('will-navigate', guardNavigation);
+  popupContents.on('will-redirect', guardNavigation);
+}
+
+function configureTabWindowOpenHandler(tabId, webContents) {
+  webContents.setWindowOpenHandler((details) => {
+    const action = decideAssistantNavigation({ ...details, source: 'window-open' });
+    if (action === ASSISTANT_NAVIGATION_ACTION.SAME_TAB) {
+      navigateTabTo(tabId, details.url, { reason: 'same-tab window navigation' });
+      return { action: 'deny' };
+    }
+    if (action !== ASSISTANT_NAVIGATION_ACTION.POPUP) {
+      return { action: 'deny' };
+    }
+
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: getAssistantPopupWindowOptions()
+    };
+  });
+  webContents.on('did-create-window', (popupWindow) => {
+    setupAssistantPopupWindow(popupWindow);
+  });
+}
+
 function loadPendingTab(tabId) {
   const tab = tabs.get(tabId);
   if (!tab || !tab.pendingUrl || !tab.view || !tab.view.webContents || tab.view.webContents.isDestroyed()) {
@@ -2286,8 +2823,7 @@ function loadPendingTab(tabId) {
     return false;
   }
 
-  tab.view.webContents.loadURL(nextUrl);
-  return true;
+  return navigateTabTo(tabId, nextUrl, { reason: 'pending tab navigation' });
 }
 
 function scheduleDefaultTabWarmup(delayMs = 1200) {
@@ -2312,21 +2848,12 @@ function createNewTab(url = 'about:blank', options = {}) {
   const shouldActivate = activeTabId === null || options.activate !== false;
   const tabId = tabIdCounter++;
   const layout = getLayoutDimensions();
-  
+
   const tabView = new BrowserView({
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true
     }
-  });
-  
-  // Set up window open handler immediately to prevent popups
-  tabView.webContents.setWindowOpenHandler(({ url }) => {
-    const nextUrl = normalizeAllowedNavigationUrl(url);
-    if (nextUrl) {
-      tabView.webContents.loadURL(nextUrl);
-    }
-    return { action: 'deny' };
   });
 
   if (shouldActivate) {
@@ -2341,7 +2868,7 @@ function createNewTab(url = 'about:blank', options = {}) {
   } else {
     tabView.setBounds({ x: -9999, y: -9999, width: 0, height: 0 });
   }
-  
+
   const tabData = {
     id: tabId,
     view: tabView,
@@ -2350,37 +2877,36 @@ function createNewTab(url = 'about:blank', options = {}) {
     canGoBack: false,
     canGoForward: false,
     isLoading: false,
+    loadError: '',
     pendingUrl: shouldDeferLoad ? requestedUrl : null
   };
-  
+
   tabs.set(tabId, tabData);
-  
+
   if (shouldActivate && activeTabId !== null) {
     const prevTab = tabs.get(activeTabId);
     if (prevTab) {
       prevTab.view.setBounds({ x: -9999, y: -9999, width: 0, height: 0 });
     }
   }
-  
+
   if (shouldActivate) {
     activeTabId = tabId;
   }
 
+  setupTabListeners(tabId, tabView);
   tabView.webContents.setAudioMuted(isMuted);
   if (!shouldDeferLoad) {
-    tabView.webContents.loadURL(requestedUrl);
+    navigateTabTo(tabId, requestedUrl, { reason: 'initial tab navigation' });
   }
   applyDarkWebStylesToTab(tabId);
 
-  setupTabListeners(tabId, tabView);
-  
   mainWindow.webContents.send('tab-created', {
     id: tabId,
     title: tabData.title,
     url: requestedUrl,
     active: shouldActivate
   });
-  scheduleAppPreferencesPersist();
 
   return tabId;
 }
@@ -2388,74 +2914,99 @@ function createNewTab(url = 'about:blank', options = {}) {
 function setupTabListeners(tabId, tabView) {
   const webContents = tabView.webContents;
 
-  webContents.on('will-navigate', (event, navigationUrl) => {
+  configureTabWindowOpenHandler(tabId, webContents);
+
+  webContents.on('will-navigate', (event, navigationDetails) => {
+    const navigationUrl = getNavigationUrlFromEvent(navigationDetails);
     if (!isAllowedNavigationUrl(navigationUrl)) {
       event.preventDefault();
       console.warn(`[WARNING] Blocked unsupported navigation URL: ${navigationUrl || '<empty>'}`);
     }
   });
-  
+
   webContents.on('did-start-loading', () => {
-    const tab = tabs.get(tabId);
+    const tab = updateTabNavigationState(tabId, { isLoading: true, loadError: '' });
     if (tab) {
-      tab.isLoading = true;
       mainWindow.webContents.send('tab-loading', { id: tabId, loading: true });
     }
   });
-  
+
   webContents.on('did-stop-loading', () => {
-    const tab = tabs.get(tabId);
+    const tab = updateTabNavigationState(tabId, { isLoading: false });
     if (tab) {
-      tab.isLoading = false;
       mainWindow.webContents.send('tab-loading', { id: tabId, loading: false });
     }
   });
-  
+
   webContents.on('did-finish-load', () => {
-    const tab = tabs.get(tabId);
+    const tab = updateTabNavigationState(tabId, {
+      url: webContents.getURL(),
+      title: webContents.getTitle(),
+      isLoading: false,
+      loadError: ''
+    });
     if (tab) {
       applyDarkWebStylesToTab(tabId);
-      const url = webContents.getURL();
-      const title = webContents.getTitle();
-      tab.url = url;
-      tab.title = title || 'New Tab';
-      tab.canGoBack = webContents.navigationHistory.canGoBack();
-      tab.canGoForward = webContents.navigationHistory.canGoForward();
-      
-      mainWindow.webContents.send('tab-updated', {
-        id: tabId,
-        title: tab.title,
-        url: tab.url,
-        canGoBack: tab.canGoBack,
-        canGoForward: tab.canGoForward
-      });
-      scheduleAppPreferencesPersist();
+      sendTabState('tab-updated', tab);
     }
   });
-  
+
+  webContents.on('did-fail-load', (
+    event,
+    errorCode,
+    errorDescription,
+    validatedUrl,
+    isMainFrame
+  ) => {
+    if (isMainFrame === false || errorCode === -3) {
+      return;
+    }
+
+    handleTabLoadFailure(tabId, {
+      errorCode,
+      errorDescription,
+      url: validatedUrl
+    });
+  });
+
   webContents.on('page-title-updated', (event, title) => {
-    const tab = tabs.get(tabId);
+    const tab = updateTabNavigationState(tabId, { title });
     if (tab) {
-      tab.title = title;
       mainWindow.webContents.send('tab-title-updated', { id: tabId, title: title });
-      scheduleAppPreferencesPersist();
     }
   });
-  
+
   webContents.on('did-navigate', (event, url) => {
-    const tab = tabs.get(tabId);
+    const tab = updateTabNavigationState(tabId, { url, loadError: '' });
     if (tab) {
-      tab.url = url;
-      tab.canGoBack = webContents.navigationHistory.canGoBack();
-      tab.canGoForward = webContents.navigationHistory.canGoForward();
-      mainWindow.webContents.send('tab-navigated', {
-        id: tabId,
-        url: url,
-        canGoBack: tab.canGoBack,
-        canGoForward: tab.canGoForward
-      });
-      scheduleAppPreferencesPersist();
+      sendTabState('tab-navigated', tab);
     }
+  });
+
+  webContents.on('did-navigate-in-page', (event, url, isMainFrame) => {
+    if (isMainFrame === false) {
+      return;
+    }
+
+    const tab = updateTabNavigationState(tabId, { url, loadError: '' });
+    if (tab) {
+      sendTabState('tab-navigated', tab);
+    }
+  });
+
+  webContents.on('render-process-gone', (event, details) => {
+    assistantMutationController.release(tabId);
+    const reason = typeof details?.reason === 'string' && details.reason
+      ? details.reason
+      : 'unknown';
+    handleTabLoadFailure(tabId, {
+      errorDescription: `Assistant tab renderer stopped (${reason}).`,
+      url: webContents.getURL()
+    });
+  });
+
+  webContents.once('destroyed', () => {
+    assistantMutationController.release(tabId);
   });
 
   webContents.on('before-input-event', (event, input) => {
@@ -2520,30 +3071,21 @@ function setupTabListeners(tabId, tabView) {
   webContents.on('dom-ready', () => {
     applyDarkWebStylesToTab(tabId);
   });
-  
-  // Handle new-window event (legacy, but still needed for some cases)
-  webContents.on('new-window', (event, navigationUrl) => {
-    event.preventDefault();
-    const nextUrl = normalizeAllowedNavigationUrl(navigationUrl);
-    if (nextUrl) {
-      webContents.loadURL(nextUrl);
-    }
-  });
 }
 
 function switchTab(tabId) {
   if (!tabs.has(tabId) || activeTabId === tabId) return;
-  
+
   const prevTab = tabs.get(activeTabId);
   if (prevTab) {
     prevTab.view.setBounds({ x: -9999, y: -9999, width: 0, height: 0 });
   }
-  
+
   activeTabId = tabId;
   const tab = tabs.get(tabId);
   if (tab) {
     const layout = getLayoutDimensions();
-    
+
     mainWindow.setBrowserView(tab.view);
     tab.view.setBounds({
       x: layout.browserViewX,
@@ -2555,7 +3097,7 @@ function switchTab(tabId) {
     if (tab.pendingUrl) {
       loadPendingTab(tabId);
     }
-    
+
     mainWindow.webContents.send('tab-switched', {
       id: tabId,
       url: tab.url,
@@ -2563,19 +3105,19 @@ function switchTab(tabId) {
       canGoBack: tab.canGoBack,
       canGoForward: tab.canGoForward
     });
-    scheduleAppPreferencesPersist();
   }
 }
 
 function closeTab(tabId) {
   if (!tabs.has(tabId)) return;
-  
+
   const tab = tabs.get(tabId);
   const wasActive = activeTabId === tabId;
-  
+
+  assistantMutationController.release(tabId);
   tab.view.webContents.destroy();
   tabs.delete(tabId);
-  
+
   if (wasActive) {
     if (tabs.size > 0) {
       const remainingTabs = Array.from(tabs.keys());
@@ -2590,12 +3132,11 @@ function closeTab(tabId) {
   }
 
   mainWindow.webContents.send('tab-closed', { id: tabId });
-  scheduleAppPreferencesPersist();
 }
 
 function resizeTabs() {
   if (activeTabId === null) return;
-  
+
   const layout = getLayoutDimensions();
   const activeTab = tabs.get(activeTabId);
   if (activeTab) {
@@ -2663,34 +3204,37 @@ function resolveScreenSelection(selectionRect = null) {
   const state = captureOverlayState;
   captureOverlayState = null;
 
-  if (state.window && !state.window.isDestroyed()) {
-    if (state.onClosed) {
-      state.window.removeListener('closed', state.onClosed);
-    }
-    state.window.close();
-  }
-
-  if (!selectionRect) {
-    state.resolve(null);
-    return;
-  }
-
+  let resolvedSelection = null;
   const normalizedSelection = normalizeScreenSelectionRect(selectionRect);
   if (
-    !normalizedSelection
-    || normalizedSelection.width < SCREEN_SELECTION_MIN_SIZE
-    || normalizedSelection.height < SCREEN_SELECTION_MIN_SIZE
+    normalizedSelection
+    && normalizedSelection.width >= SCREEN_SELECTION_MIN_SIZE
+    && normalizedSelection.height >= SCREEN_SELECTION_MIN_SIZE
   ) {
-    state.resolve(null);
+    resolvedSelection = {
+      x: state.display.bounds.x + normalizedSelection.x,
+      y: state.display.bounds.y + normalizedSelection.y,
+      width: normalizedSelection.width,
+      height: normalizedSelection.height
+    };
+  }
+
+  const resolveAfterOverlayClosed = () => state.resolve(resolvedSelection);
+  if (!state.window || state.window.isDestroyed()) {
+    resolveAfterOverlayClosed();
     return;
   }
 
-  state.resolve({
-    x: state.display.bounds.x + normalizedSelection.x,
-    y: state.display.bounds.y + normalizedSelection.y,
-    width: normalizedSelection.width,
-    height: normalizedSelection.height
-  });
+  if (state.onClosed) {
+    state.window.removeListener('closed', state.onClosed);
+  }
+  state.window.once('closed', resolveAfterOverlayClosed);
+  try {
+    state.window.close();
+  } catch (error) {
+    console.error('[WARNING] Failed to close screen selection overlay:', error);
+    resolveAfterOverlayClosed();
+  }
 }
 
 function openScreenSelectionOverlay(targetDisplay) {
@@ -2774,15 +3318,18 @@ function openScreenSelectionOverlay(targetDisplay) {
 
 async function captureSelectedArea(displayId = null) {
   try {
-    const preparedCapture = await screenCapture.prepareDisplayCapture(displayId);
-    const selectionBounds = await openScreenSelectionOverlay(preparedCapture.display);
-
-    if (!selectionBounds) {
-      return false;
-    }
-
-    await screenCapture.captureArea(selectionBounds, displayId, preparedCapture);
-    return true;
+    const result = await runSelectedAreaCaptureWorkflow({
+      displayId,
+      getTargetDisplay: (requestedDisplayId) => screenCapture.getTargetDisplay(requestedDisplayId),
+      openSelectionOverlay: (targetDisplay) => openScreenSelectionOverlay(targetDisplay),
+      prepareDisplayCapture: (requestedDisplayId) => screenCapture.prepareDisplayCapture(requestedDisplayId),
+      captureArea: (selectionBounds, requestedDisplayId, preparedCapture) => screenCapture.captureArea(
+        selectionBounds,
+        requestedDisplayId,
+        preparedCapture
+      )
+    });
+    return result.success;
   } catch (error) {
     console.error('[ERROR] Selected area capture failed:', error);
     return false;
@@ -2990,10 +3537,85 @@ function sendCaptionUpdate(payload = translationManager.getPayload()) {
   }
 }
 
-function sendCaptionError(error) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('caption-error', error?.message || String(error));
+function getLiveCaptionsTranscriptSessionId() {
+  const sessionId = captionSync?.getSessionId?.();
+  if (typeof sessionId === 'string' && sessionId.trim()) {
+    liveCaptionsSessionId = sessionId.trim();
   }
+
+  return liveCaptionsSessionId;
+}
+
+function rotateLiveCaptionsTranscriptSession(options = {}) {
+  const sessionId = captionSync?.beginNewSession?.(options);
+  if (typeof sessionId === 'string' && sessionId.trim()) {
+    liveCaptionsSessionId = sessionId.trim();
+  } else {
+    liveCaptionsSessionId = randomUUID();
+  }
+
+  return liveCaptionsSessionId;
+}
+
+function getDeepgramTranscriptSessionId() {
+  const sessionId = deepgramTranscriptionService?.sessionId;
+  if (typeof sessionId === 'string' && sessionId.trim()) {
+    deepgramTranscriptSessionId = sessionId.trim();
+  }
+
+  return deepgramTranscriptSessionId;
+}
+
+function getDeepgramRetryAttempt() {
+  const retryAttempt = deepgramTranscriptionService?.getRetryAttempt?.();
+  return Number.isSafeInteger(retryAttempt) ? Math.max(0, retryAttempt) : 0;
+}
+
+function getTranscriptSourceLifecycleSnapshot(source = transcriptSource, lifecycleState = {}) {
+  const isDeepgram = source === TRANSCRIPT_SOURCE_DEEPGRAM;
+  const fallbackSessionId = isDeepgram
+    ? getDeepgramTranscriptSessionId()
+    : getLiveCaptionsTranscriptSessionId();
+  const sourceState = isDeepgram
+    ? lifecycleState
+    : {
+        ...captionSync?.getState?.(),
+        ...lifecycleState
+      };
+
+  return normalizeTranscriptSourceLifecycle({
+    ...sourceState,
+    source,
+    sessionId: sourceState.sessionId || fallbackSessionId,
+    retryAttempt: sourceState.retryAttempt ?? (isDeepgram ? getDeepgramRetryAttempt() : 0)
+  }, {
+    source,
+    sessionId: fallbackSessionId
+  });
+}
+
+function broadcastTranscriptSourceLifecycleState(source = transcriptSource, lifecycleState = {}) {
+  const snapshot = getTranscriptSourceLifecycleSnapshot(source, lifecycleState);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('transcript-source-state', snapshot);
+  }
+  return snapshot;
+}
+
+function sendCaptionError(error, options = {}) {
+  const normalizedError = normalizeTranscriptError(error, {
+    source: options.source || transcriptSource,
+    code: options.code || error?.code || 'TRANSCRIPT_ERROR',
+    recoverable: typeof options.recoverable === 'boolean'
+      ? options.recoverable
+      : (typeof error?.recoverable === 'boolean' ? error.recoverable : true)
+  });
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('caption-error', normalizedError);
+  }
+
+  return normalizedError;
 }
 
 function applyTranscriptPayload(payload = translationManager.getPayload()) {
@@ -3030,6 +3652,8 @@ function getDeepgramCaptureStateSnapshot(reason = '') {
   return {
     ...getDeepgramUsageSnapshot(),
     ...lifecycleState,
+    sessionId: getDeepgramTranscriptSessionId(),
+    retryAttempt: getDeepgramRetryAttempt(),
     reason: typeof reason === 'string' && reason ? reason : lifecycleState.reason
   };
 }
@@ -3048,6 +3672,8 @@ function broadcastDeepgramCaptureState(isActive, reason = '', lifecycleState = {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('deepgram-capture-state', snapshot);
   }
+
+  broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_DEEPGRAM, snapshot);
 
   return snapshot;
 }
@@ -3106,20 +3732,37 @@ function getDeepgramTranscriptionService() {
   }
 
   deepgramTranscriptionService = new DeepgramTranscriptionService();
+  deepgramTranscriptSessionId = getDeepgramTranscriptSessionId();
   deepgramTranscriptionService.on('captionUpdate', handleDeepgramCaptionUpdate);
   deepgramTranscriptionService.on('error', (error) => {
     console.error('[ERROR] Deepgram transcription error:', error);
     if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
-      sendCaptionError(`Deepgram transcription error: ${error?.message || String(error)}`);
+      sendCaptionError({
+        ...error,
+        source: TRANSCRIPT_SOURCE_DEEPGRAM,
+        message: `Deepgram transcription error: ${error?.message || String(error)}`
+      });
     }
   });
-  deepgramTranscriptionService.on('fatalError', (error) => {
+  deepgramTranscriptionService.on('fatalError', (error, { revision } = {}) => {
+    if (
+      revision !== undefined
+      && deepgramLifecycleCoordinator
+      && deepgramLifecycleCoordinator.getState().revision !== revision
+    ) {
+      void deepgramLifecycleCoordinator.failClosed(error, { revision });
+      return;
+    }
     console.error('[ERROR] Deepgram capture failed closed:', error);
     if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
-      sendCaptionError(`Deepgram transcription stopped: ${error?.message || String(error)}`);
+      sendCaptionError({
+        ...error,
+        source: TRANSCRIPT_SOURCE_DEEPGRAM,
+        message: `Deepgram transcription stopped: ${error?.message || String(error)}`
+      });
     }
     if (deepgramLifecycleCoordinator) {
-      void deepgramLifecycleCoordinator.failClosed(error);
+      void deepgramLifecycleCoordinator.failClosed(error, { revision });
     } else {
       broadcastDeepgramCaptureState(false, 'backend-failed', {
         phase: 'inactive',
@@ -3154,10 +3797,32 @@ function stopLiveCaptionTranscriptSource() {
   }
 
   if (captionSync && typeof captionSync.stop === 'function') {
+    broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+      phase: 'stopping',
+      active: false,
+      reason: 'stopping'
+    });
     try {
-      captionSync.stop();
+      Promise.resolve(captionSync.stop())
+        .then(() => {
+          broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+            phase: 'inactive',
+            active: false,
+            reason: 'stopped'
+          });
+        })
+        .catch((error) => {
+          sendCaptionError(error, { source: TRANSCRIPT_SOURCE_LIVE_CAPTIONS });
+          broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+            phase: 'error',
+            active: false,
+            error: error?.message || String(error),
+            reason: 'stop-failed'
+          });
+        });
     } catch (error) {
       console.error('[WARNING] Failed to stop caption sync:', error);
+      sendCaptionError(error, { source: TRANSCRIPT_SOURCE_LIVE_CAPTIONS });
     }
   }
 }
@@ -3192,7 +3857,11 @@ async function startDeepgramTranscriptSource() {
     return snapshot;
   } catch (error) {
     console.error('[ERROR] Failed to start Deepgram transcription:', error);
-    sendCaptionError(`Deepgram transcription failed to start: ${error?.message || String(error)}`);
+    sendCaptionError({
+      ...error,
+      source: TRANSCRIPT_SOURCE_DEEPGRAM,
+      message: `Deepgram transcription failed to start: ${error?.message || String(error)}`
+    });
     return broadcastDeepgramCaptureState(false, 'start-failed');
   }
 }
@@ -3223,21 +3892,30 @@ async function applyTranscriptSourceChange(nextSource, { resetTranscript = true 
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
     await stopDeepgramTranscriptSource('source-switched');
   } else {
+    rotateLiveCaptionsTranscriptSession({ requireFreshBoundary: true });
     stopLiveCaptionTranscriptSource();
   }
 
   if (
     resetTranscript
-    && deepgramTranscriptionService
     && (
       transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM
       || normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM
     )
   ) {
-    await deepgramTranscriptionService.clear();
+    await getDeepgramLifecycleCoordinator().clear();
   }
 
   transcriptSource = normalizedSource;
+
+  if (transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
+    rotateLiveCaptionsTranscriptSession({ requireFreshBoundary: true });
+    broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+      phase: 'inactive',
+      active: false,
+      reason: 'source-switched'
+    });
+  }
 
   if (resetTranscript) {
     resetTranscriptStateForSource();
@@ -3254,12 +3932,6 @@ function setTranscriptSourcePreference(source) {
 }
 
 async function setDeepgramApiKeyPreference(apiKey) {
-  const previousApiKey = deepgramApiKey;
-  const shouldRotateActiveCapture = Boolean(
-    deepgramLifecycleCoordinator?.getState?.().active
-    && normalizeDeepgramApiKey(apiKey)
-    && normalizeDeepgramApiKey(apiKey) !== previousApiKey
-  );
   setDeepgramApiKeyInMemory(apiKey);
   deepgramUsageLastFetchedAtMs = 0;
   deepgramUsageRefreshApiKey = '';
@@ -3269,9 +3941,7 @@ async function setDeepgramApiKeyPreference(apiKey) {
   };
 
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM && deepgramApiKey) {
-    if (shouldRotateActiveCapture) {
-      await getDeepgramLifecycleCoordinator().rotateApiKey({ apiKey: deepgramApiKey });
-    }
+    await getDeepgramLifecycleCoordinator().setApiKey({ apiKey: deepgramApiKey });
     void refreshDeepgramAccountUsage().then(() => {
       broadcastDeepgramCaptureState(deepgramTranscriptionActive, 'usage-updated');
     });
@@ -4027,35 +4697,14 @@ async function getAssistantImageAttachmentState(webContents, markerId = '') {
   }
 }
 
-function attachmentStateShowsNewImage(previousState, nextState) {
-  if (!nextState) {
-    return false;
-  }
-
-  if ((nextState.markedFileCount || 0) > 0) {
-    return true;
-  }
-
-  if (!previousState) {
-    return (nextState.fileCount || 0) > 0 || (nextState.previewCount || 0) > 0;
-  }
-
-  return (nextState.fileCount || 0) > (previousState.fileCount || 0)
-    || (nextState.previewCount || 0) > (previousState.previewCount || 0)
-    || (nextState.attachmentIndicatorCount || 0) > (previousState.attachmentIndicatorCount || 0);
-}
-
 async function waitForAssistantImageAttachment(webContents, previousState, markerId = '', attempts = 20, delayMs = 150) {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const currentState = await getAssistantImageAttachmentState(webContents, markerId);
-    if (attachmentStateShowsNewImage(previousState, currentState)) {
-      return true;
-    }
-
-    await sleep(delayMs);
-  }
-
-  return false;
+  return waitForAssistantImageAttachmentEvidence({
+    previousState,
+    getCurrentState: () => getAssistantImageAttachmentState(webContents, markerId),
+    sleep,
+    attempts,
+    delayMs
+  });
 }
 
 async function pasteImageIntoComposer(webContents, image) {
@@ -4068,14 +4717,17 @@ async function pasteImageIntoComposer(webContents, image) {
     await fs.promises.writeFile(temporaryUploadPath, imagePng);
     scheduleTemporaryFileCleanup(temporaryUploadPath);
 
-    await focusAssistantComposerForUpload(webContents);
+    const composerFocused = await focusAssistantComposerForUpload(webContents);
+    if (!composerFocused) {
+      return false;
+    }
 
     const markedInput = await markImageUploadInput(webContents, uploadMarkerId);
     if (markedInput) {
       const uploaded = await setMarkedUploadInputFiles(webContents, uploadMarkerId, [temporaryUploadPath]);
       if (uploaded) {
         await dispatchMarkedUploadInputEvents(webContents, uploadMarkerId, true);
-        await waitForAssistantImageAttachment(
+        const attachmentObserved = await waitForAssistantImageAttachment(
           webContents,
           previousAttachmentState,
           uploadMarkerId,
@@ -4083,7 +4735,7 @@ async function pasteImageIntoComposer(webContents, image) {
           100
         );
         await clearMarkedUploadInput(webContents, uploadMarkerId);
-        return true;
+        return attachmentObserved;
       } else {
         await clearMarkedUploadInput(webContents, uploadMarkerId);
       }
@@ -4222,8 +4874,7 @@ async function pasteImageIntoComposer(webContents, image) {
       return false;
     }
 
-    await waitForAssistantImageAttachment(webContents, previousAttachmentState, '', 4, 100);
-    return true;
+    return await waitForAssistantImageAttachment(webContents, previousAttachmentState, '', 4, 100);
   } catch (error) {
     console.error('[ERROR] Failed to paste image into assistant composer without focus:', error);
     return false;
@@ -4490,64 +5141,90 @@ async function submitComposerViaDom(webContents) {
   }
 }
 
+function createAssistantSubmissionStrategy(
+  webContents,
+  expectedText,
+  dispatch,
+  attempts,
+  delayMs
+) {
+  return async () => {
+    const dispatched = await dispatch(webContents);
+    if (!dispatched) {
+      return ASSISTANT_SUBMISSION_OUTCOME.NOT_DISPATCHED;
+    }
+
+    const confirmed = await waitForComposerTextChange(webContents, expectedText, attempts, delayMs);
+    return confirmed
+      ? ASSISTANT_SUBMISSION_OUTCOME.CONFIRMED_SENT
+      : ASSISTANT_SUBMISSION_OUTCOME.UNKNOWN_AFTER_DISPATCH;
+  };
+}
+
 async function submitCurrentComposer(webContents, expectedText) {
   await waitForSendButtonReady(webContents, 12, 100);
 
   const targetKind = getAssistantTargetKind(webContents.getURL());
 
   if (targetKind === 'chatgpt') {
-    const formSubmitted = await submitComposerViaForm(webContents);
-    if (formSubmitted && await waitForComposerTextChange(webContents, expectedText, 8, 100)) {
-      return true;
-    }
-  }
-
-  const clickSubmitted = await clickComposerSendButton(webContents);
-  if (clickSubmitted && await waitForComposerTextChange(webContents, expectedText, 12, 100)) {
-    return true;
+    return runAssistantSubmissionStrategies([
+      createAssistantSubmissionStrategy(
+        webContents,
+        expectedText,
+        submitComposerViaForm,
+        8,
+        100
+      ),
+      createAssistantSubmissionStrategy(
+        webContents,
+        expectedText,
+        clickComposerSendButton,
+        12,
+        100
+      ),
+      createAssistantSubmissionStrategy(
+        webContents,
+        expectedText,
+        submitComposerViaDom,
+        30,
+        200
+      )
+    ]);
   }
 
   if (targetKind !== 'chatgpt') {
-    const formSubmitted = await submitComposerViaForm(webContents);
-    if (formSubmitted && await waitForComposerTextChange(webContents, expectedText, 4, 100)) {
-      return true;
-    }
+    return runAssistantSubmissionStrategies([
+      createAssistantSubmissionStrategy(
+        webContents,
+        expectedText,
+        clickComposerSendButton,
+        12,
+        100
+      ),
+      createAssistantSubmissionStrategy(
+        webContents,
+        expectedText,
+        submitComposerViaForm,
+        4,
+        100
+      ),
+      createAssistantSubmissionStrategy(
+        webContents,
+        expectedText,
+        submitComposerViaDom,
+        30,
+        200
+      )
+    ]);
   }
 
-  const domSubmitted = await submitComposerViaDom(webContents);
-  if (domSubmitted && await waitForComposerTextChange(webContents, expectedText, 30, 200)) {
-    return true;
-  }
-
-  return false;
+  return ASSISTANT_SUBMISSION_OUTCOME.NOT_DISPATCHED;
 }
 
 async function submitTranscriptToAssistant() {
-  const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
-  const transcriptEntriesSnapshot = normalizeTranscriptEntriesForPrompt(latestTranscriptEntries);
-  const cursorResult = resolvePendingTranscriptCursor({
-    transcriptText: transcriptSnapshot,
-    transcriptEntries: transcriptEntriesSnapshot,
-    cursorText: lastSubmittedTranscriptText,
-    cursorEntries: lastSubmittedTranscriptEntries
-  });
-
-  if (cursorResult.status === 'mismatch') {
-    sendCaptionError(TRANSCRIPT_CURSOR_MISMATCH_ERROR);
-    return;
-  }
-
-  const composerText = getTranscriptPromptText(
-    cursorResult.pendingText,
-    cursorResult.pendingEntries
-  );
-  if (!composerText.trim()) {
-    console.error('[ERROR] No new transcript or prompt text is available for Ctrl+Enter');
-    return;
-  }
-
+  const tabId = activeTabId;
   const webContents = getActiveTabWebContents();
-  if (!webContents) {
+  if (tabId === null || !webContents) {
     return;
   }
 
@@ -4555,46 +5232,84 @@ async function submitTranscriptToAssistant() {
     return;
   }
 
-  const focusState = await capturePageFocusState(webContents);
+  const mutationResult = await assistantMutationController.run(tabId, async () => {
+    const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
+    const transcriptEntriesSnapshot = normalizeTranscriptEntriesForPrompt(latestTranscriptEntries);
+    const cursorResult = resolvePendingTranscriptCursor({
+      transcriptText: transcriptSnapshot,
+      transcriptEntries: transcriptEntriesSnapshot,
+      cursorText: lastSubmittedTranscriptText,
+      cursorEntries: lastSubmittedTranscriptEntries
+    });
 
-  try {
-    const cleared = await clearCurrentComposer(webContents);
-    if (!cleared || !(await waitForComposerEmpty(webContents))) {
-      console.error('[ERROR] Ctrl+Enter could not clear the current assistant composer without focusing it');
-      return;
+    if (cursorResult.status === 'mismatch') {
+      sendCaptionError(TRANSCRIPT_CURSOR_MISMATCH_ERROR);
+      return ASSISTANT_SUBMISSION_OUTCOME.NOT_DISPATCHED;
     }
 
-    const pastedText = await pasteTextIntoComposer(webContents, composerText);
-    if (!pastedText) {
-      console.error('[ERROR] Transcript prompt could not be injected into the current assistant composer');
-      return;
+    const composerText = getTranscriptPromptText(
+      cursorResult.pendingText,
+      cursorResult.pendingEntries
+    );
+    if (!composerText.trim()) {
+      console.error('[ERROR] No new transcript or prompt text is available for Ctrl+Enter');
+      return ASSISTANT_SUBMISSION_OUTCOME.NOT_DISPATCHED;
     }
 
-    const pasted = await waitForComposerText(webContents, composerText);
-    if (!pasted) {
-      const currentText = await getCurrentComposerText(webContents);
-      console.error('[ERROR] Transcript prompt did not match the expected text in the current assistant composer', {
-        expectedLength: normalizeComposerText(composerText).length,
-        currentLength: normalizeComposerText(currentText).length,
-        expectedPreview: flattenComposerText(composerText).slice(0, 160),
-        currentPreview: flattenComposerText(currentText).slice(0, 160)
-      });
-      return;
-    }
+    const focusState = await capturePageFocusState(webContents);
 
-    await sleep(50);
-    const submitted = await submitCurrentComposer(webContents, composerText);
-    if (submitted) {
-      markTranscriptSubmitted(transcriptSnapshot, transcriptEntriesSnapshot);
-    } else {
-      const sendButtonReady = await waitForSendButtonReady(webContents, 6, 75);
-      console.error('[ERROR] Ctrl+Enter could not submit the current assistant composer without focusing it');
-      if (!sendButtonReady) {
-        console.error('[ERROR] Assistant send button did not become ready after Ctrl+Enter injection');
+    try {
+      const cleared = await clearCurrentComposer(webContents);
+      if (!cleared || !(await waitForComposerEmpty(webContents))) {
+        console.error('[ERROR] Ctrl+Enter could not clear the current assistant composer without focusing it');
+        return ASSISTANT_SUBMISSION_OUTCOME.NOT_DISPATCHED;
       }
+
+      const pastedText = await pasteTextIntoComposer(webContents, composerText);
+      if (!pastedText) {
+        console.error('[ERROR] Transcript prompt could not be injected into the current assistant composer');
+        return ASSISTANT_SUBMISSION_OUTCOME.NOT_DISPATCHED;
+      }
+
+      const pasted = await waitForComposerText(webContents, composerText);
+      if (!pasted) {
+        const currentText = await getCurrentComposerText(webContents);
+        console.error('[ERROR] Transcript prompt did not match the expected text in the current assistant composer', {
+          expectedLength: normalizeComposerText(composerText).length,
+          currentLength: normalizeComposerText(currentText).length,
+          expectedPreview: flattenComposerText(composerText).slice(0, 160),
+          currentPreview: flattenComposerText(currentText).slice(0, 160)
+        });
+        return ASSISTANT_SUBMISSION_OUTCOME.NOT_DISPATCHED;
+      }
+
+      await sleep(50);
+      const outcome = await submitCurrentComposer(webContents, composerText);
+      if (shouldAdvanceAssistantTranscriptCursor(outcome)) {
+        markTranscriptSubmitted(transcriptSnapshot, transcriptEntriesSnapshot);
+      } else if (needsAssistantSubmissionRetry(outcome)) {
+        sendCaptionError(
+          'Assistant submission is uncertain. The transcript was not marked sent; verify the assistant and retry only if needed.'
+        );
+      } else {
+        const sendButtonReady = await waitForSendButtonReady(webContents, 6, 75);
+        console.error('[ERROR] Ctrl+Enter could not submit the current assistant composer without focusing it');
+        if (!sendButtonReady) {
+          console.error('[ERROR] Assistant send button did not become ready after Ctrl+Enter injection');
+        }
+      }
+
+      return outcome;
+    } finally {
+      await settlePageFocusState(webContents, focusState);
     }
-  } finally {
-    await settlePageFocusState(webContents, focusState);
+  });
+
+  if (mutationResult.status === ASSISTANT_MUTATION_STATUS.BUSY) {
+    sendCaptionError('Assistant is busy sending or uploading in this tab. Please wait for it to finish.');
+  } else if (mutationResult.status === ASSISTANT_MUTATION_STATUS.FAILED) {
+    console.error('[ERROR] Ctrl+Enter assistant mutation failed:', mutationResult.error);
+    sendCaptionError('Assistant submission failed before it could be confirmed. Please retry.');
   }
 }
 
@@ -4627,8 +5342,9 @@ async function copyTranscriptPromptToClipboard() {
 }
 
 async function pasteFullScreenIntoAssistant() {
+  const tabId = activeTabId;
   const webContents = getActiveTabWebContents();
-  if (!webContents) {
+  if (tabId === null || !webContents) {
     return;
   }
 
@@ -4636,19 +5352,30 @@ async function pasteFullScreenIntoAssistant() {
     return;
   }
 
-  const focusState = await capturePageFocusState(webContents);
+  const mutationResult = await assistantMutationController.run(tabId, async () => {
+    const focusState = await capturePageFocusState(webContents);
 
-  try {
-    const preparedCapture = await screenCapture.prepareDisplayCapture(getCurrentDisplayId());
-    const pasted = await pasteImageIntoComposer(webContents, preparedCapture.image);
-    if (!pasted) {
-      console.error('[ERROR] Ctrl+Shift+Enter could not inject the captured image without focusing the assistant');
-      return;
+    try {
+      const preparedCapture = await screenCapture.prepareDisplayCapture(getCurrentDisplayId());
+      const pasted = await pasteImageIntoComposer(webContents, preparedCapture.image);
+      if (!pasted) {
+        console.error('[ERROR] Ctrl+Shift+Enter could not verify an assistant image attachment without focusing the assistant');
+        sendCaptionError('Screenshot attachment could not be verified. Nothing was sent to the assistant.');
+        return false;
+      }
+
+      await sleep(150);
+      return true;
+    } finally {
+      await settlePageFocusState(webContents, focusState);
     }
+  });
 
-    await sleep(150);
-  } finally {
-    await settlePageFocusState(webContents, focusState);
+  if (mutationResult.status === ASSISTANT_MUTATION_STATUS.BUSY) {
+    sendCaptionError('Assistant is busy sending or uploading in this tab. Please wait for it to finish.');
+  } else if (mutationResult.status === ASSISTANT_MUTATION_STATUS.FAILED) {
+    console.error('[ERROR] Ctrl+Shift+Enter assistant mutation failed:', mutationResult.error);
+    sendCaptionError('Screenshot attachment failed before it could be verified. Please retry.');
   }
 }
 
@@ -4684,7 +5411,9 @@ async function closeLiveCaptionsForAppExit() {
 
   liveCaptionsExitCleanupPromise = (async () => {
     try {
-      await stopDeepgramTranscriptSource('app-exit');
+      if (deepgramLifecycleCoordinator || deepgramTranscriptionService) {
+        await getDeepgramLifecycleCoordinator().shutdown();
+      }
       if (captionSync && typeof captionSync.stopAndCloseLiveCaptions === 'function') {
         await captionSync.stopAndCloseLiveCaptions();
       } else if (captionSync && typeof captionSync.stop === 'function') {
@@ -4909,11 +5638,7 @@ ipcMain.handle('navigate', (event, url) => {
   }
 
   if (activeTabId !== null) {
-    const tab = tabs.get(activeTabId);
-    if (tab) {
-      tab.view.webContents.loadURL(nextUrl);
-      return true;
-    }
+    return navigateTabTo(activeTabId, nextUrl, { reason: 'address-bar navigation' });
   }
   return false;
 });
@@ -5069,7 +5794,7 @@ ipcMain.handle('add-prompt-mode', (event) => {
   return addPromptMode();
 });
 
-ipcMain.handle('select-prompt-mode', (event, modeId) => {
+ipcMain.handle('select-prompt-mode', async (event, modeId) => {
   if (!isMainWindowSender(event)) {
     return rejectUnauthorizedIpc('select-prompt-mode', null);
   }
@@ -5099,6 +5824,37 @@ ipcMain.handle('save-prompt-mode', (event, payload) => {
   }
 
   return savePromptMode(payload?.modeId, payload?.suffix);
+});
+
+ipcMain.handle('update-prompt-mode-draft', (event, payload) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('update-prompt-mode-draft', {
+      accepted: false,
+      promptModePersistence: getPromptModePersistenceStatus()
+    });
+  }
+
+  return updatePromptModeDraft(
+    payload?.modeId,
+    payload?.suffix,
+    payload?.sessionId,
+    payload?.revision
+  );
+});
+
+ipcMain.handle('flush-prompt-mode-drafts', async (event) => {
+  if (!isMainWindowSender(event)) {
+    return rejectUnauthorizedIpc('flush-prompt-mode-drafts', {
+      success: false,
+      promptModePersistence: getPromptModePersistenceStatus()
+    });
+  }
+
+  const result = await flushPromptModeStatePersist();
+  return {
+    success: result.success,
+    promptModePersistence: result.status
+  };
 });
 
 ipcMain.handle('set-prompt-mode-hotkey', (event, payload) => {
@@ -5164,11 +5920,7 @@ ipcMain.handle('clear-transcript', async (event) => {
   resetTranscriptStateForSource();
 
   if (transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM) {
-    if (deepgramLifecycleCoordinator) {
-      await deepgramLifecycleCoordinator.clear();
-    } else if (deepgramTranscriptionService) {
-      await deepgramTranscriptionService.clear();
-    }
+    await getDeepgramLifecycleCoordinator().clear();
 
     return {
       success: true,
@@ -5180,6 +5932,13 @@ ipcMain.handle('clear-transcript', async (event) => {
   if (captionSync && typeof captionSync.clearTranscript === 'function') {
     try {
       const result = await captionSync.clearTranscript();
+      getLiveCaptionsTranscriptSessionId();
+      broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+        ...(captionSync.getState?.() || {}),
+        phase: result?.success ? 'active' : 'error',
+        active: Boolean(result?.success),
+        reason: result?.success ? 'cleared' : 'clear-failed'
+      });
       if (result && typeof result === 'object') {
         if (typeof result.liveCaptionsVisible === 'boolean') {
           liveCaptionsWindowVisible = result.liveCaptionsVisible;
@@ -5195,6 +5954,13 @@ ipcMain.handle('clear-transcript', async (event) => {
       };
     } catch (error) {
       console.error('[ERROR] Failed to clear transcript:', error);
+      sendCaptionError(error, { source: TRANSCRIPT_SOURCE_LIVE_CAPTIONS });
+      broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+        phase: 'error',
+        active: false,
+        error: error?.message || String(error),
+        reason: 'clear-failed'
+      });
     }
   }
 
@@ -5258,26 +6024,6 @@ ipcMain.handle('get-live-captions-window-visibility', async (event) => {
   }
 });
 
-ipcMain.handle('get-active-tab', (event) => {
-  if (!isMainWindowSender(event)) {
-    return rejectUnauthorizedIpc('get-active-tab', null);
-  }
-
-  if (activeTabId !== null) {
-    const tab = tabs.get(activeTabId);
-    if (tab) {
-      return {
-        id: activeTabId,
-        url: tab.url,
-        title: tab.title,
-        canGoBack: tab.canGoBack,
-        canGoForward: tab.canGoForward
-      };
-    }
-  }
-  return null;
-});
-
 ipcMain.handle('get-tabs', (event) => {
   if (!isMainWindowSender(event)) {
     return rejectUnauthorizedIpc('get-tabs', null);
@@ -5306,6 +6052,15 @@ translationManager.on('updated', (payload) => {
 });
 
 if (captionSync) {
+  captionSync.on('state', (state) => {
+    if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
+      return;
+    }
+
+    getLiveCaptionsTranscriptSessionId();
+    broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, state);
+  });
+
   // Handle caption updates from caption sync service
   captionSync.on('captionUpdate', (data) => {
     if (transcriptSource !== TRANSCRIPT_SOURCE_LIVE_CAPTIONS) {
@@ -5325,10 +6080,15 @@ if (captionSync) {
       return;
     }
 
-    latestTranscriptText = '';
-    latestTranscriptEntries = [];
-    resetTranscriptCursors();
-    translationManager.reset('');
-    sendCaptionError(error);
+    sendCaptionError(error, { source: TRANSCRIPT_SOURCE_LIVE_CAPTIONS });
+    broadcastTranscriptSourceLifecycleState(TRANSCRIPT_SOURCE_LIVE_CAPTIONS, {
+      ...(captionSync.getState?.() || {}),
+      phase: 'error',
+      active: false,
+      error: error?.message || String(error),
+      reason: error?.code || 'source-error'
+    });
   });
 }
+
+module.exports.PromptModePersistenceController = PromptModePersistenceController;

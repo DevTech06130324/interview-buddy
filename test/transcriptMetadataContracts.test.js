@@ -64,13 +64,13 @@ test('Ctrl+Enter prompt injection does not stop when there is no pending transcr
   assert.match(source, /getTranscriptPromptText\(\s*cursorResult\.pendingText,\s*cursorResult\.pendingEntries/);
 });
 
-test('Ctrl+Enter resolves the cursor once and surfaces mismatch before composer mutation', () => {
+test('Ctrl+Enter resolves the cursor once and surfaces mismatch before any composer mutation', () => {
   const source = getAsyncFunctionSource('submitTranscriptToAssistant');
   const resolverCalls = source.match(/resolvePendingTranscriptCursor\(/g) || [];
 
   assert.equal(resolverCalls.length, 1);
-  assert.match(source, /if \(cursorResult\.status === 'mismatch'\) \{\s*sendCaptionError\(TRANSCRIPT_CURSOR_MISMATCH_ERROR\);\s*return;/);
-  assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('getActiveTabWebContents()'));
+  assert.match(source, /if \(cursorResult\.status === 'mismatch'\) \{\s*sendCaptionError\(TRANSCRIPT_CURSOR_MISMATCH_ERROR\);\s*return ASSISTANT_SUBMISSION_OUTCOME\.NOT_DISPATCHED;/);
+  assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('capturePageFocusState('));
   assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('markTranscriptSubmitted('));
 });
 
@@ -90,7 +90,7 @@ test('cursor mismatch message tells the user to retry or clear to reset', () => 
   assert.match(source, /const TRANSCRIPT_CURSOR_MISMATCH_ERROR = '[^']*[Rr]etry[^']*[Cc]lear[^']*reset[^']*';/);
 });
 
-test('clear transcript resets submitted and clipboard cursors before clearing Deepgram', () => {
+test('clear transcript resets submitted and clipboard cursors before coordinator-managed Deepgram clear', () => {
   const source = readRepoFile('main.js');
   const resetSource = getFunctionSource(source, 'resetTranscriptStateForSource');
   const clearHandlerStart = source.indexOf("ipcMain.handle('clear-transcript'");
@@ -99,20 +99,24 @@ test('clear transcript resets submitted and clipboard cursors before clearing De
 
   assert.match(resetSource, /resetTranscriptCursors\(\)/);
   assert.match(clearHandlerSource, /resetTranscriptStateForSource\(\)/);
-  assert.ok(clearHandlerSource.indexOf('resetTranscriptStateForSource()') < clearHandlerSource.indexOf('deepgramTranscriptionService.clear()'));
+  const coordinatorClearIndex = clearHandlerSource.indexOf('getDeepgramLifecycleCoordinator().clear()');
+  assert.ok(coordinatorClearIndex >= 0);
+  assert.ok(clearHandlerSource.indexOf('resetTranscriptStateForSource()') < coordinatorClearIndex);
+  assert.doesNotMatch(clearHandlerSource, /deepgramTranscriptionService\.clear\(\)/);
 });
 
-test('source switching with transcript reset rotates the stopped Deepgram session', () => {
+test('source switching with transcript reset rotates the stopped Deepgram session through the coordinator', () => {
   const source = readRepoFile('main.js');
   const sourceChange = getFunctionSource(source, 'applyTranscriptSourceChange');
   const stopIndex = sourceChange.indexOf("stopDeepgramTranscriptSource('source-switched')");
-  const clearIndex = sourceChange.indexOf('deepgramTranscriptionService.clear()');
+  const clearIndex = sourceChange.indexOf('getDeepgramLifecycleCoordinator().clear()');
   const resetIndex = sourceChange.indexOf('resetTranscriptStateForSource()');
 
-  assert.match(sourceChange, /if \(\s*resetTranscript\s*&& deepgramTranscriptionService\s*&& \(\s*transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\|\| normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\)\s*\) \{\s*(?:await\s+)?deepgramTranscriptionService\.clear\(\);\s*\}/);
+  assert.match(sourceChange, /if \(\s*resetTranscript\s*&& \(\s*transcriptSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\|\| normalizedSource === TRANSCRIPT_SOURCE_DEEPGRAM\s*\)\s*\) \{\s*(?:await\s+)?getDeepgramLifecycleCoordinator\(\)\.clear\(\);\s*\}/);
   assert.ok(stopIndex >= 0);
   assert.ok(clearIndex > stopIndex);
   assert.ok(resetIndex > clearIndex);
+  assert.doesNotMatch(sourceChange, /deepgramTranscriptionService\.clear\(\)/);
 });
 
 test('Ctrl+Enter marks submitted transcript text and entries from the same snapshot', () => {

@@ -8,6 +8,7 @@ const loadingIndicator = document.getElementById('loadingIndicator');
 const transcriptEl = document.getElementById('transcript');
 const transcriptRowsEl = document.getElementById('transcriptRows');
 const newTranscriptIndicator = document.getElementById('newTranscriptIndicator');
+const transcriptSourceStatus = document.getElementById('transcriptSourceStatus');
 const deepgramUsageStatus = document.getElementById('deepgramUsageStatus');
 const deepgramRemainingUsageValue = document.getElementById('deepgramRemainingUsageValue');
 const saveTranscriptBtn = document.getElementById('saveTranscriptBtn');
@@ -31,6 +32,7 @@ const collapsedModeDropdownLabel = document.getElementById('collapsedModeDropdow
 const collapsedModeDropdownMenu = document.getElementById('collapsedModeDropdownMenu');
 const modePromptPreview = document.getElementById('modePromptPreview');
 const modeHotkeyInput = document.getElementById('modeHotkeyInput');
+const modeHotkeyStatusText = document.getElementById('modeHotkeyStatus');
 const modeSuffixInput = document.getElementById('modeSuffixInput');
 const {
   formatHotkeyForDisplay,
@@ -43,8 +45,9 @@ const setProtectedTooltip = window.protectedTooltips?.setTooltip || (() => {});
 
 const tabs = new Map();
 let activeTabId = null;
-let transcriptHistory = '';
 let lastCaptionPayloadVersion = null;
+let transcriptSourceStatusKind = '';
+let transcriptSourceLifecycle = null;
 let isUserScrolling = false;
 let scrollTimeout = null;
 let hasNewTranscriptBelow = false;
@@ -69,20 +72,28 @@ let editingPromptModeId = null;
 let modeDropdownRenderSignature = '';
 let modeDropdownCloseTimer = null;
 let deferredModeDropdownRenderPending = false;
-let modeHotkeyStatus = 'idle';
 let modeHotkeyDisplayOverride = null;
 let modeHotkeyFeedbackTimer = null;
-let promptModeAutosaveTimer = null;
-let promptModeAutosaveRequest = Promise.resolve();
+let promptModeDraftRevision = 0;
+const promptModeDraftSessionId = `prompt-draft-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+const pendingPromptModeDraftUpdates = new Set();
+let latestPromptModeDraft = null;
+let promptModePersistenceStatus = {
+  state: 'saved',
+  dirty: false,
+  message: '',
+  revision: 0
+};
+let promptModePersistenceStatusElement = null;
 let promptModeStateSyncRequest = Promise.resolve();
 let panelResizeState = null;
 let panelRatioSyncFrame = null;
 let pendingPanelRatioToSync = null;
 
 const PANEL_DIVIDER_WIDTH = 10;
+const PANEL_KEYBOARD_RESIZE_STEP_PX = 10;
 const MIN_TRANSCRIPT_PANEL_WIDTH = 280;
 const MIN_BROWSER_PANEL_WIDTH = 220;
-const PROMPT_MODE_AUTOSAVE_DELAY_MS = 400;
 const MODE_HOTKEY_FEEDBACK_RESET_DELAY_MS = 1400;
 const MODE_RENAME_DOUBLE_CLICK_WINDOW_MS = 260;
 const DEEPGRAM_USAGE_REFRESH_INTERVAL_MS = 60_000;
@@ -120,6 +131,10 @@ function getTabElement(tabId) {
   return tabBar.querySelector(`[data-tab-id="${tabId}"]`);
 }
 
+function isTabCloseControl(target) {
+  return Boolean(target && typeof target.closest === 'function' && target.closest('.tab-close'));
+}
+
 function updateNavigationButtons(canGoBack, canGoForward) {
   backBtn.disabled = !canGoBack;
   forwardBtn.disabled = !canGoForward;
@@ -142,15 +157,30 @@ function createTabElement(tabData) {
   close.className = 'tab-close';
   close.textContent = '\u00D7';
   close.setAttribute('aria-label', `Close ${tabData.title || 'tab'}`);
-  close.onclick = (event) => {
+  setProtectedTooltip(close, `Close ${tabData.title || 'tab'}`);
+  close.addEventListener('click', (event) => {
+    event.preventDefault();
     event.stopPropagation();
     closeTab(tabData.id);
-  };
+  });
+  close.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+  });
 
   tab.appendChild(title);
   tab.appendChild(close);
-  tab.onclick = () => switchTab(tabData.id);
+  tab.onclick = (event) => {
+    if (isTabCloseControl(event.target)) {
+      return;
+    }
+
+    switchTab(tabData.id);
+  };
   tab.onkeydown = (event) => {
+    if (isTabCloseControl(event.target)) {
+      return;
+    }
+
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       switchTab(tabData.id);
@@ -175,6 +205,7 @@ function updateTabElement(tabId, updates) {
     const closeButton = tabElement.querySelector('.tab-close');
     if (closeButton) {
       closeButton.setAttribute('aria-label', `Close ${updates.title || 'tab'}`);
+      setProtectedTooltip(closeButton, `Close ${updates.title || 'tab'}`);
     }
   }
 
@@ -455,7 +486,6 @@ function renderTranscriptEntries(entries) {
     return;
   }
 
-  transcriptEl.classList.remove('has-error');
   const displayEntries = createTranscriptDisplayGroups(entries);
 
   if (!transcriptRowsEl) {
@@ -651,29 +681,124 @@ function refreshDeepgramUsageStatus() {
     });
 }
 
-function renderTranscriptError(errorMessage) {
-  if (!transcriptEl) {
+function getTranscriptSourceLabel(source) {
+  return source === TRANSCRIPT_SOURCE_DEEPGRAM ? 'Deepgram' : 'Live Captions';
+}
+
+function normalizeCaptionErrorPayload(error) {
+  const source = error?.source === TRANSCRIPT_SOURCE_DEEPGRAM
+    ? TRANSCRIPT_SOURCE_DEEPGRAM
+    : TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
+  const message = typeof error?.message === 'string' && error.message
+    ? error.message
+    : (typeof error === 'string' && error ? error : 'Transcript source error.');
+
+  return {
+    source,
+    code: typeof error?.code === 'string' ? error.code : 'TRANSCRIPT_ERROR',
+    message,
+    recoverable: typeof error?.recoverable === 'boolean' ? error.recoverable : true
+  };
+}
+
+function setTranscriptSourceStatus(message, { kind = 'lifecycle' } = {}) {
+  if (!transcriptSourceStatus) {
     return;
   }
 
-  transcriptEl.classList.add('has-error');
+  transcriptSourceStatus.textContent = message;
+  transcriptSourceStatus.hidden = !message;
+  transcriptSourceStatus.classList.toggle('is-error', kind === 'error');
+  transcriptSourceStatus.classList.toggle('is-recovering', kind === 'lifecycle');
+  transcriptSourceStatusKind = message ? kind : '';
+}
 
-  if (!transcriptRowsEl) {
-    transcriptEl.textContent = errorMessage;
+function clearTranscriptSourceStatus({ lifecycleOnly = false } = {}) {
+  if (lifecycleOnly && transcriptSourceStatusKind !== 'lifecycle') {
     return;
   }
 
-  transcriptRowsEl.textContent = '';
+  setTranscriptSourceStatus('', { kind: '' });
+}
 
-  const errorRow = document.createElement('div');
-  errorRow.className = 'transcript-row transcript-error-row';
+function showCaptionErrorStatus(error) {
+  const normalizedError = normalizeCaptionErrorPayload(error);
+  const errorText = normalizedError.message;
+  const isMissingNativeAddon =
+    errorText.includes('Live Captions native addon was not found')
+    || errorText.includes('livecaptions_native.node')
+    || errorText.includes('Cannot find module');
+  const sourceLabel = getTranscriptSourceLabel(normalizedError.source);
+  const recoveryText = normalizedError.recoverable
+    ? ' You can retry without clearing the transcript.'
+    : '';
+  const supportText = isMissingNativeAddon
+    ? ' This build is missing the Live Captions native addon. Run "npm run build-native" and package the app again.'
+    : '';
 
-  const errorCell = document.createElement('div');
-  errorCell.className = 'transcript-cell transcript-error-cell';
-  errorCell.textContent = errorMessage;
+  setTranscriptSourceStatus(
+    `${sourceLabel}: ${errorText}${supportText}${recoveryText}`,
+    { kind: 'error' }
+  );
+}
 
-  errorRow.appendChild(errorCell);
-  transcriptRowsEl.appendChild(errorRow);
+function applyTranscriptSourceLifecycle(state = {}) {
+  if (!state || typeof state !== 'object') {
+    return;
+  }
+
+  const source = state.source === TRANSCRIPT_SOURCE_DEEPGRAM
+    ? TRANSCRIPT_SOURCE_DEEPGRAM
+    : TRANSCRIPT_SOURCE_LIVE_CAPTIONS;
+  const phase = typeof state.phase === 'string' ? state.phase : 'inactive';
+  const allowedPhases = new Set([
+    'inactive',
+    'connecting',
+    'active',
+    'reconnecting',
+    'stopping',
+    'error'
+  ]);
+  if (!allowedPhases.has(phase)) {
+    return;
+  }
+
+  transcriptSourceLifecycle = {
+    source,
+    phase,
+    sessionId: typeof state.sessionId === 'string' ? state.sessionId : '',
+    retryAttempt: Number.isSafeInteger(state.retryAttempt) ? state.retryAttempt : 0
+  };
+
+  if (source !== transcriptSource) {
+    return;
+  }
+
+  const sourceLabel = getTranscriptSourceLabel(source);
+  if (phase === 'error') {
+    showCaptionErrorStatus({
+      source,
+      code: typeof state.reason === 'string' ? state.reason : 'SOURCE_ERROR',
+      message: typeof state.error === 'string' && state.error
+        ? state.error
+        : `${sourceLabel} could not continue.`,
+      recoverable: true
+    });
+    return;
+  }
+
+  if (phase === 'connecting' || phase === 'reconnecting' || phase === 'stopping') {
+    const action = phase === 'connecting'
+      ? 'is connecting'
+      : (phase === 'reconnecting' ? 'is reconnecting' : 'is stopping');
+    const retryText = phase === 'reconnecting' && transcriptSourceLifecycle.retryAttempt > 0
+      ? ` (retry ${transcriptSourceLifecycle.retryAttempt})`
+      : '';
+    setTranscriptSourceStatus(`${sourceLabel} ${action}${retryText}.`, { kind: 'lifecycle' });
+    return;
+  }
+
+  clearTranscriptSourceStatus({ lifecycleOnly: true });
 }
 
 function setCurrentSplitRatio(ratio) {
@@ -702,6 +827,10 @@ function applyAppPreferences(preferences = {}) {
 
   if (typeof preferences.transcriptSource === 'string') {
     transcriptSource = normalizeTranscriptSource(preferences.transcriptSource);
+  }
+
+  if (preferences.transcriptSourceState && typeof preferences.transcriptSourceState === 'object') {
+    applyTranscriptSourceLifecycle(preferences.transcriptSourceState);
   }
 
   if (typeof preferences.hasDeepgramApiKey === 'boolean') {
@@ -766,6 +895,23 @@ function getPanelMetrics() {
   };
 }
 
+function updatePanelDividerAccessibility() {
+  if (!panelDivider) {
+    return;
+  }
+
+  const metrics = getPanelMetrics();
+  if (!metrics || metrics.adjustableSize <= 0) {
+    return;
+  }
+
+  const transcriptSize = Math.round(metrics.adjustableSize * currentPanelSplitRatio);
+  panelDivider.setAttribute('aria-valuemin', String(Math.round(metrics.minTranscriptSize)));
+  panelDivider.setAttribute('aria-valuemax', String(Math.round(metrics.maxTranscriptSize)));
+  panelDivider.setAttribute('aria-valuenow', String(transcriptSize));
+  panelDivider.setAttribute('aria-valuetext', `Transcript panel width ${transcriptSize} pixels`);
+}
+
 function clampPanelSplitRatio(ratio) {
   const metrics = getPanelMetrics();
   const nextRatio = Number.isFinite(ratio) ? ratio : currentPanelSplitRatio;
@@ -799,6 +945,7 @@ function applyPanelSplitRatio(ratio) {
   const transcriptSize = Math.round(metrics.adjustableSize * currentPanelSplitRatio);
   leftPanel.style.width = `${transcriptSize}px`;
   leftPanel.style.height = '';
+  updatePanelDividerAccessibility();
 }
 
 function queuePanelSplitRatioSync(ratio) {
@@ -873,6 +1020,31 @@ function handlePanelDividerPointerUp(event) {
   stopPanelResize(event.pointerId);
 }
 
+function handlePanelDividerKeydown(event) {
+  const metrics = getPanelMetrics();
+  if (!metrics || metrics.adjustableSize <= 0) {
+    return;
+  }
+
+  let nextTranscriptSize = Math.round(metrics.adjustableSize * currentPanelSplitRatio);
+  if (event.key === 'ArrowLeft') {
+    nextTranscriptSize -= PANEL_KEYBOARD_RESIZE_STEP_PX;
+  } else if (event.key === 'ArrowRight') {
+    nextTranscriptSize += PANEL_KEYBOARD_RESIZE_STEP_PX;
+  } else if (event.key === 'Home') {
+    nextTranscriptSize = metrics.minTranscriptSize;
+  } else if (event.key === 'End') {
+    nextTranscriptSize = metrics.maxTranscriptSize;
+  } else {
+    return;
+  }
+
+  event.preventDefault();
+  const nextRatio = nextTranscriptSize / metrics.adjustableSize;
+  applyPanelSplitRatio(nextRatio);
+  queuePanelSplitRatioSync(currentPanelSplitRatio);
+}
+
 function setButtonBusy(button, isBusy) {
   if (!button) {
     return;
@@ -908,6 +1080,70 @@ function getSelectedPromptMode() {
 
 function getModeDropdownMenus() {
   return [modeDropdownMenu, collapsedModeDropdownMenu].filter(Boolean);
+}
+
+function getModeDropdownRovingItems(menuElement) {
+  if (!menuElement) {
+    return [];
+  }
+
+  return Array.from(menuElement.querySelectorAll('[role="menuitem"]')).filter((item) => (
+    !item.classList.contains('mode-dropdown-item-editing') && !item.disabled
+  ));
+}
+
+function updateModeDropdownRovingTabStop(menuElement, preferredItem = null) {
+  const items = getModeDropdownRovingItems(menuElement);
+  if (items.length === 0) {
+    return;
+  }
+
+  const tabStop = items.includes(preferredItem)
+    ? preferredItem
+    : (items.find((item) => item.classList.contains('is-active')) || items[0]);
+
+  for (const item of items) {
+    item.tabIndex = item === tabStop ? 0 : -1;
+  }
+}
+
+function handleModeDropdownRovingFocus(event) {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    return;
+  }
+
+  const menuElement = event.currentTarget;
+  const currentItem = event.target?.closest?.('[role="menuitem"]');
+  const items = getModeDropdownRovingItems(menuElement);
+  const currentIndex = items.indexOf(currentItem);
+  if (currentIndex === -1) {
+    return;
+  }
+
+  let nextIndex = currentIndex;
+  if (event.key === 'ArrowDown') {
+    nextIndex = (currentIndex + 1) % items.length;
+  } else if (event.key === 'ArrowUp') {
+    nextIndex = (currentIndex - 1 + items.length) % items.length;
+  } else if (event.key === 'Home') {
+    nextIndex = 0;
+  } else if (event.key === 'End') {
+    nextIndex = items.length - 1;
+  }
+
+  event.preventDefault();
+  const nextItem = items[nextIndex];
+  updateModeDropdownRovingTabStop(menuElement, nextItem);
+  nextItem.focus();
+}
+
+function handleModeDropdownFocusIn(event) {
+  const currentItem = event.target?.closest?.('[role="menuitem"]');
+  if (!currentItem || currentItem.classList.contains('mode-dropdown-item-editing')) {
+    return;
+  }
+
+  updateModeDropdownRovingTabStop(event.currentTarget, currentItem);
 }
 
 function getModeDropdownToggles() {
@@ -971,15 +1207,25 @@ function clearModeHotkeyFeedbackTimer() {
   }
 }
 
-function setModeHotkeyStatus(status) {
-  modeHotkeyStatus = status;
+function setModeHotkeyStatus(status, message = '') {
+  if (modeHotkeyInput) {
+    modeHotkeyInput.classList.toggle('is-success', status === 'success');
+    modeHotkeyInput.classList.toggle('is-error', status === 'error');
+    modeHotkeyInput.setAttribute('aria-invalid', status === 'error' ? 'true' : 'false');
+  }
 
-  if (!modeHotkeyInput) {
+  if (!modeHotkeyStatusText) {
     return;
   }
 
-  modeHotkeyInput.classList.toggle('is-success', status === 'success');
-  modeHotkeyInput.classList.toggle('is-error', status === 'error');
+  const defaultMessage = status === 'success'
+    ? 'Global hotkey saved.'
+    : (status === 'error'
+      ? 'Unable to save that global hotkey. Try another shortcut.'
+      : 'Press a shortcut to set a global hotkey.');
+  modeHotkeyStatusText.textContent = message || defaultMessage;
+  modeHotkeyStatusText.classList.toggle('is-success', status === 'success');
+  modeHotkeyStatusText.classList.toggle('is-error', status === 'error');
 }
 
 function updateModeHotkeyInput() {
@@ -1017,7 +1263,12 @@ function releaseModeHotkeyInputFocus() {
 function showModeHotkeyFailure(displayValue = '') {
   clearModeHotkeyFeedbackTimer();
   modeHotkeyDisplayOverride = displayValue;
-  setModeHotkeyStatus('error');
+  setModeHotkeyStatus(
+    'error',
+    displayValue
+      ? `${displayValue} could not be used as a global hotkey. Try another shortcut.`
+      : 'Unable to save that global hotkey. Try another shortcut.'
+  );
   updateModeHotkeyInput();
 
   modeHotkeyFeedbackTimer = window.setTimeout(() => {
@@ -1068,6 +1319,8 @@ function getActiveModeDropdownMenu() {
 function setInlineModeDropdownFallbackVisible(isVisible) {
   const activeMenu = getActiveModeDropdownMenu();
 
+  modePanel?.classList.toggle('is-inline-menu-open', Boolean(isVisible));
+
   for (const dropdownMenu of getModeDropdownMenus()) {
     dropdownMenu.hidden = !(isVisible && dropdownMenu === activeMenu);
   }
@@ -1114,6 +1367,7 @@ async function setModeDropdownOpen(isOpen, options = {}) {
   if (!isModeDropdownOpen) {
     cancelPendingModeDropdownClose();
     editingPromptModeId = null;
+    setInlineModeDropdownFallbackVisible(false);
     activeModeDropdownToggle = null;
     flushDeferredModeDropdownRender();
   }
@@ -1163,23 +1417,108 @@ function updateModeEditorDirtyState() {
   isModeEditorDirty = Boolean(selectedMode) && modeSuffixInput.value !== originalSuffix;
 }
 
-async function saveCurrentPromptModeIfNeeded() {
-  if (!modeSuffixInput) {
+function ensurePromptModePersistenceStatusElement() {
+  if (promptModePersistenceStatusElement || !modeSuffixInput) {
+    return promptModePersistenceStatusElement;
+  }
+
+  const statusElement = document.createElement('p');
+  statusElement.id = 'promptModePersistenceStatus';
+  statusElement.className = 'mode-persistence-status';
+  statusElement.setAttribute('role', 'status');
+  statusElement.setAttribute('aria-live', 'polite');
+  statusElement.setAttribute('aria-atomic', 'true');
+  const editorPane = modeSuffixInput.closest('.mode-editor-pane') || modeSuffixInput.parentElement;
+  editorPane?.appendChild(statusElement);
+
+  const existingDescription = modeSuffixInput.getAttribute('aria-describedby') || '';
+  const descriptionIds = new Set(existingDescription.split(/\s+/).filter(Boolean));
+  descriptionIds.add(statusElement.id);
+  modeSuffixInput.setAttribute('aria-describedby', Array.from(descriptionIds).join(' '));
+  promptModePersistenceStatusElement = statusElement;
+  return promptModePersistenceStatusElement;
+}
+
+function getPromptModePersistenceStatusMessage(status) {
+  if (status.state === 'error') {
+    const detail = status.message ? ` ${status.message}` : '';
+    return `Prompt save failed. Your draft is still kept in memory.${detail}`;
+  }
+
+  if (status.dirty || status.state === 'dirty' || status.state === 'saving') {
+    return 'Saving prompt…';
+  }
+
+  return 'Prompt saved.';
+}
+
+function updatePromptModePersistenceStatus(status) {
+  if (!status || typeof status !== 'object') {
     return;
   }
 
-  updateModeEditorDirtyState();
+  promptModePersistenceStatus = {
+    state: typeof status.state === 'string' ? status.state : 'saved',
+    dirty: Boolean(status.dirty),
+    message: typeof status.message === 'string' ? status.message : '',
+    revision: Number.isSafeInteger(status.revision) ? status.revision : 0
+  };
 
-  const selectedMode = getSelectedPromptMode();
-  if (!selectedMode || !isModeEditorDirty) {
+  const statusElement = ensurePromptModePersistenceStatusElement();
+  if (!statusElement) {
     return;
   }
 
-  const nextState = await window.electronAPI.savePromptMode({
-    modeId: selectedMode.id,
-    suffix: modeSuffixInput.value
+  statusElement.textContent = getPromptModePersistenceStatusMessage(promptModePersistenceStatus);
+  statusElement.classList.toggle('is-error', promptModePersistenceStatus.state === 'error');
+  statusElement.classList.toggle('is-saving', promptModePersistenceStatus.dirty);
+}
+
+function reportPromptModeDraftFailure(error) {
+  const message = error instanceof Error && error.message
+    ? error.message
+    : 'The prompt draft could not be sent to the main process.';
+  console.error('[ERROR] Failed to update prompt mode draft:', error);
+  updatePromptModePersistenceStatus({
+    state: 'error',
+    dirty: true,
+    message,
+    revision: promptModeDraftRevision
   });
-  updatePromptModeState(nextState);
+}
+
+function submitPromptModeDraft(draft) {
+  if (typeof window.electronAPI?.updatePromptModeDraft !== 'function') {
+    reportPromptModeDraftFailure(new Error('Prompt draft updates are unavailable.'));
+    return Promise.resolve(false);
+  }
+
+  const request = Promise.resolve().then(() => window.electronAPI.updatePromptModeDraft({
+    modeId: draft.modeId,
+    suffix: draft.suffix,
+    sessionId: promptModeDraftSessionId,
+    revision: draft.revision
+  }));
+  const completion = request.then((result) => {
+    if (result?.promptModePersistence) {
+      updatePromptModePersistenceStatus(result.promptModePersistence);
+    }
+
+    if (latestPromptModeDraft === draft && result) {
+      draft.acknowledged = true;
+    }
+
+    return result;
+  }).catch((error) => {
+    reportPromptModeDraftFailure(error);
+    return false;
+  });
+
+  pendingPromptModeDraftUpdates.add(completion);
+  void completion.finally(() => {
+    pendingPromptModeDraftUpdates.delete(completion);
+  });
+  return completion;
 }
 
 function queuePromptModeAutosave() {
@@ -1188,40 +1527,62 @@ function queuePromptModeAutosave() {
   }
 
   updateModeEditorDirtyState();
-
-  if (!isModeEditorDirty) {
-    if (promptModeAutosaveTimer !== null) {
-      window.clearTimeout(promptModeAutosaveTimer);
-      promptModeAutosaveTimer = null;
-    }
+  const selectedMode = getSelectedPromptMode();
+  if (!selectedMode) {
     return;
   }
 
-  if (promptModeAutosaveTimer !== null) {
-    window.clearTimeout(promptModeAutosaveTimer);
-  }
+  const draft = {
+    modeId: selectedMode.id,
+    suffix: modeSuffixInput.value,
+    revision: ++promptModeDraftRevision,
+    acknowledged: false
+  };
+  latestPromptModeDraft = draft;
+  updatePromptModePersistenceStatus({
+    state: 'dirty',
+    dirty: true,
+    message: '',
+    revision: draft.revision
+  });
+  void submitPromptModeDraft(draft);
+}
 
-  promptModeAutosaveTimer = window.setTimeout(() => {
-    promptModeAutosaveTimer = null;
-    promptModeAutosaveRequest = saveCurrentPromptModeIfNeeded().catch((error) => {
-      console.error('[ERROR] Failed to auto-save prompt mode:', error);
-      throw error;
-    });
-  }, PROMPT_MODE_AUTOSAVE_DELAY_MS);
+async function waitForPendingPromptModeDraftUpdates() {
+  while (pendingPromptModeDraftUpdates.size > 0) {
+    await Promise.all(Array.from(pendingPromptModeDraftUpdates));
+  }
 }
 
 async function flushPendingPromptModeAutosave() {
-  if (promptModeAutosaveTimer !== null) {
-    window.clearTimeout(promptModeAutosaveTimer);
-    promptModeAutosaveTimer = null;
-    await saveCurrentPromptModeIfNeeded();
-    return;
+  await waitForPendingPromptModeDraftUpdates();
+
+  if (latestPromptModeDraft && !latestPromptModeDraft.acknowledged) {
+    const retryDraft = {
+      ...latestPromptModeDraft,
+      revision: ++promptModeDraftRevision,
+      acknowledged: false
+    };
+    latestPromptModeDraft = retryDraft;
+    await submitPromptModeDraft(retryDraft);
+    await waitForPendingPromptModeDraftUpdates();
   }
 
-  await promptModeAutosaveRequest.catch((error) => {
-    console.error('[ERROR] Prompt mode auto-save request failed:', error);
-    throw error;
-  });
+  if (typeof window.electronAPI?.flushPromptModeDrafts !== 'function') {
+    reportPromptModeDraftFailure(new Error('Prompt draft persistence is unavailable.'));
+    return false;
+  }
+
+  try {
+    const result = await window.electronAPI.flushPromptModeDrafts();
+    if (result?.promptModePersistence) {
+      updatePromptModePersistenceStatus(result.promptModePersistence);
+    }
+    return result?.success !== false;
+  } catch (error) {
+    reportPromptModeDraftFailure(error);
+    return false;
+  }
 }
 
 async function commitPromptModeRename(modeId, nextName) {
@@ -1472,6 +1833,7 @@ function populateModeDropdownMenu(menuElement) {
     await addPromptModeFromMenu();
   };
   menuElement.appendChild(addButton);
+  updateModeDropdownRovingTabStop(menuElement);
 }
 
 function renderModeDropdownMenu() {
@@ -1532,6 +1894,10 @@ function updatePromptModeState(state, options = {}) {
   const currentPromptDraft = modeSuffixInput ? modeSuffixInput.value : '';
   const shouldPreservePromptDraft = Boolean(modeSuffixInput && isModeEditorDirty);
 
+  if (state?.promptModePersistence) {
+    updatePromptModePersistenceStatus(state.promptModePersistence);
+  }
+
   if (Array.isArray(state?.promptModes)) {
     promptModes = state.promptModes.map((mode) => ({
       id: mode.id,
@@ -1566,6 +1932,15 @@ function updatePromptModeState(state, options = {}) {
       : (activeMode?.suffix || '');
   }
 
+  if (latestPromptModeDraft && activeMode?.id !== latestPromptModeDraft.modeId) {
+    latestPromptModeDraft = null;
+  } else if (
+    latestPromptModeDraft
+    && activeMode?.suffix === latestPromptModeDraft.suffix
+  ) {
+    latestPromptModeDraft.acknowledged = true;
+  }
+
   if (modePromptPreview) {
     const promptPreviewText = typeof activeMode?.suffix === 'string'
       ? activeMode.suffix.trim()
@@ -1576,7 +1951,7 @@ function updatePromptModeState(state, options = {}) {
     setProtectedTooltip(modePromptPreview, promptPreviewText || 'No prompt');
   }
 
-  renderModeDropdownMenu();
+  renderModeDropdownMenuUnlessDeferred();
   updateModeEditorDirtyState();
   if (options.resetHotkeyFeedback !== false && previousSelectedModeId !== selectedPromptModeId) {
     resetModeHotkeyFeedback();
@@ -1873,6 +2248,8 @@ if (panelDivider && browserContainer) {
 
     updatePanelSplitFromPointer(event.clientX);
   };
+
+  panelDivider.addEventListener('keydown', handlePanelDividerKeydown);
 }
 
 if (modeToggleBtn) {
@@ -1915,12 +2292,16 @@ if (modeDropdownMenu) {
   modeDropdownMenu.addEventListener('click', (event) => {
     event.stopPropagation();
   });
+  modeDropdownMenu.addEventListener('keydown', handleModeDropdownRovingFocus);
+  modeDropdownMenu.addEventListener('focusin', handleModeDropdownFocusIn);
 }
 
 if (collapsedModeDropdownMenu) {
   collapsedModeDropdownMenu.addEventListener('click', (event) => {
     event.stopPropagation();
   });
+  collapsedModeDropdownMenu.addEventListener('keydown', handleModeDropdownRovingFocus);
+  collapsedModeDropdownMenu.addEventListener('focusin', handleModeDropdownFocusIn);
 }
 
 if (modeHotkeyInput) {
@@ -1988,6 +2369,10 @@ if (modeSuffixInput) {
     void flushPendingPromptModeAutosave();
   });
 }
+
+window.addEventListener('beforeunload', () => {
+  void flushPendingPromptModeAutosave();
+});
 
 document.addEventListener('click', (event) => {
   if (!isModeDropdownOpen) {
@@ -2123,6 +2508,10 @@ window.electronAPI.onPromptModeState((state) => {
   queueIncomingPromptModeState(state);
 });
 
+window.electronAPI.onPromptModePersistenceStatus((status) => {
+  updatePromptModePersistenceStatus(status);
+});
+
 window.electronAPI.onModeMenuAction((action) => {
   handleModeMenuAction(action).catch((error) => {
     console.error('[ERROR] Failed to handle Mode menu action:', error);
@@ -2225,6 +2614,8 @@ window.electronAPI.onCaptionUpdate((data) => {
     return;
   }
 
+  clearTranscriptSourceStatus();
+
   const nextEntries = normalizeTranscriptEntries(data);
   const nextTranscript = typeof data.fullText === 'string'
     ? data.fullText
@@ -2240,7 +2631,6 @@ window.electronAPI.onCaptionUpdate((data) => {
   const wasAtBottom = checkIfAtBottom();
   const previousScrollTop = transcriptEl.scrollTop;
 
-  transcriptHistory = nextTranscript;
   lastCaptionPayloadVersion = nextPayloadVersion;
   renderTranscriptEntries(nextEntries);
 
@@ -2257,23 +2647,10 @@ window.electronAPI.onCaptionUpdate((data) => {
   }, 0);
 });
 
-  window.electronAPI.onCaptionError((error) => {
-  if (!transcriptEl) {
-    return;
-  }
+window.electronAPI.onCaptionError((error) => {
+  showCaptionErrorStatus(error);
+});
 
-    transcriptHistory = '';
-    lastCaptionPayloadVersion = null;
-  setNewTranscriptIndicatorVisible(false);
-  const errorText = String(error || '');
-  const isMissingNativeAddon =
-    errorText.includes('Live Captions native addon was not found')
-    || errorText.includes('livecaptions_native.node')
-    || errorText.includes('Cannot find module');
-
-  const displayText = isMissingNativeAddon
-    ? `[ERROR] ${errorText}\n\nThis build is missing the Live Captions native addon.\nRun "npm run build-native" and package the app again.`
-    : `[ERROR] ${errorText}\n\nPlease ensure Windows LiveCaptions is running.\nYou can start it by pressing Win + Ctrl + L`;
-
-  renderTranscriptError(displayText);
+window.electronAPI.onTranscriptSourceState((state) => {
+  applyTranscriptSourceLifecycle(state);
 });

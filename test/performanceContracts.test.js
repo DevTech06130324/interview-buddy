@@ -62,6 +62,26 @@ test('mode menu mouse selection keeps rows stable long enough for double-click r
   assert.match(modeMenu, /if \(isModeMenuRenderDeferredForRename\(\)\) \{[\s\S]*deferredModeMenuRenderPending = true;[\s\S]*return;/);
 });
 
+test('tab navigation does not write unrelated persistent preferences', () => {
+  const main = readRepoFile('main.js');
+  const createTab = main.slice(
+    main.indexOf('function createNewTab('),
+    main.indexOf('function setupTabListeners(')
+  );
+  const switchTab = main.slice(
+    main.indexOf('function switchTab('),
+    main.indexOf('function closeTab(')
+  );
+  const closeTab = main.slice(
+    main.indexOf('function closeTab('),
+    main.indexOf('function resizeTabs(')
+  );
+
+  for (const source of [createTab, switchTab, closeTab]) {
+    assert.doesNotMatch(source, /scheduleAppPreferencesPersist\(/);
+  }
+});
+
 test('theme and layout switching code is removed for fixed dark horizontal UI', () => {
   const main = readRepoFile('main.js');
   const renderer = readRepoFile('renderer.js');
