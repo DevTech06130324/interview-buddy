@@ -2,6 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const translationManager = require('../src/translationManager');
+const {
+  resolvePendingTranscriptCursor
+} = require('../src/transcriptCursor');
 
 function resetTranslationManager() {
   translationManager.removeAllListeners('updated');
@@ -98,6 +101,31 @@ test('Live Captions revision history collapses repeated growing hypotheses', () 
       'We have like Python.'
     ]
   );
+
+  resetTranslationManager();
+});
+
+test('Live Captions rolling window cursor recovery sends the current snapshot as pending', () => {
+  resetTranslationManager();
+
+  const submittedPayload = translationManager.update('While you were joining which language do you want to use?');
+  const rollingPayload = translationManager.update('We have like Python.');
+
+  assert.deepEqual(rollingPayload.entries.map((entry) => entry.sourceText), [
+    'We have like Python.'
+  ]);
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: rollingPayload.fullText,
+    transcriptEntries: rollingPayload.entries,
+    cursorText: submittedPayload.fullText,
+    cursorEntries: submittedPayload.entries,
+    allowDisjointCurrentTranscript: true
+  }), {
+    status: 'matched',
+    pendingText: 'We have like Python.',
+    pendingEntries: rollingPayload.entries
+  });
 
   resetTranslationManager();
 });

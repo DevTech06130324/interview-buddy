@@ -74,6 +74,12 @@ test('Ctrl+Enter resolves the cursor once and surfaces mismatch before any compo
   assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('markTranscriptSubmitted('));
 });
 
+test('Ctrl+Enter allows disjoint rolling snapshots only for Live Captions cursor recovery', () => {
+  const source = getAsyncFunctionSource('submitTranscriptToAssistant');
+
+  assert.match(source, /allowDisjointCurrentTranscript:\s*transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS/);
+});
+
 test('Alt+Enter resolves the cursor once and surfaces mismatch before clipboard mutation', () => {
   const source = getAsyncFunctionSource('copyTranscriptPromptToClipboard');
   const resolverCalls = source.match(/resolvePendingTranscriptCursor\(/g) || [];
@@ -82,6 +88,12 @@ test('Alt+Enter resolves the cursor once and surfaces mismatch before clipboard 
   assert.match(source, /if \(cursorResult\.status === 'mismatch'\) \{\s*sendCaptionError\(TRANSCRIPT_CURSOR_MISMATCH_ERROR\);\s*return;/);
   assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('clipboard.writeText('));
   assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('markTranscriptCopiedToClipboard('));
+});
+
+test('Alt+Enter allows disjoint rolling snapshots only for Live Captions cursor recovery', () => {
+  const source = getAsyncFunctionSource('copyTranscriptPromptToClipboard');
+
+  assert.match(source, /allowDisjointCurrentTranscript:\s*transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS/);
 });
 
 test('cursor mismatch message tells the user to retry or clear to reset', () => {

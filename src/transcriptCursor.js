@@ -223,6 +223,41 @@ function getExactPendingText(currentText, cursorText) {
   return null;
 }
 
+function getDisjointPendingText(currentText, cursorText) {
+  if (!currentText) {
+    return null;
+  }
+
+  if (!cursorText) {
+    return currentText;
+  }
+
+  if (cursorText.includes(currentText)) {
+    return '';
+  }
+
+  const cursorIndex = currentText.indexOf(cursorText);
+  if (cursorIndex >= 0) {
+    return normalizeTranscriptPromptText(
+      currentText.slice(cursorIndex + cursorText.length)
+    );
+  }
+
+  return currentText;
+}
+
+function getDisjointCursorResult(currentText, currentEntries, cursorText) {
+  const disjointPendingText = getDisjointPendingText(currentText, cursorText);
+  if (disjointPendingText === null) {
+    return null;
+  }
+
+  return createMatchedCursorResult(
+    disjointPendingText,
+    getPendingTranscriptEntriesFromExactText(currentEntries, disjointPendingText)
+  );
+}
+
 function getPendingFirstEntryText(pendingText, restText) {
   if (!restText) {
     return pendingText;
@@ -275,7 +310,8 @@ function resolvePendingTranscriptCursor({
   transcriptText = '',
   transcriptEntries = [],
   cursorText = '',
-  cursorEntries = []
+  cursorEntries = [],
+  allowDisjointCurrentTranscript = false
 } = {}) {
   const normalizedTranscriptEntries = normalizeTranscriptEntriesForCursor(transcriptEntries);
   const normalizedCursorEntries = normalizeTranscriptEntriesForCursor(cursorEntries);
@@ -289,11 +325,36 @@ function resolvePendingTranscriptCursor({
     normalizedCursorEntries
   );
   if (entryBoundaryResult) {
+    if (
+      allowDisjointCurrentTranscript
+      && entryBoundaryResult.status === TRANSCRIPT_CURSOR_MISMATCH_STATUS
+    ) {
+      const disjointCursorResult = getDisjointCursorResult(
+        currentTranscriptText,
+        normalizedTranscriptEntries,
+        previousCursorText
+      );
+      if (disjointCursorResult) {
+        return disjointCursorResult;
+      }
+    }
+
     return entryBoundaryResult;
   }
 
   const pendingText = getExactPendingText(currentTranscriptText, previousCursorText);
   if (pendingText === null) {
+    if (allowDisjointCurrentTranscript) {
+      const disjointCursorResult = getDisjointCursorResult(
+        currentTranscriptText,
+        normalizedTranscriptEntries,
+        previousCursorText
+      );
+      if (disjointCursorResult) {
+        return disjointCursorResult;
+      }
+    }
+
     return createCursorMismatchResult();
   }
 

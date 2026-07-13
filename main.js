@@ -5247,7 +5247,8 @@ async function submitTranscriptToAssistant() {
       transcriptText: transcriptSnapshot,
       transcriptEntries: transcriptEntriesSnapshot,
       cursorText: lastSubmittedTranscriptText,
-      cursorEntries: lastSubmittedTranscriptEntries
+      cursorEntries: lastSubmittedTranscriptEntries,
+      allowDisjointCurrentTranscript: transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS
     });
 
     if (cursorResult.status === 'mismatch') {
@@ -5328,7 +5329,8 @@ async function copyTranscriptPromptToClipboard() {
     transcriptText: transcriptSnapshot,
     transcriptEntries: transcriptEntriesSnapshot,
     cursorText: lastClipboardTranscriptText,
-    cursorEntries: lastClipboardTranscriptEntries
+    cursorEntries: lastClipboardTranscriptEntries,
+    allowDisjointCurrentTranscript: transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS
   });
 
   if (cursorResult.status === 'mismatch') {

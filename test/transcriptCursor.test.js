@@ -77,6 +77,58 @@ test('cursor fails closed for unrelated current and cursor text', () => {
   }), CURSOR_MISMATCH);
 });
 
+test('cursor can accept a disjoint Live Captions rolling-window snapshot when explicitly allowed', () => {
+  const currentEntry = {
+    id: 'caption-1-1',
+    sourceText: 'We have like Python.',
+    speakerTag: 'Them',
+    isFinal: true
+  };
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: currentEntry.sourceText,
+    transcriptEntries: [currentEntry],
+    cursorText: 'While you were joining which language do you want to use?',
+    cursorEntries: [{
+      id: 'caption-1-0',
+      sourceText: 'While you were joining which language do you want to use?',
+      speakerTag: 'Them',
+      isFinal: true
+    }],
+    allowDisjointCurrentTranscript: true
+  }), {
+    status: 'matched',
+    pendingText: currentEntry.sourceText,
+    pendingEntries: [currentEntry]
+  });
+});
+
+test('cursor does not resend a Live Captions rolling-window suffix that is already submitted', () => {
+  const currentEntry = {
+    id: 'caption-1-0',
+    sourceText: 'which language do you want to use?',
+    speakerTag: 'Them',
+    isFinal: true
+  };
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: currentEntry.sourceText,
+    transcriptEntries: [currentEntry],
+    cursorText: 'While you were joining which language do you want to use?',
+    cursorEntries: [{
+      id: 'caption-1-0',
+      sourceText: 'While you were joining which language do you want to use?',
+      speakerTag: 'Them',
+      isFinal: true
+    }],
+    allowDisjointCurrentTranscript: true
+  }), {
+    status: 'matched',
+    pendingText: '',
+    pendingEntries: []
+  });
+});
+
 test('cursor fails closed when an exact cursor string has unverified leading text', () => {
   assert.deepEqual(resolvePendingTranscriptCursor({
     transcriptText: 'New unsent text before.\nPreviously submitted snapshot.\nNew unsent text after.',
