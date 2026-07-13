@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, ipcMain, globalShortcut, screen, clipboard, nativeTheme, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, globalShortcut, screen, clipboard, nativeTheme, dialog } = require('electron');
 const { safeStorage } = require('electron');
 const { desktopCapturer } = require('electron');
 const { randomUUID } = require('node:crypto');
@@ -72,6 +72,13 @@ const {
 const {
   waitForAssistantImageAttachmentEvidence
 } = require('./src/assistantAttachmentEvidence');
+const {
+  attachTabView,
+  createTabView,
+  destroyTabView,
+  detachTabView,
+  setTabViewBounds
+} = require('./src/tabViewManager');
 const {
   TRANSCRIPT_SPEAKER_TAG,
   buildTranscriptPromptText,
@@ -1981,18 +1988,18 @@ function clearRuntimeTimersForMainWindowClose() {
 function destroyAllTabs() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
-      mainWindow.setBrowserView(null);
+      const activeTab = tabs.get(activeTabId);
+      if (activeTab) {
+        detachTabView(mainWindow, activeTab.view);
+      }
     } catch (error) {
-      console.error('[WARNING] Failed to detach active BrowserView:', error);
+      console.error('[WARNING] Failed to detach active WebContentsView:', error);
     }
   }
 
   for (const tab of tabs.values()) {
     try {
-      if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-        tab.view.webContents.removeAllListeners();
-        tab.view.webContents.destroy();
-      }
+      destroyTabView(mainWindow, tab?.view);
     } catch (error) {
       console.error('[WARNING] Failed to destroy tab webContents:', error);
     }
@@ -2849,24 +2856,23 @@ function createNewTab(url = 'about:blank', options = {}) {
   const tabId = tabIdCounter++;
   const layout = getLayoutDimensions();
 
-  const tabView = new BrowserView({
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true
-    }
+  const tabView = createTabView(WebContentsView, {
+    nodeIntegration: false,
+    contextIsolation: true,
+    sandbox: true,
+    webSecurity: true
   });
 
   if (shouldActivate) {
-    mainWindow.setBrowserView(tabView);
-
-    tabView.setBounds({
+    attachTabView(mainWindow, tabView);
+    setTabViewBounds(tabView, {
       x: layout.browserViewX,
       y: layout.browserViewY,
       width: layout.browserViewWidth,
       height: layout.browserViewHeight
     });
   } else {
-    tabView.setBounds({ x: -9999, y: -9999, width: 0, height: 0 });
+    setTabViewBounds(tabView, { x: 0, y: 0, width: 0, height: 0 });
   }
 
   const tabData = {
@@ -2886,7 +2892,7 @@ function createNewTab(url = 'about:blank', options = {}) {
   if (shouldActivate && activeTabId !== null) {
     const prevTab = tabs.get(activeTabId);
     if (prevTab) {
-      prevTab.view.setBounds({ x: -9999, y: -9999, width: 0, height: 0 });
+      detachTabView(mainWindow, prevTab.view);
     }
   }
 
@@ -3078,7 +3084,7 @@ function switchTab(tabId) {
 
   const prevTab = tabs.get(activeTabId);
   if (prevTab) {
-    prevTab.view.setBounds({ x: -9999, y: -9999, width: 0, height: 0 });
+    detachTabView(mainWindow, prevTab.view);
   }
 
   activeTabId = tabId;
@@ -3086,8 +3092,8 @@ function switchTab(tabId) {
   if (tab) {
     const layout = getLayoutDimensions();
 
-    mainWindow.setBrowserView(tab.view);
-    tab.view.setBounds({
+    attachTabView(mainWindow, tab.view);
+    setTabViewBounds(tab.view, {
       x: layout.browserViewX,
       y: layout.browserViewY,
       width: layout.browserViewWidth,
@@ -3115,7 +3121,7 @@ function closeTab(tabId) {
   const wasActive = activeTabId === tabId;
 
   assistantMutationController.release(tabId);
-  tab.view.webContents.destroy();
+  destroyTabView(mainWindow, tab.view);
   tabs.delete(tabId);
 
   if (wasActive) {
@@ -3126,7 +3132,6 @@ function closeTab(tabId) {
       switchTab(replacementTabId);
     } else {
       activeTabId = null;
-      mainWindow.setBrowserView(null);
       createDefaultTabs();
     }
   }
@@ -3140,7 +3145,7 @@ function resizeTabs() {
   const layout = getLayoutDimensions();
   const activeTab = tabs.get(activeTabId);
   if (activeTab) {
-    activeTab.view.setBounds({
+    setTabViewBounds(activeTab.view, {
       x: layout.browserViewX,
       y: layout.browserViewY,
       width: layout.browserViewWidth,

@@ -7,7 +7,7 @@ Windows x64-only Electron overlay that combines a transcript panel, an embedded 
 The app opens a frameless, always-on-top window with three working areas:
 
 - a left transcript panel fed by Windows Live Captions or Deepgram
-- a right tabbed browser area powered by Electron `BrowserView`
+- a right tabbed browser area powered by Electron `WebContentsView`
 - a bottom `Mode` panel for choosing the prompt appended to assistant sends
 
 On startup it opens:
@@ -126,6 +126,7 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 Install dependencies from a clean checkout:
 
 ```powershell
+# Node.js 22.12.0 or newer is required
 npm ci
 ```
 
@@ -141,12 +142,27 @@ Create a packaged Windows app:
 npm run dist-packaged
 ```
 
+The packaging command uses `@electron/packager`, keeps only runtime assets,
+and leaves `native/build/Release/*.node` unpacked so Windows can load the
+Live Captions addon. Validate an existing package independently with:
+
+```powershell
+npm run validate-packaged-content -- dist-packaged\Notepadd++-win32-x64
+```
+
 Run the automated checks before packaging:
 
 ```powershell
 npm test
 git ls-files '*.js' -z | xargs -0 -n1 node --check
 git diff --check
+```
+
+On a Windows x64 release machine, the complete build-and-package gate is also
+available as:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-windows-release.ps1
 ```
 
 The packaged app is written to:
@@ -166,12 +182,15 @@ dist-packaged\Notepadd++-win32-x64
 - `src/deepgramTranscriptionService.js`: role-isolated Deepgram WebSocket service
 - `src/deepgramCaptureController.js`: renderer-owned capture-resource controller
 - `src/screenCapture.js`: selected-area capture helpers
+- `src/tabViewManager.js`: WebContentsView attach, detach, bounds, and destruction helpers
 - `native/`: Windows native addon for Live Captions automation
 
 ## Windows prerequisites and notes
 
 - This app is supported on Windows x64 only. Live Captions requires a Windows installation that provides the Live Captions feature; press `Win + Ctrl + L` to open it manually.
 - Building the native addon requires the Windows C++ build tools, a Windows SDK, Python, and the toolchain required by `node-gyp`.
+- The repository pins the tooling floor in `.node-version` (`22.12.0`).
+- Electron is pinned to the exact stable `43.1.0` release used for the WebContentsView migration; rebuild the native addon against that version before shipping.
 - If the native addon is missing, the app still runs but Live Captions transcript syncing will not work. Rebuild it with `npm run build-native` before packaging.
 - `Ctrl+Enter` and `Ctrl+Shift+Enter` require the active tab to be a supported ChatGPT, DeepSeek, or Claude page.
 - While an assistant send or upload is in progress, additional assistant hotkeys report a busy state rather than issuing a duplicate request. If a submission becomes uncertain after dispatch, it is not retried automatically.

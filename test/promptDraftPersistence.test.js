@@ -24,7 +24,7 @@ function loadPromptPersistenceController() {
       quit() {}
     },
     BrowserWindow: class BrowserWindow {},
-    BrowserView: class BrowserView {},
+    WebContentsView: class WebContentsView {},
     ipcMain: {
       handle() {},
       on() {}
