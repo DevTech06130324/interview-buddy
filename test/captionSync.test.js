@@ -271,6 +271,7 @@ test('source switching rotates a Live Captions session and establishes a fresh n
 
     const firstSessionId = service.getSessionId();
     await service.start();
+    workerClient.emit('snapshot', { status: 'ok', text: 'Previous Live Captions text.' });
     service.beginNewSession({ requireFreshBoundary: true });
     await service.stop();
     const resumed = await service.start();
@@ -280,6 +281,33 @@ test('source switching rotates a Live Captions session and establishes a fresh n
     assert.equal(resumed, true);
     assert.equal(service.getState().requiresFreshSessionBoundary, false);
     assert.deepEqual(workerClient.calls, ['start', 'stop', 'start', 'restart']);
+});
+
+test('source switching before any Live Captions text resumes without forcing a clear boundary', async () => {
+    const workerClient = new FakeWorkerClient();
+    workerClient.restart = async function restart() {
+        this.calls.push('restart');
+        const error = new Error('Live Captions Clear could not establish a fresh transcript boundary.');
+        error.code = 'LIVECAPTIONS_CLEAR_BASELINE_UNAVAILABLE';
+        throw error;
+    };
+    const service = new CaptionSyncService({
+        workerClient,
+        createSessionId: createSessionIdSequence()
+    });
+    const errors = [];
+    service.on('error', (error) => errors.push(error));
+
+    await service.start();
+    service.beginNewSession({ requireFreshBoundary: true });
+    await service.stop();
+    service.beginNewSession({ requireFreshBoundary: true });
+    const resumed = await service.start();
+
+    assert.equal(resumed, true);
+    assert.equal(service.getState().requiresFreshSessionBoundary, false);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(workerClient.calls, ['start', 'stop', 'start']);
 });
 
 test('ordinary Stop and resume preserve the current Live Captions session without restarting its boundary', async () => {

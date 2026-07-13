@@ -53,11 +53,13 @@ class CaptionSyncService extends EventEmitter {
     }
 
     beginNewSession({ requireFreshBoundary = false } = {}) {
+        const shouldRequireFreshBoundary = Boolean(requireFreshBoundary)
+            && (this.requiresFreshSessionBoundary || this.hasEmittedCaptionText);
         this.sessionId = this.createSessionId();
         this.lastEmittedText = '';
         this.hasEmittedCaptionText = false;
         this.resetUnavailableEpisode();
-        this.requiresFreshSessionBoundary = Boolean(requireFreshBoundary);
+        this.requiresFreshSessionBoundary = shouldRequireFreshBoundary;
         return this.getSessionId();
     }
 
