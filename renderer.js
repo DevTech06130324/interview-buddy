@@ -105,6 +105,7 @@ const {
 } = window.transcriptPrompt;
 const TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram';
 const TRANSCRIPT_SOURCE_LIVE_CAPTIONS = 'live-captions';
+const DEEPGRAM_ROLE_ME = 'Me';
 const createTranscriptDisplayGroups = typeof window.transcriptDisplayGroups?.createTranscriptDisplayGroups === 'function'
   ? window.transcriptDisplayGroups.createTranscriptDisplayGroups
   : (entries) => entries;

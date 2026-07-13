@@ -44,6 +44,14 @@ test('transcript renderer applies role classes for left Them and right Me blocks
   assert.match(css, /text-align:\s*left/);
 });
 
+test('transcript role rendering declares the Me speaker token used by caption updates', () => {
+  const renderer = readRepoFile('renderer.js');
+  const roleClassHelper = getFunctionSource(renderer, 'getTranscriptSpeakerRoleClass');
+
+  assert.match(roleClassHelper, /DEEPGRAM_ROLE_ME/);
+  assert.match(renderer, /const DEEPGRAM_ROLE_ME = 'Me';/);
+});
+
 test('renderer starts and stops Deepgram capture from main-process source state', () => {
   const renderer = readRepoFile('renderer.js');
   const captureController = readRepoFile('src/deepgramCaptureController.js');
