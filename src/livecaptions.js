@@ -256,11 +256,6 @@ class LiveCaptionsHandler {
         return Boolean(isVisible);
     }
 
-    async toggleWindowVisibility() {
-        const isVisible = await this.isWindowVisible();
-        return this.setWindowVisibility(!isVisible);
-    }
-
     async closeLiveCaptions() {
         let closed = false;
 

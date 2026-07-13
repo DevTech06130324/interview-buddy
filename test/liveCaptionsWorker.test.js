@@ -1,10 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const {
-    LiveCaptionsWorkerRuntime,
-    normalizeCheckpoint
-} = require('../src/liveCaptionsWorker');
+const { LiveCaptionsWorkerRuntime } = require('../src/liveCaptionsWorker');
+const { normalizeCheckpoint } = require('../src/liveCaptionsClearCheckpoint');
 
 function createFakeTimers() {
     const pending = new Map();

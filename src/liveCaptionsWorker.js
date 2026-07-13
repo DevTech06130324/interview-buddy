@@ -402,6 +402,5 @@ module.exports = {
     LiveCaptionsWorkerRuntime,
     longestSuffixPrefixOverlap,
     mergeCumulativeText,
-    normalizeCheckpoint,
     normalizeSnapshot
 };
