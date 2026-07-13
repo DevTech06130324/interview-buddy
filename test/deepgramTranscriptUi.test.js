@@ -45,6 +45,12 @@ test('transcript renderer applies role classes with consistent transcript row al
   assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\s*\{[^}]*var\(--text/s);
   assert.doesNotMatch(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\s*\{[^}]*var\(--accent/s);
   assert.doesNotMatch(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\s*\{[^}]*var\(--success/s);
+  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\s+\.transcript-entry-marker\s*\{[^}]*var\(--accent/s);
+  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\s+\.transcript-entry-marker\s*\{[^}]*var\(--success/s);
+  assert.match(renderer, /is-speaker-start/);
+  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row\.is-speaker-start\s*\{/);
+  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-them\.is-speaker-start\s*\{[^}]*var\(--accent/s);
+  assert.match(css, /\.transcript-content\.is-deepgram-source\s+\.transcript-row-role-me\.is-speaker-start\s*\{[^}]*var\(--success/s);
   assert.match(css, /\.transcript-row-role-me\s+\.transcript-entry-body/);
   assert.match(css, /\.transcript-row-role-me\s+\.transcript-entry-header/);
   assert.match(css, /text-align:\s*left/);

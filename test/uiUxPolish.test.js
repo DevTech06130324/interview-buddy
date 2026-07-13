@@ -60,6 +60,9 @@ test('transcript header layout adapts to live captions and deepgram sources', ()
   assert.match(css, /\.transcript-header\.is-live-captions-source\s*\{[^}]*flex-wrap:\s*nowrap;/s);
   assert.match(css, /\.transcript-header\.is-deepgram-source\s+\.deepgram-usage-status\s*\{[^}]*white-space:\s*normal;/s);
   assert.match(css, /@container transcript-panel \(max-width: 520px\)[\s\S]*\.transcript-header\.is-deepgram-source[\s\S]*\.transcript-header\.is-deepgram-source\s+\.transcript-actions/s);
+  assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-header\.is-deepgram-source\s*\{[^}]*grid-template-areas:\s*"title actions"\s*"usage actions";/s);
+  assert.match(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*\.transcript-header\.is-deepgram-source\s+\.transcript-actions\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*32px\);/s);
+  assert.doesNotMatch(css, /@container transcript-panel \(max-width: 360px\)[\s\S]*grid-template-areas:\s*"title"\s*"usage"\s*"actions";/s);
   assert.doesNotMatch(css, /@container transcript-panel \(max-width: 520px\)\s*\{\s*\.transcript-header\s*\{/);
 });
 

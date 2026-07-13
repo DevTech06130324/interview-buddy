@@ -512,6 +512,7 @@ function updateTranscriptRow(row, entry, index = 0, previousEntry = null) {
     'transcript-row',
     `transcript-row-${entry.status}`,
     getTranscriptSpeakerRoleClass(entry),
+    markerOptions.includeSpeaker ? 'is-speaker-start' : '',
     hasVisibleTranscriptTranslation(entry) ? 'has-translation' : '',
     entry.isFinal ? '' : 'is-partial'
   ].filter(Boolean).join(' ');
