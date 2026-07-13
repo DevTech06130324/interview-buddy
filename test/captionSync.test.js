@@ -115,6 +115,51 @@ test('recoverable read errors keep an active Live Captions source active', () =>
     });
 });
 
+test('missing Live Captions text element before the first caption is treated as idle startup', async () => {
+    const workerClient = new FakeWorkerClient();
+    const service = new CaptionSyncService({ workerClient });
+    const errors = [];
+    service.on('error', (error) => errors.push(error));
+    await service.start();
+
+    const unavailable = {
+        status: 'unavailable',
+        code: 'LIVECAPTIONS_ELEMENT_UNAVAILABLE',
+        message: 'The Live Captions text element is unavailable.'
+    };
+
+    workerClient.emit('snapshot', unavailable);
+    workerClient.emit('snapshot', unavailable);
+    workerClient.emit('snapshot', unavailable);
+    workerClient.emit('snapshot', unavailable);
+
+    assert.equal(errors.length, 0);
+});
+
+test('missing Live Captions text element after captions were visible still reports a recoverable episode', async () => {
+    const workerClient = new FakeWorkerClient();
+    const service = new CaptionSyncService({ workerClient });
+    const errors = [];
+    service.on('error', (error) => errors.push(error));
+    await service.start();
+
+    workerClient.emit('snapshot', { status: 'ok', text: 'Visible caption text.' });
+    const unavailable = {
+        status: 'unavailable',
+        code: 'LIVECAPTIONS_ELEMENT_UNAVAILABLE',
+        message: 'The Live Captions text element is unavailable.'
+    };
+
+    workerClient.emit('snapshot', unavailable);
+    workerClient.emit('snapshot', unavailable);
+    workerClient.emit('snapshot', unavailable);
+
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].source, 'live-captions');
+    assert.equal(errors[0].code, 'LIVECAPTIONS_ELEMENT_UNAVAILABLE');
+    assert.equal(errors[0].recoverable, true);
+});
+
 test('three consecutive unavailable reads emit one recoverable episode and success resets it', async () => {
     const workerClient = new FakeWorkerClient();
     const service = new CaptionSyncService({ workerClient });
@@ -124,8 +169,8 @@ test('three consecutive unavailable reads emit one recoverable episode and succe
 
     const unavailable = {
         status: 'unavailable',
-        code: 'CAPTIONS_ELEMENT_UNAVAILABLE',
-        message: 'caption element missing'
+        code: 'LIVECAPTIONS_READ_FAILED',
+        message: 'caption read failed'
     };
 
     workerClient.emit('snapshot', unavailable);
@@ -136,7 +181,7 @@ test('three consecutive unavailable reads emit one recoverable episode and succe
 
     assert.equal(errors.length, 1);
     assert.equal(errors[0].source, 'live-captions');
-    assert.equal(errors[0].code, 'CAPTIONS_ELEMENT_UNAVAILABLE');
+    assert.equal(errors[0].code, 'LIVECAPTIONS_READ_FAILED');
     assert.equal(errors[0].recoverable, true);
 
     workerClient.emit('snapshot', { status: 'ok', text: '' });

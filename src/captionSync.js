@@ -4,6 +4,10 @@ const { LiveCaptionsWorkerClient } = require('./liveCaptionsWorkerClient');
 
 const CONTROL_CHARS_EXCEPT_WHITESPACE_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 const UNAVAILABLE_ERROR_THRESHOLD = 3;
+const IDLE_CAPTION_ELEMENT_UNAVAILABLE_CODES = new Set([
+    'LIVECAPTIONS_ELEMENT_UNAVAILABLE',
+    'CAPTIONS_ELEMENT_UNAVAILABLE'
+]);
 
 class CaptionSyncService extends EventEmitter {
     constructor({
@@ -18,6 +22,7 @@ class CaptionSyncService extends EventEmitter {
         this.startPromise = null;
         this.consecutiveUnavailableReads = 0;
         this.unavailableErrorEmitted = false;
+        this.hasEmittedCaptionText = false;
         this.sessionId = this.createSessionId();
         this.requiresFreshSessionBoundary = false;
 
@@ -50,6 +55,7 @@ class CaptionSyncService extends EventEmitter {
     beginNewSession({ requireFreshBoundary = false } = {}) {
         this.sessionId = this.createSessionId();
         this.lastEmittedText = '';
+        this.hasEmittedCaptionText = false;
         this.resetUnavailableEpisode();
         this.requiresFreshSessionBoundary = Boolean(requireFreshBoundary);
         return this.getSessionId();
@@ -187,10 +193,15 @@ class CaptionSyncService extends EventEmitter {
         }
 
         this.lastEmittedText = normalizedText;
+        this.hasEmittedCaptionText = true;
         this.emit('captionUpdate', { fullText: normalizedText });
     }
 
     handleUnavailableSnapshot(snapshot) {
+        if (this.isIdleCaptionElementUnavailable(snapshot)) {
+            return;
+        }
+
         this.consecutiveUnavailableReads += 1;
         if (
             this.consecutiveUnavailableReads < UNAVAILABLE_ERROR_THRESHOLD
@@ -205,6 +216,11 @@ class CaptionSyncService extends EventEmitter {
         error.code = snapshot.code || 'LIVECAPTIONS_READ_UNAVAILABLE';
         error.recoverable = true;
         this.emit('error', error);
+    }
+
+    isIdleCaptionElementUnavailable(snapshot) {
+        return !this.hasEmittedCaptionText
+            && IDLE_CAPTION_ELEMENT_UNAVAILABLE_CODES.has(snapshot?.code);
     }
 
     handleWorkerError(error) {
