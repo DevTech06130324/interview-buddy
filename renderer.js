@@ -1776,9 +1776,7 @@ function updatePromptModePersistenceStatus(status) {
     return;
   }
 
-  statusElement.setAttribute('aria-label', getPromptModePersistenceStatusMessage(promptModePersistenceStatus));
-  statusElement.classList.toggle('is-error', promptModePersistenceStatus.state === 'error');
-  statusElement.classList.toggle('is-saving', promptModePersistenceStatus.dirty);
+  statusElement.textContent = getPromptModePersistenceStatusMessage(promptModePersistenceStatus);
 
   const isSaved = promptModePersistenceStatus.state === 'saved' && !promptModePersistenceStatus.dirty;
   const isUnsaved = promptModePersistenceStatus.state === 'error'

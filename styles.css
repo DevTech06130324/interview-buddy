@@ -936,13 +936,11 @@ body {
   flex: 1;
   min-height: 0;
   padding: 14px 16px 16px;
-  overflow-x: hidden;
-  overflow-y: visible;
+  overflow: visible;
   -webkit-app-region: no-drag;
 }
 
-.mode-panel.is-inline-menu-open,
-.mode-panel.is-inline-menu-open .mode-content {
+.mode-panel.is-inline-menu-open {
   overflow: visible;
 }
 

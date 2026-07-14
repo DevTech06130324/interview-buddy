@@ -101,7 +101,10 @@ test('prompt mode autosave uses border-only visual feedback', () => {
   assert.match(renderer, /function updatePromptModePersistenceStatus/);
   assert.match(renderer, /modeSuffixInput\.classList\.toggle\('is-persistence-saved'/);
   assert.match(renderer, /modeSuffixInput\.classList\.toggle\('is-persistence-error'/);
-  assert.doesNotMatch(renderer, /statusElement\.textContent\s*=\s*getPromptModePersistenceStatusMessage/);
+  assert.match(renderer, /statusElement\.textContent\s*=\s*getPromptModePersistenceStatusMessage/);
+  assert.doesNotMatch(renderer, /statusElement\.setAttribute\('aria-label',\s*getPromptModePersistenceStatusMessage/);
+  assert.doesNotMatch(renderer, /statusElement\.classList\.toggle\('is-error'/);
+  assert.doesNotMatch(renderer, /statusElement\.classList\.toggle\('is-saving'/);
 
   assert.match(css, /\.mode-persistence-status\s*\{[^}]*position:\s*absolute;[^}]*width:\s*1px;[^}]*height:\s*1px;[^}]*overflow:\s*hidden;/s);
   assert.match(css, /\.mode-suffix-input\.is-persistence-saved\s*\{[^}]*border-color:\s*#2fb36d;/s);
