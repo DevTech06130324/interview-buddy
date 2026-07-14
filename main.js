@@ -101,8 +101,8 @@ const {
 } = require('./src/captionSyncErrorState');
 
 // Constants
-const BORDER_WIDTH = 3;
-const PADDING_WIDTH = 10;
+const BORDER_WIDTH = 1;
+const PADDING_WIDTH = 8;
 const APP_HEADBAR_HEIGHT = 38;
 const TAB_BAR_HEIGHT = 40;
 const URL_BAR_HEIGHT = 50;

@@ -73,6 +73,16 @@ test('the panel splitter supports keyboard resizing in ten-pixel steps', () => {
   assert.match(renderer, /function updatePanelDividerAccessibility/);
 });
 
+test('native browser view geometry matches the styled app content inset', () => {
+  const css = readRepoFile('styles.css');
+  const main = readRepoFile('main.js');
+
+  assert.match(css, /\.window-wrapper\s*\{[^}]*border:\s*1px\s+solid/s);
+  assert.match(css, /\.window-wrapper\s*\{[^}]*padding:\s*8px;/s);
+  assert.match(main, /const BORDER_WIDTH = 1;/);
+  assert.match(main, /const PADDING_WIDTH = 8;/);
+});
+
 test('tab close controls cannot also activate their containing tab', () => {
   const renderer = readRepoFile('renderer.js');
   const createTab = getFunctionSource(renderer, 'createTabElement');
