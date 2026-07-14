@@ -93,3 +93,17 @@ test('main shell uses a production overlay border instead of a dashed debug fram
   assert.match(css, /--overlay-border:/);
   assert.doesNotMatch(css, /\.window-wrapper\s*\{[^}]*border:\s*3px dashed/s);
 });
+
+test('prompt mode autosave uses border-only visual feedback', () => {
+  const css = readRepoFile('styles.css');
+  const renderer = readRepoFile('renderer.js');
+
+  assert.match(renderer, /function updatePromptModePersistenceStatus/);
+  assert.match(renderer, /modeSuffixInput\.classList\.toggle\('is-persistence-saved'/);
+  assert.match(renderer, /modeSuffixInput\.classList\.toggle\('is-persistence-error'/);
+  assert.doesNotMatch(renderer, /statusElement\.textContent\s*=\s*getPromptModePersistenceStatusMessage/);
+
+  assert.match(css, /\.mode-persistence-status\s*\{[^}]*position:\s*absolute;[^}]*width:\s*1px;[^}]*height:\s*1px;[^}]*overflow:\s*hidden;/s);
+  assert.match(css, /\.mode-suffix-input\.is-persistence-saved\s*\{[^}]*border-color:\s*#2fb36d;/s);
+  assert.match(css, /\.mode-suffix-input\.is-persistence-error\s*\{[^}]*border-color:\s*#d85656;/s);
+});

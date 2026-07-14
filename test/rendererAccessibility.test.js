@@ -120,9 +120,12 @@ test('the compact layout keeps browser workspace available, scrolls mode content
   assert.match(css, /\.left-panel\s*\{[^}]*overflow:\s*hidden;/s);
   assert.match(css, /\.right-panel\s*\{[^}]*overflow:\s*hidden;/s);
   assert.match(css, /\.content-area\s*\{[^}]*flex:\s*1\s+1\s+0;/s);
+  assert.match(css, /--mode-panel-expanded-height:\s*248px;/);
+  assert.match(readRepoFile('main.js'), /const MODE_PANEL_HEIGHT = 248;/);
   assert.match(css, /\.mode-panel\s*\{[^}]*flex:\s*0\s+1\s+var\(--mode-panel-expanded-height\);/s);
   assert.match(css, /\.mode-panel\s*\{[^}]*max-height:\s*calc\(100%\s*-\s*var\(--app-headbar-height\)\s*-\s*var\(--minimum-browser-workspace-height\)\);/s);
-  assert.match(css, /\.mode-content\s*\{[^}]*overflow-y:\s*auto;/s);
+  assert.match(css, /\.mode-content\s*\{[^}]*overflow-y:\s*visible;/s);
+  assert.doesNotMatch(css, /\.mode-content\s*\{[^}]*overflow-y:\s*auto;/s);
   assert.match(css, /@container\s+transcript-panel\s*\(max-width:\s*520px\)/);
   assert.match(html, /id="transcript"[^>]*role="log"[^>]*aria-live="polite"[^>]*aria-relevant="additions text"/s);
   assert.match(renderer, /row\.setAttribute\('aria-label', getTranscriptRowAriaLabel\(entry\)\)/);

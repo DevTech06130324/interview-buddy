@@ -25,7 +25,7 @@
   --overlay-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
   --app-headbar-height: 38px;
   --minimum-browser-workspace-height: 120px;
-  --mode-panel-expanded-height: 224px;
+  --mode-panel-expanded-height: 248px;
   color-scheme: dark;
 }
 
@@ -937,7 +937,7 @@ body {
   min-height: 0;
   padding: 14px 16px 16px;
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: visible;
   -webkit-app-region: no-drag;
 }
 
@@ -1315,6 +1315,36 @@ body {
 .mode-suffix-input:focus {
   border-color: #4a9eff;
   background: #252525;
+}
+
+.mode-suffix-input.is-persistence-saved {
+  border-color: #2fb36d;
+  box-shadow: 0 0 0 1px rgba(47, 179, 109, 0.18);
+}
+
+.mode-suffix-input.is-persistence-saved:focus {
+  border-color: #2fb36d;
+}
+
+.mode-suffix-input.is-persistence-error {
+  border-color: #d85656;
+  box-shadow: 0 0 0 1px rgba(216, 86, 86, 0.18);
+}
+
+.mode-suffix-input.is-persistence-error:focus {
+  border-color: #d85656;
+}
+
+.mode-persistence-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .mode-suffix-input::-webkit-scrollbar {

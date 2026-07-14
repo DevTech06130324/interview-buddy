@@ -1776,9 +1776,18 @@ function updatePromptModePersistenceStatus(status) {
     return;
   }
 
-  statusElement.textContent = getPromptModePersistenceStatusMessage(promptModePersistenceStatus);
+  statusElement.setAttribute('aria-label', getPromptModePersistenceStatusMessage(promptModePersistenceStatus));
   statusElement.classList.toggle('is-error', promptModePersistenceStatus.state === 'error');
   statusElement.classList.toggle('is-saving', promptModePersistenceStatus.dirty);
+
+  const isSaved = promptModePersistenceStatus.state === 'saved' && !promptModePersistenceStatus.dirty;
+  const isUnsaved = promptModePersistenceStatus.state === 'error'
+    || promptModePersistenceStatus.state === 'dirty'
+    || promptModePersistenceStatus.state === 'saving'
+    || promptModePersistenceStatus.dirty;
+  modeSuffixInput.classList.toggle('is-persistence-saved', isSaved);
+  modeSuffixInput.classList.toggle('is-persistence-error', isUnsaved);
+  modeSuffixInput.setAttribute('aria-invalid', String(promptModePersistenceStatus.state === 'error'));
 }
 
 function reportPromptModeDraftFailure(error) {
