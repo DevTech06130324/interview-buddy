@@ -47,6 +47,83 @@
     return joinReadableText(entries.map((entry) => entry?.sourceText));
   }
 
+  function appendSourceSegment(segments, segment) {
+    if (!segment || typeof segment.text !== 'string' || !segment.text) {
+      return;
+    }
+
+    const normalizedSegment = {
+      text: segment.text,
+      isSubmitted: Boolean(segment.isSubmitted)
+    };
+    const previousSegment = segments[segments.length - 1];
+
+    if (previousSegment && previousSegment.isSubmitted === normalizedSegment.isSubmitted) {
+      previousSegment.text += normalizedSegment.text;
+      return;
+    }
+
+    segments.push(normalizedSegment);
+  }
+
+  function getSubmittedSourcePrefix(entry, sourceText) {
+    if (isSubmittedEntry(entry)) {
+      return sourceText;
+    }
+
+    const submittedSourceText = getCleanText(entry?.submittedSourceText);
+    if (!submittedSourceText || !sourceText.startsWith(submittedSourceText)) {
+      return '';
+    }
+
+    return submittedSourceText;
+  }
+
+  function createEntrySourceSegments(entry) {
+    const sourceText = getCleanText(entry?.sourceText);
+    if (!sourceText) {
+      return [];
+    }
+
+    const submittedSourcePrefix = getSubmittedSourcePrefix(entry, sourceText);
+    if (!submittedSourcePrefix) {
+      return [{ text: sourceText, isSubmitted: false }];
+    }
+
+    const remainderText = sourceText.slice(submittedSourcePrefix.length);
+    const segments = [{ text: submittedSourcePrefix, isSubmitted: true }];
+
+    if (remainderText) {
+      segments.push({ text: remainderText, isSubmitted: false });
+    }
+
+    return segments;
+  }
+
+  function joinSourceSegments(entries) {
+    const segments = [];
+
+    for (const entry of entries) {
+      const entrySegments = createEntrySourceSegments(entry);
+      if (entrySegments.length === 0) {
+        continue;
+      }
+
+      if (segments.length > 0) {
+        entrySegments[0] = {
+          ...entrySegments[0],
+          text: ` ${entrySegments[0].text}`
+        };
+      }
+
+      for (const segment of entrySegments) {
+        appendSourceSegment(segments, segment);
+      }
+    }
+
+    return segments;
+  }
+
   function joinTranslatedText(entries) {
     const translatedLines = [];
     let hasPendingWithoutTranslation = false;
@@ -128,6 +205,7 @@
       isFinal: entries.every((entry) => Boolean(entry?.isFinal)),
       isSubmitted: entries.length > 0 && entries.every((entry) => isSubmittedEntry(entry)),
       speakerTag: firstEntry.speakerTag,
+      sourceSegments: joinSourceSegments(entries),
       entryCount: entries.length
     };
   }

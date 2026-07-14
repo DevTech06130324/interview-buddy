@@ -195,6 +195,29 @@ test('display groups preserve submitted state and split newly unsubmitted text',
   assert.equal(groups[1].isSubmitted, false);
 });
 
+test('display groups preserve submitted prefixes inside extended live caption text', () => {
+  const groups = createTranscriptDisplayGroups([
+    {
+      id: 'caption-1',
+      sourceText: 'Already sent words new live words.',
+      submittedSourceText: 'Already sent words',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: false,
+      isSubmitted: false,
+      speakerTag: 'Them'
+    }
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].sourceText, 'Already sent words new live words.');
+  assert.equal(groups[0].isSubmitted, false);
+  assert.deepEqual(groups[0].sourceSegments, [
+    { text: 'Already sent words', isSubmitted: true },
+    { text: ' new live words.', isSubmitted: false }
+  ]);
+});
+
 test('display groups cap same-speaker blocks by entry count', () => {
   const groups = createTranscriptDisplayGroups([
     {

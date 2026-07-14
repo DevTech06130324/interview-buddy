@@ -150,6 +150,20 @@ test('submitted transcript cursor refreshes renderer row styling without reusing
   assert.doesNotMatch(refreshSource, /payloadVersion/);
 });
 
+test('submitted transcript annotation keeps submitted prefixes for extended live caption rows', () => {
+  const source = readRepoFile('main.js');
+  const prefixSource = getFunctionSource(source, 'getSubmittedTranscriptEntryPrefix');
+  const submittedSource = getFunctionSource(source, 'isTranscriptEntrySubmitted');
+  const annotationSource = getFunctionSource(source, 'annotateTranscriptEntriesForRenderer');
+
+  assert.match(prefixSource, /sourceText\.startsWith\(submittedSourceText\)/);
+  assert.match(prefixSource, /submittedSourceText\.endsWith\(sourceText\)/);
+  assert.match(submittedSource, /getSubmittedTranscriptEntryPrefix\(entry/);
+  assert.match(annotationSource, /const submittedSourceText = getSubmittedTranscriptEntryPrefix\(entry\)/);
+  assert.match(annotationSource, /submittedSourceText,/);
+  assert.match(annotationSource, /isSubmitted:\s*isTranscriptEntrySubmitted\(entry,\s*\{\s*submittedSourceText\s*\}\)/);
+});
+
 test('caption updates send normalized entries with speaker metadata to the renderer', () => {
   const source = readRepoFile('main.js');
   const sendCaptionUpdateSource = getFunctionSource(source, 'sendCaptionUpdate');
@@ -158,7 +172,7 @@ test('caption updates send normalized entries with speaker metadata to the rende
   assert.doesNotMatch(source, /entries:\s*payload\?\.entries\s*\|\|\s*latestTranscriptEntries/);
   assert.match(source, /entries:\s*latestTranscriptEntries/);
   assert.match(sendCaptionUpdateSource, /annotateTranscriptEntriesForRenderer/);
-  assert.match(annotationSource, /isSubmitted:\s*isTranscriptEntrySubmitted\(entry\)/);
+  assert.match(annotationSource, /isSubmitted:\s*isTranscriptEntrySubmitted\(entry,\s*\{\s*submittedSourceText\s*\}\)/);
 });
 
 test('transcript metadata is speaker-only without timestamp state', () => {

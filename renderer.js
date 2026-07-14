@@ -331,6 +331,7 @@ function normalizeTranscriptEntries(data) {
           status,
           isFinal: Boolean(entry.isFinal),
           isSubmitted: Boolean(entry.isSubmitted),
+          submittedSourceText: typeof entry.submittedSourceText === 'string' ? entry.submittedSourceText : '',
           speakerTag: normalizeTranscriptSpeakerTag(entry.speakerTag)
         };
       });
@@ -371,8 +372,52 @@ function getTranscriptMarkerSignature(entry, options = {}) {
   });
 }
 
+function normalizeTranscriptSourceSegments(entry) {
+  const sourceText = String(entry?.sourceText || '');
+  if (!sourceText) {
+    return [];
+  }
+
+  if (Array.isArray(entry?.sourceSegments)) {
+    const sourceSegments = entry.sourceSegments
+      .map((segment) => ({
+        text: typeof segment?.text === 'string' ? segment.text : '',
+        isSubmitted: Boolean(segment?.isSubmitted)
+      }))
+      .filter((segment) => segment.text);
+
+    if (sourceSegments.length > 0) {
+      return sourceSegments;
+    }
+  }
+
+  const submittedSourceText = typeof entry?.submittedSourceText === 'string'
+    ? entry.submittedSourceText
+    : '';
+
+  if (entry?.isSubmitted || submittedSourceText === sourceText) {
+    return [{ text: sourceText, isSubmitted: true }];
+  }
+
+  if (submittedSourceText && sourceText.startsWith(submittedSourceText)) {
+    const remainderText = sourceText.slice(submittedSourceText.length);
+    const sourceSegments = [{ text: submittedSourceText, isSubmitted: true }];
+
+    if (remainderText) {
+      sourceSegments.push({ text: remainderText, isSubmitted: false });
+    }
+
+    return sourceSegments;
+  }
+
+  return [{ text: sourceText, isSubmitted: false }];
+}
+
 function getTranscriptSourceSignature(entry) {
-  return String(entry?.sourceText || '');
+  return JSON.stringify({
+    sourceText: String(entry?.sourceText || ''),
+    sourceSegments: normalizeTranscriptSourceSegments(entry)
+  });
 }
 
 function getTranscriptTranslationSignature(entry) {
@@ -489,7 +534,21 @@ function updateTranscriptSourceCell(sourceCell, entry) {
   sourceCell.dataset.sourceSignature = signature;
   const sourceText = document.createElement('span');
   sourceText.className = 'transcript-entry-text';
-  sourceText.textContent = entry.sourceText;
+  const sourceSegments = normalizeTranscriptSourceSegments(entry);
+
+  if (sourceSegments.length === 0) {
+    sourceText.textContent = entry.sourceText;
+  } else {
+    for (const segment of sourceSegments) {
+      const segmentEl = document.createElement('span');
+      segmentEl.className = [
+        'transcript-entry-segment',
+        segment.isSubmitted ? 'is-submitted-segment' : ''
+      ].filter(Boolean).join(' ');
+      segmentEl.textContent = segment.text;
+      sourceText.append(segmentEl);
+    }
+  }
 
   sourceCell.replaceChildren(sourceText);
 }

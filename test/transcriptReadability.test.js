@@ -163,11 +163,20 @@ test('submitted transcript rows use a subtle neutral treatment', () => {
   const renderer = readRepoFile('renderer.js');
   const updateRow = getFunctionSource(renderer, 'updateTranscriptRow');
   const normalizeEntries = getFunctionSource(renderer, 'normalizeTranscriptEntries');
+  const sourceSignature = getFunctionSource(renderer, 'getTranscriptSourceSignature');
+  const updateSourceCell = getFunctionSource(renderer, 'updateTranscriptSourceCell');
 
   assert.match(normalizeEntries, /isSubmitted:\s*Boolean\(entry\.isSubmitted\)/);
+  assert.match(normalizeEntries, /submittedSourceText:\s*typeof entry\.submittedSourceText === 'string'/);
   assert.match(updateRow, /entry\.isSubmitted \? 'is-submitted' : ''/);
+  assert.match(renderer, /function normalizeTranscriptSourceSegments/);
+  assert.match(sourceSignature, /sourceSegments/);
+  assert.match(updateSourceCell, /normalizeTranscriptSourceSegments\(entry\)/);
+  assert.match(updateSourceCell, /transcript-entry-segment/);
+  assert.match(updateSourceCell, /is-submitted-segment/);
   assert.match(css, /\.transcript-row\.is-submitted\s*\{[^}]*--transcript-row-bg:\s*color-mix\(in srgb,\s*var\(--text,\s*#ffffff\)\s*8%,\s*transparent\)/s);
   assert.match(css, /\.transcript-row\.is-submitted\s+\.transcript-cell-source\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--text,\s*#ffffff\)\s*74%,\s*var\(--text-muted,\s*#a9a9a9\)\)/s);
+  assert.match(css, /\.transcript-entry-segment\.is-submitted-segment\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--text,\s*#ffffff\)\s*74%,\s*var\(--text-muted,\s*#a9a9a9\)\)/s);
   assert.doesNotMatch(css, /\.transcript-row\.is-submitted\s*\{[^}]*var\(--accent/s);
 });
 

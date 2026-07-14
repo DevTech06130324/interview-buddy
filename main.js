@@ -3443,11 +3443,27 @@ function getSubmittedTranscriptLineSet(submittedText = lastSubmittedTranscriptTe
 
 function isTranscriptEntrySubmitted(entry, {
   submittedText = lastSubmittedTranscriptText,
+  submittedEntries = lastSubmittedTranscriptEntries,
+  submittedSourceText = null
+} = {}) {
+  const sourceText = normalizeTranscriptTextForPrompt(entry?.sourceText);
+  const submittedPrefix = typeof submittedSourceText === 'string'
+    ? normalizeTranscriptTextForPrompt(submittedSourceText)
+    : getSubmittedTranscriptEntryPrefix(entry, {
+      submittedText,
+      submittedEntries
+    });
+
+  return Boolean(sourceText && submittedPrefix === sourceText);
+}
+
+function getSubmittedTranscriptEntryPrefix(entry, {
+  submittedText = lastSubmittedTranscriptText,
   submittedEntries = lastSubmittedTranscriptEntries
 } = {}) {
   const sourceText = normalizeTranscriptTextForPrompt(entry?.sourceText);
   if (!sourceText) {
-    return false;
+    return '';
   }
 
   const entryId = typeof entry?.id === 'string' ? entry.id.trim() : '';
@@ -3457,19 +3473,30 @@ function isTranscriptEntrySubmitted(entry, {
     const submittedSourceText = normalizeTranscriptTextForPrompt(matchingSubmittedEntry?.sourceText);
 
     if (submittedSourceText) {
-      return submittedSourceText === sourceText || submittedSourceText.endsWith(sourceText);
+      if (sourceText.startsWith(submittedSourceText)) {
+        return submittedSourceText;
+      }
+
+      if (submittedSourceText.endsWith(sourceText)) {
+        return sourceText;
+      }
     }
   }
 
-  return getSubmittedTranscriptLineSet(submittedText).has(sourceText);
+  return getSubmittedTranscriptLineSet(submittedText).has(sourceText) ? sourceText : '';
 }
 
 function annotateTranscriptEntriesForRenderer(entries = latestTranscriptEntries) {
   return normalizeTranscriptEntriesForPrompt(entries)
-    .map((entry) => ({
-      ...entry,
-      isSubmitted: isTranscriptEntrySubmitted(entry)
-    }));
+    .map((entry) => {
+      const submittedSourceText = getSubmittedTranscriptEntryPrefix(entry);
+
+      return {
+        ...entry,
+        submittedSourceText,
+        isSubmitted: isTranscriptEntrySubmitted(entry, { submittedSourceText })
+      };
+    });
 }
 
 function formatTranscriptSaveDate(date = new Date()) {
