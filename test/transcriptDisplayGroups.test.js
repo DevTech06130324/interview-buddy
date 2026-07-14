@@ -154,6 +154,47 @@ test('display groups start a new block when speaker changes', () => {
   assert.equal(groups[1].speakerTag, 'Me');
 });
 
+test('display groups preserve submitted state and split newly unsubmitted text', () => {
+  const groups = createTranscriptDisplayGroups([
+    {
+      id: 'caption-1',
+      sourceText: 'Already sent first sentence.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      isSubmitted: true,
+      speakerTag: 'Them'
+    },
+    {
+      id: 'caption-2',
+      sourceText: 'Already sent follow up.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: true,
+      isSubmitted: true,
+      speakerTag: 'Them'
+    },
+    {
+      id: 'caption-3',
+      sourceText: 'New unsent sentence.',
+      translatedText: '',
+      status: 'disabled',
+      isFinal: false,
+      isSubmitted: false,
+      speakerTag: 'Them'
+    }
+  ], {
+    maxEntries: 5,
+    maxSourceChars: 240
+  });
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].sourceText, 'Already sent first sentence. Already sent follow up.');
+  assert.equal(groups[0].isSubmitted, true);
+  assert.equal(groups[1].sourceText, 'New unsent sentence.');
+  assert.equal(groups[1].isSubmitted, false);
+});
+
 test('display groups cap same-speaker blocks by entry count', () => {
   const groups = createTranscriptDisplayGroups([
     {

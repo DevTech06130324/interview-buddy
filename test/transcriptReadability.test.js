@@ -130,9 +130,15 @@ test('transcript rendering keeps stable row order and shows a new transcript ind
   assert.match(html, /id="newTranscriptIndicator"/);
   assert.match(html, />\s*Jump to latest\s*<\/button>/);
   assert.match(html, /aria-label="Jump to latest transcript"/);
+  assert.doesNotMatch(html, /id="newTranscriptIndicator"[\s\S]*?\s hidden[\s>]/);
   assert.match(css, /\.new-transcript-indicator/);
+  assert.match(css, /\.new-transcript-indicator\s*\{[^}]*position:\s*absolute;[^}]*display:\s*inline-flex;[^}]*height:\s*28px;/s);
+  assert.match(css, /\.new-transcript-indicator\s*\{[^}]*visibility:\s*hidden;[^}]*opacity:\s*0;[^}]*pointer-events:\s*none;/s);
+  assert.match(css, /\.new-transcript-indicator\.is-visible\s*\{[^}]*visibility:\s*visible;[^}]*opacity:\s*1;[^}]*pointer-events:\s*auto;/s);
   assert.match(renderer, /const newTranscriptIndicator = document\.getElementById\('newTranscriptIndicator'\)/);
   assert.match(renderer, /function setNewTranscriptIndicatorVisible/);
+  assert.match(renderer, /newTranscriptIndicator\.classList\.toggle\('is-visible', hasNewTranscriptBelow\)/);
+  assert.doesNotMatch(renderer, /newTranscriptIndicator\.hidden\s*=/);
   assert.match(renderer, /setNewTranscriptIndicatorVisible\(true\)/);
 });
 
@@ -160,8 +166,8 @@ test('submitted transcript rows use a subtle neutral treatment', () => {
 
   assert.match(normalizeEntries, /isSubmitted:\s*Boolean\(entry\.isSubmitted\)/);
   assert.match(updateRow, /entry\.isSubmitted \? 'is-submitted' : ''/);
-  assert.match(css, /\.transcript-row\.is-submitted\s*\{[^}]*--transcript-row-bg:\s*color-mix\(in srgb,\s*var\(--text,\s*#ffffff\)\s*4%,\s*transparent\)/s);
-  assert.match(css, /\.transcript-row\.is-submitted\s+\.transcript-cell-source\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--text,\s*#ffffff\)\s*86%,\s*var\(--text-muted,\s*#a9a9a9\)\)/s);
+  assert.match(css, /\.transcript-row\.is-submitted\s*\{[^}]*--transcript-row-bg:\s*color-mix\(in srgb,\s*var\(--text,\s*#ffffff\)\s*8%,\s*transparent\)/s);
+  assert.match(css, /\.transcript-row\.is-submitted\s+\.transcript-cell-source\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--text,\s*#ffffff\)\s*74%,\s*var\(--text-muted,\s*#a9a9a9\)\)/s);
   assert.doesNotMatch(css, /\.transcript-row\.is-submitted\s*\{[^}]*var\(--accent/s);
 });
 

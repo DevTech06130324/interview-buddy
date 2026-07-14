@@ -296,7 +296,9 @@ function setNewTranscriptIndicatorVisible(isVisible) {
   hasNewTranscriptBelow = Boolean(isVisible);
 
   if (newTranscriptIndicator) {
-    newTranscriptIndicator.hidden = !hasNewTranscriptBelow;
+    newTranscriptIndicator.classList.toggle('is-visible', hasNewTranscriptBelow);
+    newTranscriptIndicator.setAttribute('aria-hidden', String(!hasNewTranscriptBelow));
+    newTranscriptIndicator.tabIndex = hasNewTranscriptBelow ? 0 : -1;
   }
 
   if (transcriptEl) {

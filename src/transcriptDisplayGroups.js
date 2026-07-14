@@ -83,6 +83,10 @@
     return 'disabled';
   }
 
+  function isSubmittedEntry(entry) {
+    return Boolean(entry?.isSubmitted);
+  }
+
   function shouldStartNewDisplayGroup(currentEntries, nextEntry, options) {
     if (currentEntries.length === 0) {
       return false;
@@ -91,6 +95,11 @@
     const currentSpeakerTag = getCleanText(currentEntries[currentEntries.length - 1]?.speakerTag);
     const nextSpeakerTag = getCleanText(nextEntry?.speakerTag);
     if (currentSpeakerTag !== nextSpeakerTag) {
+      return true;
+    }
+
+    const currentSubmitted = isSubmittedEntry(currentEntries[currentEntries.length - 1]);
+    if (currentSubmitted !== isSubmittedEntry(nextEntry)) {
       return true;
     }
 
@@ -117,6 +126,7 @@
       translatedText: joinTranslatedText(entries),
       status: getGroupStatus(entries),
       isFinal: entries.every((entry) => Boolean(entry?.isFinal)),
+      isSubmitted: entries.length > 0 && entries.every((entry) => isSubmittedEntry(entry)),
       speakerTag: firstEntry.speakerTag,
       entryCount: entries.length
     };
