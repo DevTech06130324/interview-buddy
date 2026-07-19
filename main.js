@@ -5946,7 +5946,7 @@ ipcMain.handle('flush-prompt-mode-drafts', async (event) => {
 });
 
 ipcMain.handle('set-prompt-mode-hotkey', (event, payload) => {
-  if (!isMainWindowSender(event)) {
+  if (!isMainOrHotkeySettingsSender(event)) {
     return rejectUnauthorizedIpc('set-prompt-mode-hotkey', {
       success: false,
       promptModeState: getPromptModeStateSnapshot()

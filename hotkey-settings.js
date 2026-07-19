@@ -256,7 +256,11 @@ function handleGlobalHotkeyInputKeydown(event) {
   }
 
   const hotkeyCapture = getHotkeyCaptureFromEvent(event);
-  if (!hotkeyCapture || !hotkeyCapture.isValid) {
+  if (!hotkeyCapture) {
+    return;
+  }
+
+  if (!hotkeyCapture.isValid) {
     showGlobalHotkeyStatus(id, 'error');
     input.blur();
     return;
