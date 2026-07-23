@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, globalShortcut, screen, clipboard, nativeTheme, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, globalShortcut, screen, nativeTheme, dialog } = require('electron');
 const { safeStorage } = require('electron');
 const { desktopCapturer } = require('electron');
 const { randomUUID } = require('node:crypto');
@@ -543,12 +543,6 @@ const GLOBAL_HOTKEY_DEFINITIONS = [
     defaultAccelerator: 'CommandOrControl+Enter'
   },
   {
-    id: 'copyTranscript',
-    label: 'Copy transcript',
-    description: 'Copy the next transcript prompt to the clipboard.',
-    defaultAccelerator: 'Alt+Enter'
-  },
-  {
     id: 'captureScreenToAssistant',
     label: 'Paste screen capture',
     description: 'Capture the screen and paste it into the assistant.',
@@ -622,10 +616,8 @@ const promptModeDraftRevisions = new Map();
 let appPreferencesPersistTimer = null;
 let defaultTabWarmupTimer = null;
 let lastSubmittedTranscriptText = '';
-let lastClipboardTranscriptText = '';
 let latestTranscriptEntries = [];
 let lastSubmittedTranscriptEntries = [];
-let lastClipboardTranscriptEntries = [];
 let appQuitRequested = false;
 let liveCaptionsExitCleanupComplete = false;
 let liveCaptionsExitCleanupPromise = null;
@@ -1424,9 +1416,6 @@ function runGlobalHotkeyAction(id) {
       return;
     case 'sendTranscript':
       runShortcutAction('submitTranscriptToAssistant', () => submitTranscriptToAssistant());
-      return;
-    case 'copyTranscript':
-      runShortcutAction('copyTranscriptPromptToClipboard', () => copyTranscriptPromptToClipboard());
       return;
     case 'captureScreenToAssistant':
       runShortcutAction('pasteFullScreenIntoAssistant', () => pasteFullScreenIntoAssistant());
@@ -3573,27 +3562,9 @@ function markTranscriptSubmitted(
   refreshTranscriptSubmittedState();
 }
 
-function markTranscriptCopiedToClipboard(
-  transcriptText = latestTranscriptText,
-  transcriptEntries = latestTranscriptEntries
-) {
-  lastClipboardTranscriptText = normalizeTranscriptTextForPrompt(transcriptText);
-  lastClipboardTranscriptEntries = normalizeTranscriptEntriesForPrompt(transcriptEntries);
-}
-
 function resetSubmittedTranscriptCursor() {
   lastSubmittedTranscriptText = '';
   lastSubmittedTranscriptEntries = [];
-}
-
-function resetClipboardTranscriptCursor() {
-  lastClipboardTranscriptText = '';
-  lastClipboardTranscriptEntries = [];
-}
-
-function resetTranscriptCursors() {
-  resetSubmittedTranscriptCursor();
-  resetClipboardTranscriptCursor();
 }
 
 function getTranscriptPromptText(
@@ -3720,7 +3691,7 @@ function applyTranscriptPayload(payload = translationManager.getPayload()) {
 function resetTranscriptStateForSource(sourcePayload = '') {
   latestTranscriptText = '';
   latestTranscriptEntries = [];
-  resetTranscriptCursors();
+  resetSubmittedTranscriptCursor();
   applyTranscriptPayload(translationManager.reset(sourcePayload));
 }
 
@@ -5398,35 +5369,6 @@ async function submitTranscriptToAssistant() {
     console.error('[ERROR] Ctrl+Enter assistant mutation failed:', mutationResult.error);
     sendCaptionError('Assistant submission failed before it could be confirmed. Please retry.');
   }
-}
-
-async function copyTranscriptPromptToClipboard() {
-  const transcriptSnapshot = normalizeTranscriptTextForPrompt(latestTranscriptText);
-  const transcriptEntriesSnapshot = normalizeTranscriptEntriesForPrompt(latestTranscriptEntries);
-  const cursorResult = resolvePendingTranscriptCursor({
-    transcriptText: transcriptSnapshot,
-    transcriptEntries: transcriptEntriesSnapshot,
-    cursorText: lastClipboardTranscriptText,
-    cursorEntries: lastClipboardTranscriptEntries,
-    allowDisjointCurrentTranscript: transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS
-  });
-
-  if (cursorResult.status === 'mismatch') {
-    sendCaptionError(TRANSCRIPT_CURSOR_MISMATCH_ERROR);
-    return;
-  }
-
-  const clipboardText = getTranscriptPromptText(
-    cursorResult.pendingText,
-    cursorResult.pendingEntries
-  );
-  if (!clipboardText.trim()) {
-    console.error('[ERROR] No new transcript or prompt text is available for Alt+Enter');
-    return;
-  }
-
-  clipboard.writeText(clipboardText);
-  markTranscriptCopiedToClipboard(transcriptSnapshot, transcriptEntriesSnapshot);
 }
 
 async function pasteFullScreenIntoAssistant() {

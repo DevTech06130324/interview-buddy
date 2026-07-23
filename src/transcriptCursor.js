@@ -7,8 +7,12 @@ const TRANSCRIPT_CURSOR_MISMATCH_STATUS = 'mismatch';
 const TRANSCRIPT_CURSOR_MISMATCH_REASON = 'unverified-boundary';
 const MIN_EXACT_TRANSCRIPT_OVERLAP_CHARS = 24;
 const MIN_SAME_ENTRY_REVISION_BOUNDARY_CHARS = 8;
+const MIN_REVISED_TRANSCRIPT_OVERLAP_WORDS = 6;
+const MAX_REVISED_TRANSCRIPT_MISMATCHES = 4;
+const REVISED_TRANSCRIPT_MISMATCH_RATIO = 0.1;
 const TERMINAL_BOUNDARY_PUNCTUATION_PATTERN = /[.!?\u3002\uff1f\uff01]\s*$/u;
 const TRAILING_BOUNDARY_PATTERN = /[\s.!?\u3002\uff1f\uff01]+$/u;
+const WORD_TOKEN_PATTERN = /[\p{L}\p{N}]+(?:['\u2019][\p{L}\p{N}]+)*/gu;
 
 function normalizeTranscriptEntryForCursor(entry) {
   if (!entry) {
@@ -80,6 +84,85 @@ function isWordCharacter(character) {
   return typeof character === 'string'
     && character.length > 0
     && /[\p{L}\p{N}]/u.test(character);
+}
+
+function getWordTokens(text) {
+  return Array.from(String(text || '').matchAll(WORD_TOKEN_PATTERN), (match) => ({
+    text: match[0],
+    end: match.index + match[0].length
+  }));
+}
+
+function getTokenTextLength(tokens) {
+  return tokens.reduce((length, token) => length + token.text.length, 0);
+}
+
+function getAllowedRevisedTranscriptMismatches(tokenCount) {
+  return Math.min(
+    MAX_REVISED_TRANSCRIPT_MISMATCHES,
+    Math.max(1, Math.floor(tokenCount * REVISED_TRANSCRIPT_MISMATCH_RATIO))
+  );
+}
+
+function hasRevisedBoundaryAnchor(previousTokens, currentTokens, previousStartIndex, overlapLength) {
+  const lastPreviousToken = previousTokens[previousTokens.length - 1];
+  const lastCurrentToken = currentTokens[overlapLength - 1];
+  if (lastPreviousToken.text === lastCurrentToken.text) {
+    return true;
+  }
+
+  const anchorWindowLength = Math.min(3, overlapLength - 1);
+  const requiredAnchorMatches = Math.min(2, anchorWindowLength);
+  let anchorMatches = 0;
+
+  for (
+    let index = overlapLength - 1 - anchorWindowLength;
+    index < overlapLength - 1;
+    index += 1
+  ) {
+    if (previousTokens[previousStartIndex + index].text === currentTokens[index].text) {
+      anchorMatches += 1;
+    }
+  }
+
+  return anchorMatches >= requiredAnchorMatches;
+}
+
+function getBoundaryAfterInterveningPunctuation(text, boundaryLength) {
+  let length = boundaryLength;
+  while (length < text.length && !isWordCharacter(text[length])) {
+    length += 1;
+  }
+
+  return length;
+}
+
+function hasVerifiedRevisedTokenBoundary(previousTokens, currentTokens, previousStartIndex) {
+  const overlapLength = previousTokens.length - previousStartIndex;
+  if (
+    overlapLength < MIN_REVISED_TRANSCRIPT_OVERLAP_WORDS
+    || overlapLength > currentTokens.length
+  ) {
+    return false;
+  }
+
+  const previousOverlapTokens = previousTokens.slice(previousStartIndex);
+  if (getTokenTextLength(previousOverlapTokens) < MIN_EXACT_TRANSCRIPT_OVERLAP_CHARS) {
+    return false;
+  }
+
+  if (!hasRevisedBoundaryAnchor(previousTokens, currentTokens, previousStartIndex, overlapLength)) {
+    return false;
+  }
+
+  let mismatchCount = 0;
+  for (let index = 0; index < overlapLength; index += 1) {
+    if (previousTokens[previousStartIndex + index].text !== currentTokens[index].text) {
+      mismatchCount += 1;
+    }
+  }
+
+  return mismatchCount <= getAllowedRevisedTranscriptMismatches(overlapLength);
 }
 
 function getVerifiedEntryBoundaryLength(currentText, cursorText) {
@@ -198,6 +281,25 @@ function getLongestExactTranscriptBoundaryOverlap(previousText, currentText) {
   return 0;
 }
 
+function getLongestRevisedTranscriptBoundaryOverlap(previousText, currentText) {
+  const previousTokens = getWordTokens(previousText);
+  const currentTokens = getWordTokens(currentText);
+
+  for (let previousStartIndex = 0; previousStartIndex < previousTokens.length; previousStartIndex += 1) {
+    if (!hasVerifiedRevisedTokenBoundary(previousTokens, currentTokens, previousStartIndex)) {
+      continue;
+    }
+
+    const overlapLength = previousTokens.length - previousStartIndex;
+    return getBoundaryAfterInterveningPunctuation(
+      currentText,
+      currentTokens[overlapLength - 1].end
+    );
+  }
+
+  return 0;
+}
+
 function getExactPendingText(currentText, cursorText) {
   if (!cursorText) {
     return currentText;
@@ -241,6 +343,16 @@ function getDisjointPendingText(currentText, cursorText) {
     return normalizeTranscriptPromptText(
       currentText.slice(cursorIndex + cursorText.length)
     );
+  }
+
+  const overlapLength = getLongestExactTranscriptBoundaryOverlap(cursorText, currentText);
+  if (overlapLength > 0) {
+    return normalizeTranscriptPromptText(currentText.slice(overlapLength));
+  }
+
+  const revisedOverlapLength = getLongestRevisedTranscriptBoundaryOverlap(cursorText, currentText);
+  if (revisedOverlapLength > 0) {
+    return normalizeTranscriptPromptText(currentText.slice(revisedOverlapLength));
   }
 
   return currentText;

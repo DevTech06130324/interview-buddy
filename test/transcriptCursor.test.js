@@ -129,6 +129,161 @@ test('cursor does not resend a Live Captions rolling-window suffix that is alrea
   });
 });
 
+test('cursor skips the submitted prefix of a partially overlapping Live Captions rolling window', () => {
+  const currentEntry = {
+    id: 'caption-0-0',
+    sourceText: 'a difficult project you completed. What did you learn from it?',
+    speakerTag: 'Them',
+    isFinal: true
+  };
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: currentEntry.sourceText,
+    transcriptEntries: [currentEntry],
+    cursorText: 'Tell me about a difficult project you completed.',
+    cursorEntries: [{
+      id: 'caption-0-0',
+      sourceText: 'Tell me about a difficult project you completed.',
+      speakerTag: 'Them',
+      isFinal: true
+    }],
+    allowDisjointCurrentTranscript: true
+  }), {
+    status: 'matched',
+    pendingText: 'What did you learn from it?',
+    pendingEntries: [{
+      ...currentEntry,
+      sourceText: 'What did you learn from it?'
+    }]
+  });
+});
+
+test('cursor skips a Live Captions prefix that was revised with punctuation after submission', () => {
+  const currentEntry = {
+    id: 'caption-0-0',
+    sourceText: "Just run Claude with resume and you can pick up exactly where you left off in any of your conversations. Right now I want to run the this video will teach you client code. I'll go over everything and assume no prior knowledge. I'll walk you through the setup and installation step by step. I'll show you how to utilize the tool, the best practices, multiple features, and by the end of the video you'll be comfortable using this tool to generate some pretty insane outputs and awesome coding projects.",
+    speakerTag: 'Them',
+    isFinal: true
+  };
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: currentEntry.sourceText,
+    transcriptEntries: [currentEntry],
+    cursorText: "Just run Claude with resume and you can pick up exactly where you left off in any of your conversations. Right now I want to run the this video will teach you client code. I'll go over everything and assume no prior knowledge. I'll walk you through the setup and installation step by step. I'll show you how to utilize the tool the best practices multiple",
+    cursorEntries: [{
+      ...currentEntry,
+      sourceText: "Just run Claude with resume and you can pick up exactly where you left off in any of your conversations. Right now I want to run the this video will teach you client code. I'll go over everything and assume no prior knowledge. I'll walk you through the setup and installation step by step. I'll show you how to utilize the tool the best practices multiple"
+    }],
+    allowDisjointCurrentTranscript: true
+  }), {
+    status: 'matched',
+    pendingText: "features, and by the end of the video you'll be comfortable using this tool to generate some pretty insane outputs and awesome coding projects.",
+    pendingEntries: [{
+      ...currentEntry,
+      sourceText: "features, and by the end of the video you'll be comfortable using this tool to generate some pretty insane outputs and awesome coding projects."
+    }]
+  });
+});
+
+test('cursor skips a Live Captions prefix that was revised with a word correction after submission', () => {
+  const currentEntry = {
+    id: 'caption-0-0',
+    sourceText: 'This video will teach you Claude code and setup the tool, best practices, multiple features are next.',
+    speakerTag: 'Them',
+    isFinal: true
+  };
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: currentEntry.sourceText,
+    transcriptEntries: [currentEntry],
+    cursorText: 'This video will teach you client code and setup the tool best practices multiple',
+    cursorEntries: [{
+      ...currentEntry,
+      sourceText: 'This video will teach you client code and setup the tool best practices multiple'
+    }],
+    allowDisjointCurrentTranscript: true
+  }), {
+    status: 'matched',
+    pendingText: 'features are next.',
+    pendingEntries: [{
+      ...currentEntry,
+      sourceText: 'features are next.'
+    }]
+  });
+});
+
+test('cursor skips a Live Captions prefix when the final submitted word was corrected', () => {
+  const currentEntry = {
+    id: 'caption-0-0',
+    sourceText: 'one two three four five six Claude genuinely new words',
+    speakerTag: 'Them',
+    isFinal: true
+  };
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: currentEntry.sourceText,
+    transcriptEntries: [currentEntry],
+    cursorText: 'one two three four five six client',
+    cursorEntries: [{
+      ...currentEntry,
+      sourceText: 'one two three four five six client'
+    }],
+    allowDisjointCurrentTranscript: true
+  }), {
+    status: 'matched',
+    pendingText: 'genuinely new words',
+    pendingEntries: [{
+      ...currentEntry,
+      sourceText: 'genuinely new words'
+    }]
+  });
+});
+
+test('cursor does not trim a revised Live Captions boundary with too many word changes', () => {
+  const currentEntry = {
+    id: 'caption-0-0',
+    sourceText: 'one two maybe four five seven Claude genuinely new words',
+    speakerTag: 'Them',
+    isFinal: true
+  };
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: currentEntry.sourceText,
+    transcriptEntries: [currentEntry],
+    cursorText: 'one two three four five six client',
+    cursorEntries: [{
+      ...currentEntry,
+      sourceText: 'one two three four five six client'
+    }],
+    allowDisjointCurrentTranscript: true
+  }), {
+    status: 'matched',
+    pendingText: currentEntry.sourceText,
+    pendingEntries: [currentEntry]
+  });
+});
+
+test('cursor rejects a changed-entry overlap when disjoint Live Captions recovery is not allowed', () => {
+  const currentEntry = {
+    id: 'caption-0-0',
+    sourceText: 'a difficult project you completed. What did you learn from it?',
+    speakerTag: 'Them',
+    isFinal: true
+  };
+
+  assert.deepEqual(resolvePendingTranscriptCursor({
+    transcriptText: currentEntry.sourceText,
+    transcriptEntries: [currentEntry],
+    cursorText: 'Tell me about a difficult project you completed.',
+    cursorEntries: [{
+      id: 'caption-0-0',
+      sourceText: 'Tell me about a difficult project you completed.',
+      speakerTag: 'Them',
+      isFinal: true
+    }]
+  }), CURSOR_MISMATCH);
+});
+
 test('cursor fails closed when an exact cursor string has unverified leading text', () => {
   assert.deepEqual(resolvePendingTranscriptCursor({
     transcriptText: 'New unsent text before.\nPreviously submitted snapshot.\nNew unsent text after.',

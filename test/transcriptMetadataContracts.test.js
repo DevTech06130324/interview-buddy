@@ -80,20 +80,15 @@ test('Ctrl+Enter allows disjoint rolling snapshots only for Live Captions cursor
   assert.match(source, /allowDisjointCurrentTranscript:\s*transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS/);
 });
 
-test('Alt+Enter resolves the cursor once and surfaces mismatch before clipboard mutation', () => {
-  const source = getAsyncFunctionSource('copyTranscriptPromptToClipboard');
-  const resolverCalls = source.match(/resolvePendingTranscriptCursor\(/g) || [];
+test('transcript copy shortcut and clipboard cursor state are removed', () => {
+  const source = readRepoFile('main.js');
 
-  assert.equal(resolverCalls.length, 1);
-  assert.match(source, /if \(cursorResult\.status === 'mismatch'\) \{\s*sendCaptionError\(TRANSCRIPT_CURSOR_MISMATCH_ERROR\);\s*return;/);
-  assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('clipboard.writeText('));
-  assert.ok(source.indexOf("cursorResult.status === 'mismatch'") < source.indexOf('markTranscriptCopiedToClipboard('));
-});
-
-test('Alt+Enter allows disjoint rolling snapshots only for Live Captions cursor recovery', () => {
-  const source = getAsyncFunctionSource('copyTranscriptPromptToClipboard');
-
-  assert.match(source, /allowDisjointCurrentTranscript:\s*transcriptSource === TRANSCRIPT_SOURCE_LIVE_CAPTIONS/);
+  assert.doesNotMatch(source, /id: 'copyTranscript'/);
+  assert.doesNotMatch(source, /Alt\+Enter/);
+  assert.doesNotMatch(source, /copyTranscriptPromptToClipboard/);
+  assert.doesNotMatch(source, /markTranscriptCopiedToClipboard/);
+  assert.doesNotMatch(source, /lastClipboardTranscript/);
+  assert.doesNotMatch(source, /clipboard\.writeText/);
 });
 
 test('cursor mismatch message tells the user to retry or clear to reset', () => {
@@ -102,14 +97,15 @@ test('cursor mismatch message tells the user to retry or clear to reset', () => 
   assert.match(source, /const TRANSCRIPT_CURSOR_MISMATCH_ERROR = '[^']*[Rr]etry[^']*[Cc]lear[^']*reset[^']*';/);
 });
 
-test('clear transcript resets submitted and clipboard cursors before coordinator-managed Deepgram clear', () => {
+test('clear transcript resets the submitted cursor before coordinator-managed Deepgram clear', () => {
   const source = readRepoFile('main.js');
   const resetSource = getFunctionSource(source, 'resetTranscriptStateForSource');
   const clearHandlerStart = source.indexOf("ipcMain.handle('clear-transcript'");
   const nextHandlerStart = source.indexOf('\nipcMain.handle(', clearHandlerStart + 1);
   const clearHandlerSource = source.slice(clearHandlerStart, nextHandlerStart);
 
-  assert.match(resetSource, /resetTranscriptCursors\(\)/);
+  assert.match(resetSource, /resetSubmittedTranscriptCursor\(\)/);
+  assert.doesNotMatch(resetSource, /resetClipboardTranscriptCursor\(\)/);
   assert.match(clearHandlerSource, /resetTranscriptStateForSource\(\)/);
   const coordinatorClearIndex = clearHandlerSource.indexOf('getDeepgramLifecycleCoordinator().clear()');
   assert.ok(coordinatorClearIndex >= 0);
